@@ -39,7 +39,8 @@ dev = [
 lrt-cinema = "lrt_cinema.cli:main"
 
 [project.urls]
-Source = "https://github.com/lrt-cinema/lrt-cinema"
+Source = "https://github.com/turgid-secretion/lrt-cinema"
+Issues = "https://github.com/turgid-secretion/lrt-cinema/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
