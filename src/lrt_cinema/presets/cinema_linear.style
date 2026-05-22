@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PLACEHOLDER: not loadable by darktable-cli as-is. See CALIBRATION.md
+  in this directory for the procedure that turns this into a shipping
+  style file. The runner currently treats a missing/unloadable style
+  as a recoverable fallback.
+
+  Intent (cinema-linear):
+    - Disable display-transform modules (sigmoid / filmic / basecurve
+      / tonecurve / any agx*).
+    - Enable colorout with output ICC profile = lin_rec2020.
+    - Enable conservative capture sharpening (sharpen or diffuse;
+      pick during calibration).
+    - Target darktable 4.6 LTS line + 5.x current line.
+
+  Why a placeholder: darktable .style files require per-module
+  op_params binary blobs whose layout is version-keyed. Synthesizing
+  one from text would silently ship wrong-looking renders. See
+  CALIBRATION.md "Why not just ship guessed params" for details.
+
+  Module name uncertainty to verify during calibration:
+    - sigmoid       (added dt 4.4, expected stable; confirm)
+    - colorout      (long stable; confirm iccfilename vs token enum)
+    - sharpen       (legacy) OR diffuse (newer); pick one
+-->
+<darktable_style>
+  <info>
+    <name>lrt-cinema · cinema-linear</name>
+    <description>
+      Scene-linear Rec.2020 delivery for Resolve color-managed
+      timelines. Display transform off. PLACEHOLDER — see
+      CALIBRATION.md.
+    </description>
+    <writer_version>placeholder</writer_version>
+  </info>
+
+  <style>
+    <!--
+      Each plugin entry below documents intent only. The op_params
+      and blendop_params elements are intentionally empty: darktable
+      will reject this file at load time, which is the correct
+      behavior for an uncalibrated placeholder.
+    -->
+
+    <!-- Display-transform modules: DISABLED -->
+    <plugin>
+      <operation>sigmoid</operation>
+      <enabled>0</enabled>
+      <op_params></op_params>
+      <blendop_params></blendop_params>
+      <num>0</num>
+    </plugin>
+    <plugin>
+      <operation>filmicrgb</operation>
+      <enabled>0</enabled>
+      <op_params></op_params>
+      <blendop_params></blendop_params>
+      <num>0</num>
+    </plugin>
+    <plugin>
+      <operation>basecurve</operation>
+      <enabled>0</enabled>
+      <op_params></op_params>
+      <blendop_params></blendop_params>
+      <num>0</num>
+    </plugin>
+    <plugin>
+      <operation>tonecurve</operation>
+      <enabled>0</enabled>
+      <op_params></op_params>
+      <blendop_params></blendop_params>
+      <num>0</num>
+    </plugin>
+
+    <!-- Output color profile: ENABLED, lin_rec2020 (params TBD) -->
+    <plugin>
+      <operation>colorout</operation>
+      <enabled>1</enabled>
+      <op_params><!-- CALIBRATE: iccfilename = "lin_rec2020" --></op_params>
+      <blendop_params></blendop_params>
+      <num>0</num>
+    </plugin>
+
+    <!-- Capture sharpening: ENABLED, conservative defaults (params TBD) -->
+    <plugin>
+      <operation>sharpen</operation>
+      <enabled>1</enabled>
+      <op_params><!-- CALIBRATE: conservative radius/amount --></op_params>
+      <blendop_params></blendop_params>
+      <num>0</num>
+    </plugin>
+  </style>
+</darktable_style>

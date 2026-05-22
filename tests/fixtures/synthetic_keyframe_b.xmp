@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="lrt-cinema synthetic fixture">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+    xmlns:lrt="http://lrtimelapse.com/ns/1.0/"
+    crs:Exposure2012="+2.50"
+    crs:Contrast2012="+25"
+    crs:Highlights2012="-50"
+    crs:Shadows2012="+45"
+    crs:Whites2012="+20"
+    crs:Blacks2012="-15"
+    crs:Temperature="7500"
+    crs:Tint="-4"
+    crs:Saturation="+15"
+    crs:Vibrance="+20"
+    crs:Sharpness="60"
+    lrt:keyframe="1"
+    lrt:deflickerExposure="0.12"/>
+ </rdf:RDF>
+</x:xmpmeta>

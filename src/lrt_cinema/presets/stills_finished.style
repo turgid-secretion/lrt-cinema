@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PLACEHOLDER: not loadable by darktable-cli as-is. See CALIBRATION.md
+  in this directory for the procedure that turns this into a shipping
+  style file.
+
+  Intent (stills-finished):
+    - Disable sigmoid / filmic / basecurve / tonecurve (the older
+      display-transform options).
+    - ENABLE the AgX display transform module — assumes darktable
+      5.4 or later. AgX did not exist as a built-in module in 4.6;
+      this preset is gated to dt >= 5.4. The runner should detect
+      and warn (or refuse) on older darktable.
+    - Output ICC = rec2020 (gamma, NOT lin_rec2020). The AgX
+      transform produces display-referred output that needs a
+      display-encoding output profile, not scene-linear.
+    - Conservative capture sharpening.
+
+  Module name uncertainty (verify during calibration):
+    - The AgX module on the 5.4 release notes is referenced as
+      `agx_tone_mapping`. The shorter alias `agx` (or
+      `agxtonemapping`) is also plausible. Test all three op-name
+      candidates during calibration; pick the one the running
+      darktable accepts.
+    - The AgX module exposes a "look" preset (Punchy / Base /
+      etc.) — pick the neutral default for the scaffold; calibration
+      may want to expose this as a runner-level knob later.
+-->
+<darktable_style>
+  <info>
+    <name>lrt-cinema · stills-finished</name>
+    <description>
+      Finished delivery with AgX display transform baked in. Requires
+      darktable 5.4 or later. PLACEHOLDER — see CALIBRATION.md.
+    </description>
+    <writer_version>placeholder</writer_version>
+  </info>
+
+  <style>
+    <!-- Older display-transform modules: DISABLED -->
+    <plugin>
+      <operation>sigmoid</operation>
+      <enabled>0</enabled>
+      <op_params></op_params>
+      <blendop_params></blendop_params>
+      <num>0</num>
+    </plugin>
+    <plugin>
+      <operation>filmicrgb</operation>
+      <enabled>0</enabled>
+      <op_params></op_params>
+      <blendop_params></blendop_params>
+      <num>0</num>
+    </plugin>
+    <plugin>
+      <operation>basecurve</operation>
+      <enabled>0</enabled>
+      <op_params></op_params>
+      <blendop_params></blendop_params>
+      <num>0</num>
+    </plugin>
+    <plugin>
+      <operation>tonecurve</operation>
+      <enabled>0</enabled>
+      <op_params></op_params>
+      <blendop_params></blendop_params>
+      <num>0</num>
+    </plugin>
+
+    <!--
+      AgX: ENABLED. Op-name candidate set; the calibration step
+      picks the one the running darktable actually accepts and the
+      others get deleted from the final style file.
+    -->
+    <plugin>
+      <operation>agx_tone_mapping</operation>
+      <enabled>1</enabled>
+      <op_params><!-- CALIBRATE: neutral "Base" look defaults --></op_params>
+      <blendop_params></blendop_params>
+      <num>0</num>
+    </plugin>
+    <!-- CALIBRATE CANDIDATE: operation may instead be "agx" — delete one. -->
+    <!-- CALIBRATE CANDIDATE: operation may instead be "agxtonemapping" — delete one. -->
+
+    <!-- Output color profile: ENABLED, rec2020 gamma (params TBD) -->
+    <plugin>
+      <operation>colorout</operation>
+      <enabled>1</enabled>
+      <op_params><!-- CALIBRATE: iccfilename = "rec2020" (gamma, not linear) --></op_params>
+      <blendop_params></blendop_params>
+      <num>0</num>
+    </plugin>
+
+    <!-- Capture sharpening: ENABLED, conservative defaults (params TBD) -->
+    <plugin>
+      <operation>sharpen</operation>
+      <enabled>1</enabled>
+      <op_params><!-- CALIBRATE: conservative radius/amount --></op_params>
+      <blendop_params></blendop_params>
+      <num>0</num>
+    </plugin>
+  </style>
+</darktable_style>
