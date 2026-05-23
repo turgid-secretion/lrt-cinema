@@ -33,6 +33,17 @@ dev = [
     "pytest>=7",
     "pytest-cov>=4",
     "ruff>=0.4",
+    # ColorChecker ΔE2000 test harness (tests/test_colorimetric.py).
+    # BSD-3-Clause, compatible with this project's Apache-2.0 license.
+    "colour-science>=0.4",
+    "tifffile>=2024.0",
+    "numpy>=1.24",
+]
+# Optional extra for the auto-detect ColorChecker path (used only by the
+# real-fixture leg of tests/test_colorimetric.py). Heavier — pulls OpenCV —
+# so kept out of the base `dev` extra to keep `pip install -e .[dev]` light.
+detect = [
+    "colour-checker-detection>=0.2",
 ]
 
 [project.scripts]
