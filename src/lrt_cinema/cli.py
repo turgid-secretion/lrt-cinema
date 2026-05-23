@@ -131,15 +131,17 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     lrt_flagged = sum(1 for k in seq.keyframes if k.is_lrt_keyframe)
     out.write(f"\nKeyframes detected: {kf_count}\n")
     out.write(
-        f"  flagged with lrt:keyframe attribute: {lrt_flagged} of {kf_count}\n"
+        f"  flagged authoritatively (xmp:Rating or lrt:keyframe): "
+        f"{lrt_flagged} of {kf_count}\n"
     )
     if kf_count and lrt_flagged == 0:
         out.write(
-            "  note: no lrt:keyframe markers found. All keyframes were inferred\n"
-            "        from XMPs carrying non-default develop intent. Either LRT\n"
-            "        is not flagging keyframes in this sequence, or the\n"
-            "        lrt:keyframe attribute schema we expect differs from what\n"
-            "        LRT writes (calibration item — see SCOPE.md).\n"
+            "  note: no authoritative keyframe markers found. All keyframes\n"
+            "        were inferred from XMPs carrying non-default develop\n"
+            "        intent. Either LRT is not flagging keyframes in this\n"
+            "        sequence or the schema differs from what we expect\n"
+            "        (xmp:Rating>=1 is real LRT's primary marker; see\n"
+            "        SCOPE.md calibration items).\n"
         )
 
     if args.show_fields and seq.keyframes:

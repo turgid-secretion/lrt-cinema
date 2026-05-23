@@ -125,7 +125,7 @@ def test_inspect_reports_keyframes_and_drops(tmp_path, capsys):
     assert "Source RAW frames: 3" in out
     assert "Keyframes detected: 2" in out
     # Both fixtures carry lrt:keyframe and several dropped fields.
-    assert "lrt:keyframe attribute: 2 of 2" in out
+    assert "xmp:Rating or lrt:keyframe): 2 of 2" in out
     assert "contrast" in out
     assert "DROPPED at emit" in out
     assert "temperature_k" in out

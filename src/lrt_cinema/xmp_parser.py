@@ -40,18 +40,36 @@ NS = {
     "x": "adobe:ns:meta/",
     "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
     "crs": "http://ns.adobe.com/camera-raw-settings/1.0/",
-    "lrt": "http://lrtimelapse.com/ns/1.0/",
+    "xmp": "http://ns.adobe.com/xap/1.0/",
+    # Real LRT writes the bare base URI (no "ns/1.0/"). Validated against
+    # LRTimelapse Pro 7.5.3 output. Our older synthetic fixtures use
+    # http://lrtimelapse.com/ns/1.0/ — the keyframe-marker check has a
+    # fallback path so both still work.
+    "lrt": "http://lrtimelapse.com/",
+    "lrt_synthetic": "http://lrtimelapse.com/ns/1.0/",
 }
 
+# The Adobe standard xmp:Rating attribute is what real LRT uses to mark
+# keyframes (validated against LRT Pro 7.5.3). Rating>=1 means "some
+# kind of LRT keyframe"; the most common value is 4 (Creative keyframe
+# from the Keyframes Wizard). LRT also uses lower rating values for
+# visual-drag markers etc., but treating all non-zero ratings as
+# keyframes matches LRT's convention that 0-star = not-a-keyframe.
+XMP_RATING_ATTR = "{http://ns.adobe.com/xap/1.0/}Rating"
+
 LRT_NS_HINTS = {
-    "keyframe_attr": "{http://lrtimelapse.com/ns/1.0/}keyframe",
-    "deflicker_attr": "{http://lrtimelapse.com/ns/1.0/}deflickerExposure",
-    # Holy Grail container element + per-segment attribute names.
-    # SCHEMA TBR pending real LRT samples: the tag name and attribute
-    # names below are our synthetic-fixture contract, not confirmed
-    # against an LRT-emitted sample. See SCOPE.md / CALIBRATION.md for
-    # the calibration item. When real samples land, update both the
-    # constants here and the fixture at tests/fixtures/.
+    # Legacy synthetic-fixture attribute. Real LRT does NOT carry an
+    # lrt:keyframe attribute — it uses xmp:Rating (see XMP_RATING_ATTR).
+    # The fallback path here exists to keep tests/fixtures/synthetic_*.xmp
+    # working without rewriting them.
+    "keyframe_attr_synthetic": "{http://lrtimelapse.com/ns/1.0/}keyframe",
+    "deflicker_attr_synthetic": "{http://lrtimelapse.com/ns/1.0/}deflickerExposure",
+    # Holy Grail container element + per-segment attribute names —
+    # SYNTHETIC schema, not real. Real LRT encodes Holy Grail / deflicker
+    # as named mask corrections inside crs:MaskGroupBasedCorrections
+    # (e.g. CorrectionName="#LRT internal use (HG)") carrying a
+    # crs:LocalExposure2012 per-frame delta. Parsing that mask-based
+    # encoding is the next calibration item — see SCOPE.md.
     "hgramps_element": "{http://lrtimelapse.com/ns/1.0/}HolyGrailRamps",
     "hg_start_frame": "{http://lrtimelapse.com/ns/1.0/}startFrame",
     "hg_end_frame": "{http://lrtimelapse.com/ns/1.0/}endFrame",
@@ -224,15 +242,23 @@ def _parse_holy_grail_ramps(desc: ET.Element) -> list[HolyGrailRamp]:
 
 def parse_xmp_file(
     path: Path,
-) -> tuple[DevelopOps, bool, float | None, list[HolyGrailRamp]]:
-    """Parse one XMP file → (DevelopOps, is_keyframe, deflicker_delta, hg_ramps).
+) -> tuple[DevelopOps, bool, float | None, list[HolyGrailRamp], int | None]:
+    """Parse one XMP file → (DevelopOps, is_keyframe, deflicker_delta, hg_ramps, rating).
 
     XMP allows multiple `rdf:Description` nodes; we merge them so intent
     split across nodes is not silently dropped. The is_keyframe flag is
-    True when any Description carries LRT's keyframe marker (see
-    LRT_NS_HINTS). deflicker_delta is taken from the first Description
-    that supplies one, or None. hg_ramps is the concatenation of every
-    Description's `<lrt:HolyGrailRamps>` block in document order.
+    primarily driven by `xmp:Rating` (real LRT convention, validated
+    against Pro 7.5.3 output): rating>=1 = keyframe, rating==0 = not.
+    When the rating attribute is absent we fall back to the synthetic
+    `lrt:keyframe` attribute or, in `parse_sequence`, the
+    `_has_meaningful_ops` heuristic. deflicker_delta is taken from the
+    first Description that supplies one (synthetic schema only — real
+    LRT uses mask corrections, a calibration item). hg_ramps is the
+    concatenation of every Description's `<lrt:HolyGrailRamps>` block
+    in document order (synthetic schema only). rating is the maximum
+    xmp:Rating value seen across all Descriptions, or None if absent —
+    exposed so callers can distinguish "explicitly non-keyframe"
+    (rating==0) from "no rating present" (rating==None).
 
     Uses defusedxml to harden against XXE / billion-laughs attacks on
     untrusted XMP input.
@@ -250,18 +276,35 @@ def parse_xmp_file(
 
     ops = DevelopOps()
     is_keyframe = False
+    rating_seen: int | None = None
     deflicker_delta: float | None = None
     hg_ramps: list[HolyGrailRamp] = []
 
     for desc in descriptions:
         ops = _merge_ops(ops, _parse_description(desc))
 
-        kf_value = _read_attr_or_child(desc, LRT_NS_HINTS["keyframe_attr"])
+        # Primary keyframe signal — real LRT (validated against Pro 7.5.3)
+        # writes xmp:Rating>=1 on keyframes, 0 on interpolated/normal frames.
+        rating_str = _read_attr_or_child(desc, XMP_RATING_ATTR)
+        if rating_str is not None:
+            try:
+                rating_int = int(rating_str.strip())
+            except ValueError:
+                rating_int = 0
+            if rating_seen is None or rating_int > rating_seen:
+                rating_seen = rating_int
+
+        # Fallback — synthetic-fixture-style lrt:keyframe attribute.
+        kf_value = _read_attr_or_child(
+            desc, LRT_NS_HINTS["keyframe_attr_synthetic"],
+        )
         if kf_value is not None and kf_value.strip() in ("1", "true", "True"):
             is_keyframe = True
 
         if deflicker_delta is None:
-            deflicker_value = _read_attr_or_child(desc, LRT_NS_HINTS["deflicker_attr"])
+            deflicker_value = _read_attr_or_child(
+                desc, LRT_NS_HINTS["deflicker_attr_synthetic"],
+            )
             if deflicker_value is not None:
                 try:
                     deflicker_delta = float(deflicker_value)
@@ -270,7 +313,14 @@ def parse_xmp_file(
 
         hg_ramps.extend(_parse_holy_grail_ramps(desc))
 
-    return ops, is_keyframe, deflicker_delta, hg_ramps
+    # Rating, when present, is authoritative: rating>=1 = keyframe,
+    # rating==0 = explicitly NOT a keyframe (overrides _has_meaningful_ops
+    # fallback in parse_sequence). When rating is absent we trust the
+    # synthetic lrt:keyframe path or the meaningful-ops heuristic.
+    if rating_seen is not None:
+        is_keyframe = rating_seen >= 1
+
+    return ops, is_keyframe, deflicker_delta, hg_ramps, rating_seen
 
 
 def parse_sequence(folder: Path, raw_extensions: tuple[str, ...] = (
@@ -303,11 +353,19 @@ def parse_sequence(folder: Path, raw_extensions: tuple[str, ...] = (
         if not xmp.exists():
             continue
         try:
-            ops, is_kf, deflicker_delta, hg_ramps = parse_xmp_file(xmp)
+            ops, is_kf, deflicker_delta, hg_ramps, rating = parse_xmp_file(xmp)
         except (ET.ParseError, ValueError):
             continue
 
-        if is_kf or _has_meaningful_ops(ops):
+        # Keyframe gating policy:
+        #   - is_kf already reflects xmp:Rating (if present) or lrt:keyframe
+        #     (if present). Either of those is authoritative.
+        #   - The _has_meaningful_ops fallback only fires when NEITHER
+        #     marker was present (rating is None AND no lrt:keyframe).
+        #     Without this guard real LRT XMPs would be treated as
+        #     keyframes on every frame because LRT replicates the full
+        #     crs:* field set into every per-frame sidecar.
+        if is_kf or (rating is None and _has_meaningful_ops(ops)):
             seq.keyframes.append(Keyframe(
                 frame_index=idx, ops=ops, is_lrt_keyframe=is_kf,
             ))
@@ -325,13 +383,35 @@ def parse_sequence(folder: Path, raw_extensions: tuple[str, ...] = (
     return seq
 
 
-def _has_meaningful_ops(ops: DevelopOps) -> bool:
-    """True if the parsed DevelopOps carries any non-default value.
+def _is_identity_tone_curve(curve: list[TonePoint]) -> bool:
+    """True for the LR/LRT default identity curve [(0,0), (1,1)].
 
-    Used to treat a per-frame XMP without an explicit LRT keyframe
-    marker as still being a keyframe in the IR if it carries develop
-    intent. This is conservative and matches the LR convention that
-    *some* XMP datum is implicit-keyframe-of-intent.
+    Real LRT writes this exact curve into every frame's XMP regardless
+    of whether the user touched the tone curve; treating it as
+    "meaningful intent" would falsely flag every frame as a keyframe.
+    """
+    if len(curve) != 2:
+        return False
+    return (
+        curve[0].x == 0.0 and curve[0].y == 0.0
+        and curve[1].x == 1.0 and curve[1].y == 1.0
+    )
+
+
+def _has_meaningful_ops(ops: DevelopOps) -> bool:
+    """True if the parsed DevelopOps carries any non-default creative intent.
+
+    Used ONLY when no xmp:Rating and no lrt:keyframe attribute are
+    present (see parse_sequence) — both real-LRT and synthetic-fixture
+    XMPs supply one of those, so this fallback is the third-tier
+    safety net for XMPs that have neither.
+
+    Excludes two LR/LRT defaults that would otherwise trigger false
+    positives on every frame:
+      - sharpness=25 (LR's out-of-camera default; we don't emit
+        sharpness anyway, so it cannot carry intent for our pipeline)
+      - identity tone curve [(0,0), (1,1)] (LR's default ToneCurvePV2012
+        encoding written to every XMP regardless of user edits)
     """
     return (
         ops.exposure_ev != 0.0
@@ -344,6 +424,5 @@ def _has_meaningful_ops(ops: DevelopOps) -> bool:
         or ops.tint is not None
         or ops.saturation != 0.0
         or ops.vibrance != 0.0
-        or ops.sharpness != 0.0
-        or bool(ops.tone_curve)
+        or (bool(ops.tone_curve) and not _is_identity_tone_curve(ops.tone_curve))
     )

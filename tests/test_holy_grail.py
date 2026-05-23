@@ -217,7 +217,7 @@ def test_apply_ramps_overlays_on_materialized_keyframes():
 
 
 def test_parser_extracts_holy_grail_ramps_from_fixture():
-    _ops, _is_kf, _delta, ramps = parse_xmp_file(FIXTURES / "synthetic_holy_grail.xmp")
+    _ops, _is_kf, _delta, ramps, _rating = parse_xmp_file(FIXTURES / "synthetic_holy_grail.xmp")
     assert len(ramps) == 2
     a, b = ramps
     assert (a.start_frame, a.end_frame) == (0, 200)

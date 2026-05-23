@@ -35,13 +35,21 @@ Honest per-feature status of this pre-alpha scaffold.
 
 The README's "cinema-grade color" wording is currently aspirational, not measured. The bulletproof automated test for that claim is a ColorChecker ΔE2000 regression against published patch reference values; the methodology, first-class references (ACES TC, OCIO, ITU/SMPTE, X-Rite, `colour-science`), and an honest assessment of what is and is not automatable live in [docs/VALIDATION.md](docs/VALIDATION.md). Today the test would fast-fail because the emitter drops 9 of 12 parsed develop ops and the temperature module emits neutral multipliers regardless of source kelvin — see the "Emitted vs parsed DevelopOps" table above. The test is mechanical to implement; pre-calibration it serves as the CI gate that quantifies the gap.
 
-## Calibration items (schema TBR against real LRT samples)
+## Calibration items (LRT schema)
 
-The following parser schemas are the project's current contract but have NOT been validated against XMP emitted by a real LRTimelapse demo build. The synthetic fixtures under `tests/fixtures/` define the schema; when real samples land, both the parser constants (`xmp_parser.LRT_NS_HINTS`) AND the fixtures need updating in lockstep.
+### Validated against LRTimelapse Pro 7.5.3 (Mac) — 2026-05-22
 
-- LRT keyframe marker attribute (`lrt:keyframe`)
-- LRT deflicker offset attribute (`lrt:deflickerExposure`)
-- LRT Holy Grail ramp container (`<lrt:HolyGrailRamps>` with `<rdf:Seq><rdf:li lrt:startFrame= lrt:endFrame= lrt:startExposure= lrt:endExposure= lrt:smoothness=/></rdf:Seq>`)
+- **LRT keyframe marker.** Real LRT uses the standard Adobe `xmp:Rating` attribute on the `rdf:Description` element. `Rating="4"` flags Creative keyframes (from the Keyframes Wizard); `Rating="0"` flags interpolated / normal frames. Other rating values (1–3, 5) are used by LRT for visual-drag markers and Holy Grail keyframes — our parser treats any `Rating>=1` as a keyframe, which matches the convention. Reference fixture: [tests/fixtures/synthetic_real_lrt_keyframe.xmp](tests/fixtures/synthetic_real_lrt_keyframe.xmp).
+- **LRT namespace URI.** `xmlns:lrt="http://lrtimelapse.com/"` (no trailing `ns/1.0/`). The earlier `lrt:keyframe` synthetic-fixture schema remains supported via a fallback path in the parser.
+
+### Schema TBR — next calibration target
+
+- **Deflicker + Holy Grail.** Real LRT does NOT use top-level `lrt:*` attributes or an `<lrt:HolyGrailRamps>` element. It encodes both as named entries inside `crs:MaskGroupBasedCorrections`:
+  - `CorrectionName="#LRT internal use (Deflicker)"` carries a per-frame `crs:LocalExposure2012` delta
+  - `CorrectionName="#LRT internal use (HG)"` carries a per-frame `crs:LocalExposure2012` delta from the Holy Grail ramp
+  - `CorrectionName="#LRT internal use (Global)"` carries a per-frame global offset
+
+  Parsing the mask-correction encoding is the next calibration item. Until it lands, the synthetic `lrt:deflickerExposure` and `<lrt:HolyGrailRamps>` schemas remain supported but produce empty input on real LRT XMP. The interpolation engine and IR for both work; only the parser bridge is pending.
 
 Smooth interpolation uses uniform Catmull-Rom: keyframe spacing (in frame indices) is normalized to t ∈ [0, 1] per segment, so non-uniform spacing yields uniform-CR's known velocity-discontinuity behavior at keyframes. Centripetal CR (alpha-parameterized) is the natural upgrade once real LRT sequences expose a preference.
 
