@@ -89,13 +89,16 @@ def render_frame(
         if candidate.exists():
             style_path = candidate
 
+    # NOTE: darktable-cli's --bpp flag is documented "unsupported" in dt 5.x
+    # (`darktable-cli --help` lists it that way). The TIFF bit depth and EXR
+    # encoding are governed by darktable's export module config, which the
+    # bundled `.style` files will pin once calibration ships. For v0.2 we
+    # accept darktable's defaults (typically 16-bit TIFF, half-float EXR).
     argv = [
         "darktable-cli",
         str(source_path),
         str(xmp_path),
         str(output_path),
-        "--bpp",
-        str(preset.bpp),
     ]
     if style_path is not None:
         argv += ["--style", str(style_path), "--style-overwrite"]

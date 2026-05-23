@@ -300,6 +300,14 @@ def _cmd_render(args: argparse.Namespace) -> int:
             failures += 1
         if not args.quiet:
             _emit_progress(r.frame_index, total, ok)
+        if not ok and r.error:
+            # Surface darktable-cli's stderr so the user can see WHY a
+            # frame failed without re-running by hand. Silent failures
+            # are useless during the first real-footage tests.
+            sys.stderr.write(
+                f"--- darktable-cli stderr for frame {r.frame_index} "
+                f"({r.source_path.name}) ---\n{r.error}\n"
+            )
 
     if failures:
         sys.stderr.write(f"\n{failures} of {total} frames failed.\n")
