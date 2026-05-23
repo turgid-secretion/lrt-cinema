@@ -54,6 +54,28 @@ DT_XMP_VERSION = "5"
 XMP_FORMAT.md). Our prior value "1" worked because dt's legacy reader accepts
 lower versions, but is forward-incompatible with future bumps."""
 
+DT_IOP_ORDER_VERSION = "4"
+"""dt v50 (RAW) iop_order table identifier. Per src/common/iop_order.h#L128-140
+at dt master: DT_IOP_ORDER_V50 = 4. Required by dt's XMP reader when
+xmp_version is 4 or 5 (src/common/exif.cc#L4119-4134); if absent, dt falls
+back to the LEGACY table — workable today but semantically wrong for sidecars
+authored against dt 5.x module versions.
+
+Pinning to V50 (not V50_JPG=5) because lrt-cinema is exclusively a RAW
+workflow."""
+
+DT_AUTO_PRESETS_APPLIED = "1"
+"""Tells dt "I have already run the workflow/camera/lens auto-apply preset
+injection — don't re-run it." Read at src/common/exif.cc#L4584-4591: if
+absent, dt CLEARS the in-memory flag and `_dev_auto_apply_presets` runs full
+body on every render (src/develop/develop.c#L1822-2106), which (a) is
+non-deterministic across user dt installations with different workflow
+settings, and (b) interacts with `--core --conf workflow=none` in
+poorly-understood ways (see docs/research/DT_WORKFLOW_EXPOSURE_INTERACTION.md).
+
+Setting this to "1" is the right behavior for a "render exactly what I asked,
+no workflow injection" sidecar."""
+
 EXPOSURE_MODVERSION = "7"
 """dt exposure module current modversion (src/iop/exposure.c#L47 in dt master).
 Bumped from 6 to 7 in dt 5.x when `compensate_hilite_pres` gboolean was added
@@ -149,6 +171,9 @@ def emit_darktable_xmp(ops: DevelopOps, output_path: Path) -> None:
     rdf = ET.SubElement(root, f"{{{RDF_NS}}}RDF")
     desc = ET.SubElement(rdf, f"{{{RDF_NS}}}Description", {f"{{{RDF_NS}}}about": ""})
     desc.set(f"{{{DT_NS}}}xmp_version", DT_XMP_VERSION)
+    desc.set(f"{{{DT_NS}}}iop_order_version", DT_IOP_ORDER_VERSION)
+    desc.set(f"{{{DT_NS}}}auto_presets_applied", DT_AUTO_PRESETS_APPLIED)
+    desc.set(f"{{{DT_NS}}}history_end", "1")
 
     history = ET.SubElement(desc, f"{{{DT_NS}}}history")
     seq = ET.SubElement(history, f"{{{RDF_NS}}}Seq")
