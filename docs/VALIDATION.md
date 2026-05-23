@@ -238,6 +238,22 @@ regardless of source kelvin. The test would be a fast-failing CI
 gate that documents exactly how far the calibration work needs to
 go — which is precisely its value pre-calibration.
 
+## Known environment issues (not lrt-cinema bugs)
+
+### darktable.app cask on macOS arm64 — SQLite/ICU mismatch
+
+Symptom: `darktable-cli` aborts at ~250 ms with `[dt_init] ERROR: can't init develop system, aborting.` regardless of input file, with no preceding diagnostic. Reproduces on a fresh `~/.config/darktable`. Reboot does not fix it.
+
+Cause (confirmed on darktable 5.4.1 cask, macOS arm64, 2026-05-22): the bundled `darktable-cli` binary at `/Applications/darktable.app/Contents/MacOS/darktable-cli` links to the system SQLite at `/usr/lib/libsqlite3.dylib` (which does NOT include the ICU extension), but darktable's startup SQL runs `SELECT icu_load_collation('en_US', 'english')`. The system SQLite fails with "no such function: icu_load_collation", darktable interprets that as a develop-system init failure, and aborts. The ICU dynamic libraries ARE shipped in the bundle (`libicui18n.78.dylib`, etc.) but the linked SQLite isn't ICU-enabled. This is upstream cask packaging; the cask is also flagged "deprecated, will be disabled 2026-09-01" by Homebrew due to a separate macOS Gatekeeper signing issue.
+
+Diagnostic: `/usr/bin/log show --predicate 'process == "darktable-cli"' --last 5m` will surface the two SQLite errors that the darktable terminal output suppresses.
+
+Workarounds, in order of effort:
+- **MacPorts install** — `sudo port install darktable` builds from source and links to MacPorts' SQLite (ICU-enabled). Cleanest fix.
+- **Older darktable .dmg** — direct download of darktable 4.6 LTS or 5.0 LTS from <https://www.darktable.org/install/> may predate the ICU dependency, depending on the build flags upstream chose.
+- **Build from source** — clone `darktable-org/darktable`, build against Homebrew's SQLite (`brew install sqlite` then point CMAKE_PREFIX_PATH at `/opt/homebrew/opt/sqlite`).
+- **Different RAW renderer** — out of project scope today, but `rawpy` (libraw bindings) + a separate color-management step would be a structural alternative if darktable proves persistently unusable on macOS.
+
 ## Related project documents
 
 - [SCOPE.md](../SCOPE.md) — per-feature implementation status; the

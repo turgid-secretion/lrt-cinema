@@ -31,6 +31,10 @@ Honest per-feature status of this pre-alpha scaffold.
 - Bundled darktable `.style` files emit operations as structural placeholders only — their `op_params` are intentionally empty pending the calibration pass (`src/lrt_cinema/presets/CALIBRATION.md`). They are not yet loadable as-is.
 - Real-world DP review loop (preset tuning against real timelapse footage)
 
+## Known environment issues
+
+- **darktable 5.4.1 cask on macOS arm64 fails at `dt_init`** with the misleading "can't init develop system" error. Root cause: the cask's bundled `darktable-cli` links to macOS's system `/usr/lib/libsqlite3.dylib`, which has no ICU extension, while darktable's startup SQL calls `icu_load_collation()`. The cask is also Homebrew-deprecated for an unrelated Gatekeeper issue (disabled 2026-09-01). Workarounds in [docs/VALIDATION.md](docs/VALIDATION.md). Affects orchestration end-to-end tests on macOS; the rest of the pipeline (parser → IR → interpolation → emitter → dry-run) remains testable.
+
 ## Validation gap (the "cinema-grade" claim)
 
 The README's "cinema-grade color" wording is currently aspirational, not measured. The bulletproof automated test for that claim is a ColorChecker ΔE2000 regression against published patch reference values; the methodology, first-class references (ACES TC, OCIO, ITU/SMPTE, X-Rite, `colour-science`), and an honest assessment of what is and is not automatable live in [docs/VALIDATION.md](docs/VALIDATION.md). Today the test would fast-fail because the emitter drops 9 of 12 parsed develop ops and the temperature module emits neutral multipliers regardless of source kelvin — see the "Emitted vs parsed DevelopOps" table above. The test is mechanical to implement; pre-calibration it serves as the CI gate that quantifies the gap.
