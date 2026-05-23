@@ -2,6 +2,8 @@
 
 v0.3 Track A2 research deliverable. No code.
 
+**Why LR Classic and not a headless Adobe binary**: see DNG SDK feasibility doc, commit `f4a60cb` on `research/kelvin-multipliers`. Findings: `dng_validate` strips the `crs:*` XMP namespace before render (`dng_validate.cpp` L581–594), and `dng_render` exposes no PV2012 API. Adobe DNG Converter does NEF→DNG format conversion only, no develop edits. PV2012 math lives in closed-source `acr.dll` / `Camera Raw.plugin`, GUI-host-only (Photoshop/Bridge/LR Classic). No public Adobe binary applies PV2012 headlessly — LR Classic driven by AppleScript or Lua plugin is the only ground-truth path.
+
 ## 1. Prior reverse-engineering
 
 Public state is thin; original work required.
@@ -69,6 +71,6 @@ Runtime: monotone-cubic interpolation between sampled levels.
 | ColorChecker ΔE cross-check | 4 |
 | **Total** | **32–48h (4–6 person-days)** |
 
-**Bottleneck**: LR Classic has no CLI. Sidecar-inject-and-export driven via AppleScript or LR SDK Lua plugin; each export 5–15s, ~45 per ramp pass.
+**Bottleneck**: LR Classic has no CLI; no headless Adobe binary applies PV2012 math (see intro + commit `f4a60cb`). Sidecar-inject-and-export driven via AppleScript or LR SDK Lua plugin; each export 5–15s, ~45 per ramp pass.
 
 **De-risk order**: Blacks + Contrast first (smallest spatial component). Validate methodology against existing darktable Blacks LUT as ground truth. Commit to Highlights/Shadows/Whites only if ΔE2000 < 4 on validation image.
