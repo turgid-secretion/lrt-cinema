@@ -31,6 +31,25 @@ def test_emitter_wraps_in_xpacket_for_exiv2_compat(tmp_path):
     assert raw.rstrip().endswith(b'<?xpacket end="w"?>')
 
 
+def test_emitter_writes_required_dt5_description_attrs(tmp_path):
+    # dt master xmp_version=5 reader requires four attributes on the
+    # rdf:Description element to treat the sidecar as fully-specified
+    # (src/common/exif.cc#L4065 xmp_version, L4094 auto_presets_applied,
+    # L4119-4134 iop_order_version, history_end at L5191-5202 writer).
+    # Absent auto_presets_applied, dt re-runs its workflow auto-apply
+    # machinery on every render (develop.c#L1822-2106), making output
+    # non-deterministic against the runtime workflow conf. See
+    # docs/research/DT_WORKFLOW_EXPOSURE_INTERACTION.md.
+    out = tmp_path / "frame.xmp"
+    emit_darktable_xmp(DevelopOps(exposure_ev=0.0), out)
+    root = _parse(out)
+    desc = next(root.iter(f"{{{RDF_NS}}}Description"))
+    assert desc.get(f"{{{DT_NS}}}xmp_version") == "5"
+    assert desc.get(f"{{{DT_NS}}}iop_order_version") == "4"  # V50 RAW
+    assert desc.get(f"{{{DT_NS}}}auto_presets_applied") == "1"
+    assert desc.get(f"{{{DT_NS}}}history_end") == "1"
+
+
 def test_emitter_includes_exposure_operation(tmp_path):
     out = tmp_path / "frame.xmp"
     emit_darktable_xmp(DevelopOps(exposure_ev=1.25), out)
