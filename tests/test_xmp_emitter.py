@@ -60,6 +60,9 @@ def test_emitter_does_not_emit_temperature_module_pre_calibration(tmp_path):
 
 
 def test_exposure_params_roundtrip(tmp_path):
+    # dt master exposure modversion 7 struct: mode int + 4 floats + 2 gbooleans
+    # (4 bytes each). Total 28 bytes. compensate_hilite_pres added in v7 with
+    # default TRUE. See docs/reference/darktable/MODULES.md.
     out = tmp_path / "frame.xmp"
     emit_darktable_xmp(DevelopOps(exposure_ev=2.5), out)
     root = _parse(out)
@@ -67,13 +70,19 @@ def test_exposure_params_roundtrip(tmp_path):
         if li.get(f"{{{DT_NS}}}operation") == "exposure":
             params_b64 = li.get(f"{{{DT_NS}}}params")
             decoded = base64.b64decode(params_b64)
-            mode, black, exposure, perc, target, comp = struct.unpack("<iffffi", decoded)
+            assert len(decoded) == 28, f"expected 28-byte v7 struct, got {len(decoded)}"
+            mode, black, exposure, perc, target, comp_bias, comp_hilite = (
+                struct.unpack("<iffffii", decoded)
+            )
             assert mode == 0
             assert black == 0.0
             assert exposure == 2.5
             assert perc == 50.0
             assert target == -4.0
-            assert comp == 0
+            assert comp_bias == 0   # default FALSE
+            assert comp_hilite == 1  # default TRUE per v7 introduction
+            # And modversion should be "7" on the rdf:li
+            assert li.get(f"{{{DT_NS}}}modversion") == "7"
             break
     else:
         raise AssertionError("exposure entry missing")
