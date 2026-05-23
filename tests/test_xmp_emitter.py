@@ -1,6 +1,5 @@
 """darktable XMP emitter tests."""
 
-import base64
 import struct
 import xml.etree.ElementTree as ET
 
@@ -82,13 +81,22 @@ def test_exposure_params_roundtrip(tmp_path):
     # dt master exposure modversion 7 struct: mode int + 4 floats + 2 gbooleans
     # (4 bytes each). Total 28 bytes. compensate_hilite_pres added in v7 with
     # default TRUE. See docs/reference/darktable/MODULES.md.
+    #
+    # ENCODING: hex ASCII (lowercase 0-9a-f). dt's XMP reader at
+    # src/common/exif.cc#L3252-3270 runs strspn against [0-9a-f] and silently
+    # falls back to module defaults on any other encoding (e.g. base64).
+    # This test guards against that regression.
     out = tmp_path / "frame.xmp"
     emit_darktable_xmp(DevelopOps(exposure_ev=2.5), out)
     root = _parse(out)
     for li in root.iter(f"{{{RDF_NS}}}li"):
         if li.get(f"{{{DT_NS}}}operation") == "exposure":
-            params_b64 = li.get(f"{{{DT_NS}}}params")
-            decoded = base64.b64decode(params_b64)
+            params_hex = li.get(f"{{{DT_NS}}}params")
+            # Must be pure hex (dt's strspn check).
+            assert all(c in "0123456789abcdef" for c in params_hex), (
+                f"params must be hex-encoded, got {params_hex!r}"
+            )
+            decoded = bytes.fromhex(params_hex)
             assert len(decoded) == 28, f"expected 28-byte v7 struct, got {len(decoded)}"
             mode, black, exposure, perc, target, comp_bias, comp_hilite = (
                 struct.unpack("<iffffii", decoded)

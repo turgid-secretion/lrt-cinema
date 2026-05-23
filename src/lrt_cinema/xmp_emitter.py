@@ -34,7 +34,6 @@ Scaffold approach (v0.1):
 
 from __future__ import annotations
 
-import base64
 import io
 import struct
 import xml.etree.ElementTree as ET
@@ -92,7 +91,7 @@ EMPTY_BLENDOP_PARAMS = "00" * 64
 
 
 def _encode_exposure_params(exposure_ev: float) -> str:
-    """Encode darktable exposure module params (modversion 7).
+    """Encode darktable exposure module params (modversion 7) as HEX ASCII.
 
     Struct layout from src/iop/exposure.c#L66-75 at dt master SHA
     635c0c55b6... (DT_MODULE_INTROSPECTION(7, dt_iop_exposure_params_t)):
@@ -106,6 +105,16 @@ def _encode_exposure_params(exposure_ev: float) -> str:
         gboolean compensate_hilite_pres  // ADDED in v7, default TRUE=1
 
     Total: 7 fields * 4 bytes = 28 bytes (no struct padding; all 4-aligned).
+
+    ENCODING: hexadecimal ASCII (lowercase 0-9a-f), not base64. dt's XMP
+    reader at src/common/exif.cc#L3252-3270 runs
+    `strspn(input, "0123456789abcdef")` and rejects anything that fails.
+    Base64 fails immediately because of `+`, `/`, `=` characters →
+    dt silently substitutes `module->default_params` →
+    pipe renders with dt's default exposure (0.7 in scene-referred
+    workflows, 0.0 in workflow=none) regardless of what we wrote.
+    This was a project-wide silent regression from the day-1 emitter;
+    fixed 2026-05-23. See docs/research/DT_WORKFLOW_EXPOSURE_INTERACTION.md.
     """
     payload = struct.pack(
         "<iffffii",
@@ -117,11 +126,11 @@ def _encode_exposure_params(exposure_ev: float) -> str:
         0,             # compensate_exposure_bias = FALSE (default)
         1,             # compensate_hilite_pres = TRUE (default per v7)
     )
-    return base64.b64encode(payload).decode("ascii")
+    return payload.hex()
 
 
 def _encode_temperature_params(kelvin: int, tint: int) -> str:
-    """Encode darktable temperature module params.
+    """Encode darktable temperature module params as HEX ASCII.
 
     Layout (modversion 3): four float channel multipliers (R, G1, B, G2).
     A full kelvin→multipliers conversion needs the camera's input
@@ -131,7 +140,7 @@ def _encode_temperature_params(kelvin: int, tint: int) -> str:
     helper is kept only for the calibrated path.
     """
     payload = struct.pack("<ffff", 1.0, 1.0, 1.0, 1.0)
-    return base64.b64encode(payload).decode("ascii")
+    return payload.hex()
 
 
 def _make_history_entry(
