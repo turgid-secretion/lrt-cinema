@@ -250,6 +250,24 @@ The single code path is `parse_sequence` + `interpolate`. The `_has_meaningful_o
 
 Verification: render the same frame range twice — once before Auto Transition, once after — and compare the TIFFs. Frames at keyframe positions are identical in both renders (same input value); intermediate frames may differ if our gap-fill interpolation diverges from LRT's. Identical render proves LRT-intent fidelity; divergence quantifies the gap-fill difference in EV terms.
 
+### Empirical comparison (2026-05-22, LRT Pro 7.5.3, dt nightly 5.5.0+1375)
+
+Test sequence: 5033-frame Nikon D750 timelapse, 6 LRT keyframes set at intervals of ~1006 frames. Two EV changes (0.0 → −0.5 → −1.0 → 0.0) over the first three keyframe pairs. 21 frames rendered around the −0.5 EV keyframe at frame 1006, both modes:
+
+| Frame | Our linear interp | LRT's interp (Auto Transition) | ΔEV |
+|---|---|---|---|
+| 996 | −0.4950 | −0.494380 | +0.00062 |
+| 1001 | −0.4980 | −0.497195 | +0.00081 |
+| 1006 | −0.5000 | −0.500000 | 0.00000 (keyframe) |
+| 1007 | −0.5005 | −0.500599 | −0.00010 |
+| 1016 | −0.5050 | −0.505786 | −0.00079 |
+
+LRT's interpolation is asymmetric around the keyframe (less negative approaching, more negative leaving), consistent with a smooth spline (Catmull-Rom or Hermite) rather than linear.
+
+**TIFF pixel data byte-identical** across all 21 frame pairs. The maximum ~0.0008 EV divergence falls below darktable's 16-bit linear TIFF quantization at the scene's midtone levels (~0.224 mean), so the numerical difference does not propagate to visible pixel difference at this keyframe spacing.
+
+**Practical conclusion:** for typical timelapse keyframe spacing (≥1000 frames per EV stop), `--interpolation linear` (lrt-cinema's default) and `--interpolation smooth` produce indistinguishable output, both indistinguishable from LRT's own Auto Transition output. At aggressive keyframe spacing (e.g., +3 EV across 200 frames) the smooth/linear divergence would become visible; `--interpolation smooth` is closer to LRT's behavior and is recommended for such cases.
+
 ## Known environment issues (not lrt-cinema bugs)
 
 ### darktable.app cask on macOS arm64 — SQLite/ICU mismatch (5.4.1 release)
