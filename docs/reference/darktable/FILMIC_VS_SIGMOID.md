@@ -29,7 +29,8 @@ commit `635c0c55b64331481dffe30f937ba3fe72f83857`.
 - Author: **jandren (Jakob Andrén)**. Introduced in the discussion
   thread at <https://discuss.pixls.us/t/new-sigmoid-scene-to-display-mapping/22635>
   on 2021-01-12.
-- Introduced in dt: 4.4 (June 2023).
+- Introduced in dt: 4.4 (released 2023-06-21; verified via
+  `gh api repos/darktable-org/darktable/releases`).
 - Source: [`src/iop/sigmoid.c`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/sigmoid.c)
 - Current modversion: 3 ([`sigmoid.c#L34`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/sigmoid.c#L34))
 - Design: a "modified generalized log-logistic curve" with only two
@@ -48,7 +49,8 @@ commit `635c0c55b64331481dffe30f937ba3fe72f83857`.
 - Authors: **Blender Foundation** (original AgX OCIO config by Troy
   Sobotka, integrated into Blender 4.0); the dt port is community
   work, see commit history.
-- Introduced in dt: **5.4** (December 2024). See release notes:
+- Introduced in dt: **5.4** (released 2025-12-21; verified via
+  `gh api repos/darktable-org/darktable/releases`). See release notes:
   <https://github.com/darktable-org/darktable/releases/tag/release-5.4.0>
   ("a new tone mapper based on Blender's AgX display transform was
   added, offering more extensive controls than Sigmoid with explicit
@@ -74,9 +76,11 @@ The conf default is set in `data/darktableconfig.xml.in`:
   ...
 ```
 
-dt 5.5 master defaults to **sigmoid**. dt 5.0-5.4 also defaulted to
-sigmoid (the switch from filmic-default to sigmoid-default happened
-in dt 5.0). dt 4.4-4.8 defaulted to filmic.
+dt 5.5 master defaults to **sigmoid** (per the conf default above).
+The switch from filmic-default to sigmoid-default happened in the
+dt 5.x line; the precise minor release should be cross-checked
+against release notes if it matters for a downstream feature.
+dt 4.4-4.8 defaulted to filmic.
 
 ## How they differ — design intent
 

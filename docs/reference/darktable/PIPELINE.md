@@ -22,7 +22,8 @@ The current default table is `v50_order`, declared at
 [`src/common/iop_order.c#L298-L415`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/common/iop_order.c#L298-L415).
 It became the default for new RAW edits in darktable 5.0 (released
 2024-12-21; release notes:
-<https://github.com/darktable-org/darktable/releases/tag/release-5.0.0>).
+<https://github.com/darktable-org/darktable/releases/tag/release-5.0.0>;
+date verified via `gh api repos/darktable-org/darktable/releases`).
 Prior history versions still apply per-image:
 
 | Constant | Value | Applies to |
