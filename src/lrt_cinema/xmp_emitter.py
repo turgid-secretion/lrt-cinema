@@ -48,34 +48,52 @@ RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 XMP_NS = "http://ns.adobe.com/xap/1.0/"
 XMPMM_NS = "http://ns.adobe.com/xap/1.0/mm/"
 
-DT_XMP_VERSION = "1"
+DT_XMP_VERSION = "5"
+"""dt sidecar xmp_version. dt master writes "5" (src/common/exif.cc#L81 at SHA
+635c0c55b6...); accepts 0..5, rejects >=6 (see docs/reference/darktable/
+XMP_FORMAT.md). Our prior value "1" worked because dt's legacy reader accepts
+lower versions, but is forward-incompatible with future bumps."""
 
-EXPOSURE_MODVERSION = "6"
+EXPOSURE_MODVERSION = "7"
+"""dt exposure module current modversion (src/iop/exposure.c#L47 in dt master).
+Bumped from 6 to 7 in dt 5.x when `compensate_hilite_pres` gboolean was added
+to the params struct. dt's legacy_params migration would handle v6→v7 on read,
+but emitting the canonical current modversion is preferred."""
+
 TEMPERATURE_MODVERSION = "3"
+# Note: dt master is at modversion 4 (added int preset field). We don't emit
+# the temperature module pre-calibration so this constant is unused. When the
+# kelvin→multipliers calibration ships, bump to "4" and add the preset int.
 
 BLENDOP_VERSION = "11"
 EMPTY_BLENDOP_PARAMS = "00" * 64
 
 
 def _encode_exposure_params(exposure_ev: float) -> str:
-    """Encode darktable exposure module params.
+    """Encode darktable exposure module params (modversion 7).
 
-    Layout (modversion 6 — stable since darktable 3.0):
-        mode: int32      (0 = manual)
-        black: float     (0.0)
-        exposure: float  (EV stops; +1.0 = +1 EV)
-        deflicker_percentile: float (50.0 = default)
-        deflicker_target_level: float (-4.0 = default)
-        compensate_exposure_bias: int32 (0)
+    Struct layout from src/iop/exposure.c#L66-75 at dt master SHA
+    635c0c55b6... (DT_MODULE_INTROSPECTION(7, dt_iop_exposure_params_t)):
+
+        dt_iop_exposure_mode_t mode      // enum = int32, default MANUAL=0
+        float black                      // -1.0..1.0, default 0.0
+        float exposure                   // -18.0..18.0 EV, default 0.0
+        float deflicker_percentile       // 0..100, default 50.0
+        float deflicker_target_level     // -18..18, default -4.0
+        gboolean compensate_exposure_bias// = gint = int32, default FALSE=0
+        gboolean compensate_hilite_pres  // ADDED in v7, default TRUE=1
+
+    Total: 7 fields * 4 bytes = 28 bytes (no struct padding; all 4-aligned).
     """
     payload = struct.pack(
-        "<iffffi",
+        "<iffffii",
         0,             # mode = manual
         0.0,           # black
         float(exposure_ev),
         50.0,          # deflicker_percentile
         -4.0,          # deflicker_target_level
-        0,             # compensate_exposure_bias
+        0,             # compensate_exposure_bias = FALSE (default)
+        1,             # compensate_hilite_pres = TRUE (default per v7)
     )
     return base64.b64encode(payload).decode("ascii")
 

@@ -89,19 +89,66 @@ def render_frame(
         if candidate.exists():
             style_path = candidate
 
-    # NOTE: darktable-cli's --bpp flag is documented "unsupported" in dt 5.x
-    # (`darktable-cli --help` lists it that way). The TIFF bit depth and EXR
-    # encoding are governed by darktable's export module config, which the
-    # bundled `.style` files will pin once calibration ships. For v0.2 we
-    # accept darktable's defaults (typically 16-bit TIFF, half-float EXR).
+    # Build argv per dt EXPORT.md (docs/reference/darktable/EXPORT.md).
+    #
+    # Three flags do the heavy lifting:
+    #   --apply-custom-presets 0  — disables dt's workflow auto-injection
+    #     (filmic/sigmoid prepend). Without this, output reflects the user's
+    #     local dt workflow config, not our preset intent. Essential for
+    #     deterministic reproducible output across machines.
+    #   --icc-type LIN_REC2020 — forces the colorout module to emit linear
+    #     Rec.2020 regardless of any colorout history entry in the sidecar.
+    #     (src/cli/main.c#L863 in dt master forces this override.)
+    #   --core --conf plugins/imageio/format/<fmt>/bpp=<N> — the ONLY way
+    #     to control bit depth. The documented --bpp flag is a no-op
+    #     (src/cli/main.c#L279-290 says "TODO: sorry, due to API
+    #     restrictions we currently cannot set the BPP"). A .style file
+    #     cannot pin bpp either: it carries module history only, not
+    #     format-plugin conf.
+    #
+    # Without these three flags, dt-cli silently defaults to 8-bit sRGB
+    # regardless of preset (data/darktableconfig.xml.in tiff/bpp default = 8).
     argv = [
         "darktable-cli",
         str(source_path),
         str(xmp_path),
         str(output_path),
+        "--apply-custom-presets", "0",
     ]
+
+    # ICC type override — maps preset.output_color_profile to dt's
+    # --icc-type token. Per src/cli/main.c#L115-144 valid tokens include
+    # LIN_REC2020, LIN_REC709, SRGB, REC709, PROPHOTO_RGB, etc.
+    _ICC_TYPE_BY_PROFILE = {
+        "lin_rec2020": "LIN_REC2020",
+        "lin_rec709": "LIN_REC709",
+        "srgb": "SRGB",
+    }
+    icc_type = _ICC_TYPE_BY_PROFILE.get(preset.output_color_profile)
+    if icc_type is not None:
+        argv += ["--icc-type", icc_type, "--icc-intent", "RELATIVE_COLORIMETRIC"]
+
     if style_path is not None:
         argv += ["--style", str(style_path), "--style-overwrite"]
+
+    # Format-plugin conf (the bit-depth control). Must go LAST after --core.
+    # All --conf KEY=VAL pairs after a single --core are accepted.
+    core_conf: list[str] = []
+    if preset.output_format == "tiff":
+        core_conf += [
+            f"plugins/imageio/format/tiff/bpp={preset.bpp}",
+            "plugins/imageio/format/tiff/compress=0",   # uncompressed
+            "plugins/imageio/format/tiff/pixelformat=0",  # 0=int, 1=float
+        ]
+    elif preset.output_format == "exr":
+        core_conf += [
+            f"plugins/imageio/format/exr/bpp={preset.bpp}",
+            "plugins/imageio/format/exr/compression=2",  # 2=PIZ
+        ]
+    if core_conf:
+        argv += ["--core"]
+        for kv in core_conf:
+            argv += ["--conf", kv]
 
     if dry_run:
         return FrameResult(
