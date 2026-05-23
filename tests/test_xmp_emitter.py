@@ -19,6 +19,18 @@ def test_emitter_writes_well_formed_xml(tmp_path):
     assert root.tag.endswith("xmpmeta")
 
 
+def test_emitter_wraps_in_xpacket_for_exiv2_compat(tmp_path):
+    # darktable's XMP reader (Exiv2) requires the standard XMP packet
+    # wrapper. Without "<?xpacket begin=...?>" / "<?xpacket end=...?>"
+    # dt rejects the sidecar with the misleading "can't open XMP file"
+    # error. The W5M0Mp... id is the canonical Adobe packet marker.
+    out = tmp_path / "frame.xmp"
+    emit_darktable_xmp(DevelopOps(exposure_ev=0.5), out)
+    raw = out.read_bytes()
+    assert raw.startswith(b'<?xpacket begin="\xef\xbb\xbf" id="W5M0MpCehiHzreSzNTczkc9d"?>')
+    assert raw.rstrip().endswith(b'<?xpacket end="w"?>')
+
+
 def test_emitter_includes_exposure_operation(tmp_path):
     out = tmp_path / "frame.xmp"
     emit_darktable_xmp(DevelopOps(exposure_ev=1.25), out)

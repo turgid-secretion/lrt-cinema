@@ -240,7 +240,7 @@ go — which is precisely its value pre-calibration.
 
 ## Known environment issues (not lrt-cinema bugs)
 
-### darktable.app cask on macOS arm64 — SQLite/ICU mismatch
+### darktable.app cask on macOS arm64 — SQLite/ICU mismatch (5.4.1 release)
 
 Symptom: `darktable-cli` aborts at ~250 ms with `[dt_init] ERROR: can't init develop system, aborting.` regardless of input file, with no preceding diagnostic. Reproduces on a fresh `~/.config/darktable`. Reboot does not fix it.
 
@@ -248,11 +248,24 @@ Cause (confirmed on darktable 5.4.1 cask, macOS arm64, 2026-05-22): the bundled 
 
 Diagnostic: `/usr/bin/log show --predicate 'process == "darktable-cli"' --last 5m` will surface the two SQLite errors that the darktable terminal output suppresses.
 
-Workarounds, in order of effort:
-- **MacPorts install** — `sudo port install darktable` builds from source and links to MacPorts' SQLite (ICU-enabled). Cleanest fix.
-- **Older darktable .dmg** — direct download of darktable 4.6 LTS or 5.0 LTS from <https://www.darktable.org/install/> may predate the ICU dependency, depending on the build flags upstream chose.
+**Working workaround (validated 2026-05-22): darktable nightly .dmg** — version `5.5.0+1375.g9402c65275` and later fixes the SQLite/ICU init path. Download from <https://github.com/darktable-org/darktable/releases/tag/nightly>, install over the cask version. With one caveat:
+
+The nightly .dmg has a plugin-path packaging bug — `darktable-cli` looks for plugins at `Contents/lib/darktable/plugins/` but the bundle ships them at `Contents/Resources/lib/darktable/plugins/`. Symptom: dt fails with "cannot find disk storage module" on first run. One-line symlink fix:
+```
+rmdir /Applications/darktable.app/Contents/lib/darktable
+ln -s ../Resources/lib/darktable /Applications/darktable.app/Contents/lib/darktable
+```
+
+Other workarounds, in order of effort:
+- **MacPorts install** — `sudo port install darktable` builds from source and links to MacPorts' SQLite (ICU-enabled).
 - **Build from source** — clone `darktable-org/darktable`, build against Homebrew's SQLite (`brew install sqlite` then point CMAKE_PREFIX_PATH at `/opt/homebrew/opt/sqlite`).
 - **Different RAW renderer** — out of project scope today, but `rawpy` (libraw bindings) + a separate color-management step would be a structural alternative if darktable proves persistently unusable on macOS.
+
+### darktable XMP schema version compatibility
+
+darktable 5.5 nightly accepts `darktable:xmp_version="1"` only; values >=6 (which dt 4.x / 5.4.x wrote) are rejected with "XMP schema version N in '...' not supported". The version field appears to track a backward-incompatible bump rather than a monotonic schema generation — newer dt does NOT accept higher numbers, it requires the new lower number. The emitter is pinned to `DT_XMP_VERSION = "1"` for dt 5.5+ compatibility. If you need to render through an older dt (4.x / 5.0–5.4), bump it back to `"6"` or whatever that release expects; sweep with `lrt-cinema render --dry-run` until dt-cli stops rejecting the sidecar.
+
+The misleading error message — `error: can't open XMP file` instead of `XMP schema version N not supported` — is logged only when dt is run with `--core -d imageio`. Without that flag, the version rejection is invisible.
 
 ## Related project documents
 

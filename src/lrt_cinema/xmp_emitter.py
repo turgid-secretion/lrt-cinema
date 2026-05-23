@@ -35,6 +35,7 @@ Scaffold approach (v0.1):
 from __future__ import annotations
 
 import base64
+import io
 import struct
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -47,7 +48,7 @@ RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 XMP_NS = "http://ns.adobe.com/xap/1.0/"
 XMPMM_NS = "http://ns.adobe.com/xap/1.0/mm/"
 
-DT_XMP_VERSION = "6"
+DT_XMP_VERSION = "1"
 
 EXPOSURE_MODVERSION = "6"
 TEMPERATURE_MODVERSION = "3"
@@ -153,4 +154,18 @@ def emit_darktable_xmp(ops: DevelopOps, output_path: Path) -> None:
 
     tree = ET.ElementTree(root)
     ET.indent(tree, space=" ", level=0)
-    tree.write(output_path, xml_declaration=True, encoding="utf-8")
+    # darktable parses sidecars via Exiv2, which requires the standard
+    # XMP packet wrapper ("<?xpacket ...?>") around the rdf:RDF document
+    # to recognize it as a valid XMP. Without it, dt logs the misleading
+    # "can't open XMP file" and the sidecar is ignored. The W5M0Mp...
+    # id and "begin" BOM-byte are the canonical Adobe XMP packet markers
+    # (see ISO 16684-1 §6.1, "XMP Packet Wrapper"). The trailing "w" in
+    # the end marker indicates a writable packet (vs "r" read-only).
+    _XMP_PACKET_BEGIN = b'<?xpacket begin="\xef\xbb\xbf" id="W5M0MpCehiHzreSzNTczkc9d"?>\n'
+    _XMP_PACKET_END = b'\n<?xpacket end="w"?>\n'
+    buf = io.BytesIO()
+    tree.write(buf, xml_declaration=False, encoding="utf-8")
+    with open(output_path, "wb") as f:
+        f.write(_XMP_PACKET_BEGIN)
+        f.write(buf.getvalue())
+        f.write(_XMP_PACKET_END)
