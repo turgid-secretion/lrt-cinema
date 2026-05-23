@@ -358,14 +358,24 @@ def parse_sequence(folder: Path, raw_extensions: tuple[str, ...] = (
             continue
 
         # Keyframe gating policy:
-        #   - is_kf already reflects xmp:Rating (if present) or lrt:keyframe
-        #     (if present). Either of those is authoritative.
-        #   - The _has_meaningful_ops fallback only fires when NEITHER
-        #     marker was present (rating is None AND no lrt:keyframe).
-        #     Without this guard real LRT XMPs would be treated as
-        #     keyframes on every frame because LRT replicates the full
-        #     crs:* field set into every per-frame sidecar.
-        if is_kf or (rating is None and _has_meaningful_ops(ops)):
+        #   - is_kf reflects xmp:Rating>=1 (real LRT) or lrt:keyframe
+        #     (synthetic fixtures). Authoritative when present.
+        #   - _has_meaningful_ops fires when a frame carries non-default
+        #     develop intent. After the LR-default fixes (sharpness=25,
+        #     identity tone curve), this no longer over-fires on every
+        #     LRT-written XMP and is safe to use as a non-gated fallback.
+        #
+        # Critically this means lrt-cinema HONORS LRT's Auto-Transition
+        # output: after the user presses Auto Transition, LRT writes
+        # interpolated values into every per-frame XMP. Each such frame
+        # carries non-default crs:Exposure2012 and gets ingested as a
+        # Keyframe in our IR. interpolate() then exact-matches and
+        # returns LRT's value directly — no re-interpolation. Our own
+        # linear/Catmull-Rom interp fires only for TRUE gaps (frames
+        # with no per-frame intent), i.e. when the user skipped Auto
+        # Transition. See docs/VALIDATION.md "LRT interpolation
+        # passthrough model" for the architectural rationale.
+        if is_kf or _has_meaningful_ops(ops):
             seq.keyframes.append(Keyframe(
                 frame_index=idx, ops=ops, is_lrt_keyframe=is_kf,
             ))

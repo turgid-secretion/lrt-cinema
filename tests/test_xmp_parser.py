@@ -93,10 +93,10 @@ def test_parse_real_lrt_fixture_uses_xmp_rating():
 
 
 def test_parse_sequence_skips_non_keyframe_rated_frames(tmp_path):
-    # Simulates real LRT: every frame has a sidecar, only rating-tagged
-    # ones are keyframes. Without xmp:Rating-aware gating, all 3 frames
-    # would be misclassified as keyframes because each carries identical
-    # LR-default crs:Sharpness=25 and identity tone curves.
+    # Pre-Auto-Transition LRT state: keyframes flagged via rating=4 carry
+    # creative intent; non-keyframes are rating=0 with crs:Exposure2012=0
+    # (the LR/LRT default value before any interpolation has run). Only
+    # the rated frames should land in seq.keyframes.
     raw_files = [
         tmp_path / f"DSC_{i:04d}.NEF" for i in (4053, 5059, 6065)
     ]
@@ -116,8 +116,61 @@ def test_parse_sequence_skips_non_keyframe_rated_frames(tmp_path):
 
     seq = parse_sequence(tmp_path)
     assert seq.source_frames == ["DSC_4053.NEF", "DSC_5059.NEF", "DSC_6065.NEF"]
-    # Two keyframes (frames 0 and 2), middle frame is rating=0 and skipped.
+    # Two keyframes (frames 0 and 2), middle frame is rating=0 with
+    # default EV → meaningful_ops=False → skipped.
     assert seq.keyframe_indices() == [0, 2]
+
+
+def test_parse_sequence_honors_lrt_auto_transition_per_frame_values(tmp_path):
+    # Post-Auto-Transition LRT state: LRT has written its own interpolated
+    # values into every per-frame XMP. Rating-4 keyframes flank rating-0
+    # interpolated frames, but every frame now carries non-default EV.
+    # lrt-cinema MUST ingest all frames as Keyframes in the IR so that
+    # interpolate() returns LRT's per-frame value directly — otherwise
+    # we'd throw away LRT's interpolation and re-derive a different
+    # curve from only the 2 rating-4 frames.
+    raw_files = [
+        tmp_path / f"DSC_{i:04d}.NEF" for i in (4053, 4054, 4055, 5059)
+    ]
+    for raw in raw_files:
+        raw.write_bytes(b"raw-stub")
+
+    real_kf = (FIXTURES / "synthetic_real_lrt_keyframe.xmp").read_text()
+    # LRT-interpolated intermediate frames: rating=0 BUT non-default EV.
+    def lrt_interp(ev: str) -> str:
+        return real_kf.replace(
+            'xmp:Rating="4"', 'xmp:Rating="0"',
+        ).replace(
+            'crs:Exposure2012="-0.500000"', f'crs:Exposure2012="{ev}"',
+        )
+    # Keyframe at 4053 (EV 0.0), keyframe at 5059 (EV -0.5), with two
+    # LRT-interpolated frames between (linearly between, in a real
+    # sequence these would be 1006 frames apart but we use 4 for the test).
+    kf_zero = real_kf.replace('crs:Exposure2012="-0.500000"', 'crs:Exposure2012="0.000000"')
+    (tmp_path / "DSC_4053.NEF.xmp").write_text(kf_zero)
+    (tmp_path / "DSC_4054.NEF.xmp").write_text(lrt_interp("-0.166667"))  # 1/3 of way
+    (tmp_path / "DSC_4055.NEF.xmp").write_text(lrt_interp("-0.333333"))  # 2/3 of way
+    (tmp_path / "DSC_5059.NEF.xmp").write_text(real_kf)  # rating=4, EV=-0.5
+
+    seq = parse_sequence(tmp_path)
+    # All four frames should be ingested — the two rating=0 frames
+    # carry LRT-interpolated EV intent that must NOT be discarded.
+    assert seq.keyframe_indices() == [0, 1, 2, 3]
+    # Only the rating=4 frames are flagged is_lrt_keyframe=True;
+    # the interpolated ones are still keyframes in our IR (they
+    # carry intent) but not LRT-marked.
+    by_idx = {kf.frame_index: kf for kf in seq.keyframes}
+    assert by_idx[0].is_lrt_keyframe is True
+    assert by_idx[1].is_lrt_keyframe is False
+    assert by_idx[2].is_lrt_keyframe is False
+    assert by_idx[3].is_lrt_keyframe is True
+    # interpolate() must return LRT's per-frame values verbatim (exact
+    # match short-circuits any re-interpolation on our side).
+    from lrt_cinema.interpolation import interpolate
+    assert interpolate(seq, 0).exposure_ev == pytest.approx(0.0)
+    assert interpolate(seq, 1).exposure_ev == pytest.approx(-0.166667)
+    assert interpolate(seq, 2).exposure_ev == pytest.approx(-0.333333)
+    assert interpolate(seq, 3).exposure_ev == pytest.approx(-0.5)
 
 
 def test_parse_sequence_walks_folder(tmp_path):

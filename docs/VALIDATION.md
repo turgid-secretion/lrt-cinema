@@ -238,6 +238,18 @@ regardless of source kelvin. The test would be a fast-failing CI
 gate that documents exactly how far the calibration work needs to
 go — which is precisely its value pre-calibration.
 
+## LRT interpolation passthrough model
+
+`lrt-cinema` is a faithful executor of LRTimelapse intent for darktable. There are two LRT workflow modes the parser must handle, and the same code path serves both:
+
+**Mode 1 — Auto Transition NOT run (sparse keyframes only).** LRT has written XMP sidecars but only the rating-flagged keyframes carry creative values; intermediate frames have `crs:Exposure2012="0.000000"` (the LR default). Our parser picks up just the keyframes; `interpolate()` fills gaps using our own linear or Catmull-Rom math. This is the path most useful for LRT-skipping pipelines and the only path where lrt-cinema's own interpolation math actually fires.
+
+**Mode 2 — Auto Transition run (LRT has interpolated).** Every per-frame XMP now carries an LRT-computed `crs:Exposure2012` (and any other animated property). Our parser ingests every frame whose ops are non-default — `is_kf or _has_meaningful_ops(ops)` — so the IR ends up with one `Keyframe` per source frame. `interpolate()` exact-matches each frame and returns LRT's per-frame value verbatim. Our linear / Catmull-Rom code does NOT run for these frames; we honor LRT's intent.
+
+The single code path is `parse_sequence` + `interpolate`. The `_has_meaningful_ops` heuristic distinguishes LR/LRT default-written-but-unedited frames (skipped) from frames carrying real intent (ingested). The two LR defaults that must be excluded are `crs:Sharpness="25"` (LR's out-of-camera sharpness default) and `<crs:ToneCurvePV2012>` containing only `[0,0]` → `[255,255]` (LR's identity tone curve). Both are excluded by `_is_identity_tone_curve` and the omitted-sharpness check.
+
+Verification: render the same frame range twice — once before Auto Transition, once after — and compare the TIFFs. Frames at keyframe positions are identical in both renders (same input value); intermediate frames may differ if our gap-fill interpolation diverges from LRT's. Identical render proves LRT-intent fidelity; divergence quantifies the gap-fill difference in EV terms.
+
 ## Known environment issues (not lrt-cinema bugs)
 
 ### darktable.app cask on macOS arm64 — SQLite/ICU mismatch (5.4.1 release)
