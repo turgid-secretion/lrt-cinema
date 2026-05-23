@@ -13,14 +13,33 @@ Honest per-feature status of this pre-alpha scaffold.
 - darktable-cli subprocess scheduler — single-worker
 - Three output presets (`cinema-linear`, `cinema-aces`, `stills-finished`) — definitions only
 
+## v0.2 (added)
+
+- Smooth (uniform Catmull-Rom) keyframe interpolation, selectable via `--interpolation linear|smooth`. Endpoint segments use mirror-extrapolated phantom tangents; two-keyframe sequences degenerate to linear. Per-field policy: scalars smooth; optional ints (kelvin, tint) smooth then round, single-side-wins fallback when only one bracketing keyframe carries a value; tone curves smooth `(x, y)` independently when bracketing cardinalities match, else fall back to `p1` (same policy as linear).
+- Holy Grail exposure ramps:
+    - IR — `HolyGrailRamp(start_frame, end_frame, start_exposure_ev, end_exposure_ev, smoothness)` carried as `LRTSequence.holy_grail_ramps`.
+    - Math — `apply_holy_grail_ramps()` applies smoothstep `s(t) = t*t*(3 - 2t)` blended with linear by the per-segment `smoothness` parameter; ramp deltas overlay (add) on top of the keyframe-interpolated base, mirroring `apply_deflicker`.
+    - Pipeline ordering — Holy Grail FIRST (it's the base exposure intent), deflicker SECOND (per-frame correction on top).
+    - Overlap policy — joined/overlapping ramps resolve via last-wins per-frame (the later ramp's delta overwrites the prior), so joined segments at a shared boundary don't double-count.
+    - CLI — `--holy-grail none|apply-lrt-ramps` (default `apply-lrt-ramps`).
+    - Parser — extracts the ramp list from `<lrt:HolyGrailRamps>` per the schema in `tests/fixtures/synthetic_holy_grail.xmp`.
+
 ## Not yet implemented (stubbed)
 
-- Holy Grail exposure ramp logic (multi-segment smooth interpolation)
 - Deflicker pass — measurement loop (export-and-measure-luminance with exposure delta writeback). The application path that reads LRT-authored deflicker deltas from XMP IS implemented.
-- Smooth (cubic) keyframe interpolation
 - Parallel worker pool (currently single-worker only)
 - Bundled darktable `.style` files emit operations as structural placeholders only — their `op_params` are intentionally empty pending the calibration pass (`src/lrt_cinema/presets/CALIBRATION.md`). They are not yet loadable as-is.
 - Real-world DP review loop (preset tuning against real timelapse footage)
+
+## Calibration items (schema TBR against real LRT samples)
+
+The following parser schemas are the project's current contract but have NOT been validated against XMP emitted by a real LRTimelapse demo build. The synthetic fixtures under `tests/fixtures/` define the schema; when real samples land, both the parser constants (`xmp_parser.LRT_NS_HINTS`) AND the fixtures need updating in lockstep.
+
+- LRT keyframe marker attribute (`lrt:keyframe`)
+- LRT deflicker offset attribute (`lrt:deflickerExposure`)
+- LRT Holy Grail ramp container (`<lrt:HolyGrailRamps>` with `<rdf:Seq><rdf:li lrt:startFrame= lrt:endFrame= lrt:startExposure= lrt:endExposure= lrt:smoothness=/></rdf:Seq>`)
+
+Smooth interpolation uses uniform Catmull-Rom: keyframe spacing (in frame indices) is normalized to t ∈ [0, 1] per segment, so non-uniform spacing yields uniform-CR's known velocity-discontinuity behavior at keyframes. Centripetal CR (alpha-parameterized) is the natural upgrade once real LRT sequences expose a preference.
 
 ## Emitted vs parsed DevelopOps
 

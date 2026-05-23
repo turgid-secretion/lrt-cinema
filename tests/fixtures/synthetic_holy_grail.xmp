@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Synthetic Holy Grail ramp fixture.
+
+  Schema TBR pending real LRT samples; the <lrt:HolyGrailRamps> element
+  and the lrt:startFrame / lrt:endFrame / lrt:startExposure /
+  lrt:endExposure / lrt:smoothness attributes are the parser's
+  current contract. See SCOPE.md (Calibration items) and
+  src/lrt_cinema/xmp_parser.py LRT_NS_HINTS for the schema source of
+  truth and the rationale for parking this as a calibration item.
+
+  Two joined segments:
+    Segment A — frames 0..200, +0 EV → +3 EV, smoothness 1.0
+    Segment B — frames 200..400, +3 EV → +5 EV, smoothness 0.5
+  Shared boundary at frame 200 with matching exposure (typical LRT
+  multi-segment day-to-night curve).
+-->
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="lrt-cinema synthetic fixture">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+    xmlns:lrt="http://lrtimelapse.com/ns/1.0/"
+    crs:Exposure2012="+0.00"
+    lrt:keyframe="1">
+   <lrt:HolyGrailRamps>
+    <rdf:Seq>
+     <rdf:li lrt:startFrame="0" lrt:endFrame="200"
+             lrt:startExposure="0.0" lrt:endExposure="3.0"
+             lrt:smoothness="1.0"/>
+     <rdf:li lrt:startFrame="200" lrt:endFrame="400"
+             lrt:startExposure="3.0" lrt:endExposure="5.0"
+             lrt:smoothness="0.5"/>
+    </rdf:Seq>
+   </lrt:HolyGrailRamps>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>

@@ -10,7 +10,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def test_parse_keyframe_a_fields():
-    ops, is_kf, deflicker = parse_xmp_file(FIXTURES / "synthetic_keyframe_a.xmp")
+    ops, is_kf, deflicker, _ramps = parse_xmp_file(FIXTURES / "synthetic_keyframe_a.xmp")
     assert is_kf is True
     assert deflicker is None
     assert ops.exposure_ev == 0.5
@@ -27,7 +27,7 @@ def test_parse_keyframe_a_fields():
 
 
 def test_parse_keyframe_b_with_deflicker():
-    ops, is_kf, deflicker = parse_xmp_file(FIXTURES / "synthetic_keyframe_b.xmp")
+    ops, is_kf, deflicker, _ramps = parse_xmp_file(FIXTURES / "synthetic_keyframe_b.xmp")
     assert is_kf is True
     assert deflicker == pytest.approx(0.12)
     assert ops.exposure_ev == 2.5
@@ -35,7 +35,7 @@ def test_parse_keyframe_b_with_deflicker():
 
 
 def test_parse_tone_curve_from_seq():
-    ops, _, _ = parse_xmp_file(FIXTURES / "synthetic_with_tone_curve.xmp")
+    ops, _, _, _ = parse_xmp_file(FIXTURES / "synthetic_with_tone_curve.xmp")
     assert len(ops.tone_curve) == 5
     assert ops.tone_curve[0].x == 0.0
     assert ops.tone_curve[0].y == 0.0
@@ -46,7 +46,9 @@ def test_parse_tone_curve_from_seq():
 
 
 def test_parse_multi_description_merges_intent():
-    ops, is_kf, deflicker = parse_xmp_file(FIXTURES / "synthetic_multi_description.xmp")
+    ops, is_kf, deflicker, _ramps = parse_xmp_file(
+        FIXTURES / "synthetic_multi_description.xmp"
+    )
     assert is_kf is True
     assert ops.exposure_ev == 1.25
     assert ops.temperature_k == 5800
@@ -68,7 +70,7 @@ def test_parse_kelvin_as_float_text():
         f.write(xmp)
         path = Path(f.name)
     try:
-        ops, _, _ = parse_xmp_file(path)
+        ops, _, _, _ = parse_xmp_file(path)
         assert ops.temperature_k == 5500
     finally:
         path.unlink()

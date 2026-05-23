@@ -7,7 +7,12 @@ import sys
 from pathlib import Path
 
 from lrt_cinema import __version__
-from lrt_cinema.interpolation import apply_deflicker, materialize_all_frames
+from lrt_cinema.interpolation import (
+    apply_deflicker,
+    apply_holy_grail_ramps,
+    materialize_all_frames,
+)
+from lrt_cinema.ir import InterpolationMode
 from lrt_cinema.presets import PRESETS, get_preset
 from lrt_cinema.runner import DarktableCliNotFound, render_sequence
 from lrt_cinema.xmp_parser import parse_sequence
@@ -35,6 +40,15 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Output preset.")
     render.add_argument("--style", type=Path, default=None,
                         help="Optional custom darktable .style overriding the bundled preset style.")
+    render.add_argument("--interpolation", choices=("linear", "smooth"),
+                        default="linear",
+                        help="Keyframe interpolation mode. 'smooth' uses uniform "
+                             "Catmull-Rom with mirror-extrapolated phantom tangents "
+                             "(degenerates to linear for 2-keyframe sequences).")
+    render.add_argument("--holy-grail", choices=("none", "apply-lrt-ramps"),
+                        default="apply-lrt-ramps",
+                        help="Holy Grail exposure-ramp mode. 'apply-lrt-ramps' overlays "
+                             "the per-segment ramp deltas LRT wrote into the XMPs.")
     render.add_argument("--deflicker", choices=("none", "apply-lrt-offsets"),
                         default="apply-lrt-offsets",
                         help="Deflicker mode. 'apply-lrt-offsets' uses the per-frame "
@@ -99,7 +113,15 @@ def _cmd_render(args: argparse.Namespace) -> int:
         )
         return 2
 
+    seq.interpolation_mode = InterpolationMode(args.interpolation)
+
     per_frame = materialize_all_frames(seq)
+    # Pipeline ordering: Holy Grail ramps are the base exposure intent
+    # (overlay on top of keyframe-interpolated values), deflicker is a
+    # per-frame correction applied on top of that intent. Apply ramps
+    # first, deflicker second.
+    if args.holy_grail == "apply-lrt-ramps":
+        per_frame = apply_holy_grail_ramps(per_frame, seq)
     if args.deflicker == "apply-lrt-offsets":
         per_frame = apply_deflicker(per_frame, seq)
 

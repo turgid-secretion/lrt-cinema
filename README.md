@@ -69,6 +69,8 @@ lrt-cinema render \
   --input ... --output ... --preset cinema-linear \
   --style /path/to/custom-darktable.style \
   --keyframes auto \
+  --interpolation smooth \
+  --holy-grail apply-lrt-ramps \
   --deflicker none \
   --workers 4 \
   --from-frame 0 --to-frame 500 \

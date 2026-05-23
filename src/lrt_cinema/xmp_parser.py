@@ -27,7 +27,14 @@ from pathlib import Path
 
 from defusedxml import ElementTree as DefusedET
 
-from lrt_cinema.ir import DevelopOps, Keyframe, LRTSequence, TonePoint
+from lrt_cinema.ir import (
+    DeflickerOffset,
+    DevelopOps,
+    HolyGrailRamp,
+    Keyframe,
+    LRTSequence,
+    TonePoint,
+)
 
 NS = {
     "x": "adobe:ns:meta/",
@@ -39,6 +46,18 @@ NS = {
 LRT_NS_HINTS = {
     "keyframe_attr": "{http://lrtimelapse.com/ns/1.0/}keyframe",
     "deflicker_attr": "{http://lrtimelapse.com/ns/1.0/}deflickerExposure",
+    # Holy Grail container element + per-segment attribute names.
+    # SCHEMA TBR pending real LRT samples: the tag name and attribute
+    # names below are our synthetic-fixture contract, not confirmed
+    # against an LRT-emitted sample. See SCOPE.md / CALIBRATION.md for
+    # the calibration item. When real samples land, update both the
+    # constants here and the fixture at tests/fixtures/.
+    "hgramps_element": "{http://lrtimelapse.com/ns/1.0/}HolyGrailRamps",
+    "hg_start_frame": "{http://lrtimelapse.com/ns/1.0/}startFrame",
+    "hg_end_frame": "{http://lrtimelapse.com/ns/1.0/}endFrame",
+    "hg_start_exposure": "{http://lrtimelapse.com/ns/1.0/}startExposure",
+    "hg_end_exposure": "{http://lrtimelapse.com/ns/1.0/}endExposure",
+    "hg_smoothness": "{http://lrtimelapse.com/ns/1.0/}smoothness",
 }
 
 
@@ -157,14 +176,63 @@ def _merge_ops(base: DevelopOps, override: DevelopOps) -> DevelopOps:
     return merged
 
 
-def parse_xmp_file(path: Path) -> tuple[DevelopOps, bool, float | None]:
-    """Parse one XMP file → (DevelopOps, is_keyframe, deflicker_delta_or_None).
+def _parse_holy_grail_ramps(desc: ET.Element) -> list[HolyGrailRamp]:
+    """Extract HolyGrailRamp entries from one rdf:Description, if present.
+
+    Schema (synthetic-fixture contract; see LRT_NS_HINTS):
+
+        <lrt:HolyGrailRamps>
+          <rdf:Seq>
+            <rdf:li lrt:startFrame="0" lrt:endFrame="200"
+                    lrt:startExposure="0.0" lrt:endExposure="3.0"
+                    lrt:smoothness="1.0"/>
+            ...
+          </rdf:Seq>
+        </lrt:HolyGrailRamps>
+
+    Missing or malformed attributes drop the offending `rdf:li` rather
+    than raising — keeps the parser tolerant of partial sequences in
+    the same spirit as the rest of the file.
+    """
+    container = desc.find(LRT_NS_HINTS["hgramps_element"])
+    if container is None:
+        return []
+    seq = container.find(_q("rdf", "Seq"))
+    if seq is None:
+        return []
+    ramps: list[HolyGrailRamp] = []
+    for li in seq.findall(_q("rdf", "li")):
+        start_frame = li.get(LRT_NS_HINTS["hg_start_frame"])
+        end_frame = li.get(LRT_NS_HINTS["hg_end_frame"])
+        start_ev = li.get(LRT_NS_HINTS["hg_start_exposure"])
+        end_ev = li.get(LRT_NS_HINTS["hg_end_exposure"])
+        smoothness = li.get(LRT_NS_HINTS["hg_smoothness"])
+        if start_frame is None or end_frame is None or start_ev is None or end_ev is None:
+            continue
+        try:
+            ramps.append(HolyGrailRamp(
+                start_frame=int(start_frame),
+                end_frame=int(end_frame),
+                start_exposure_ev=float(start_ev),
+                end_exposure_ev=float(end_ev),
+                smoothness=float(smoothness) if smoothness is not None else 1.0,
+            ))
+        except ValueError:
+            continue
+    return ramps
+
+
+def parse_xmp_file(
+    path: Path,
+) -> tuple[DevelopOps, bool, float | None, list[HolyGrailRamp]]:
+    """Parse one XMP file → (DevelopOps, is_keyframe, deflicker_delta, hg_ramps).
 
     XMP allows multiple `rdf:Description` nodes; we merge them so intent
     split across nodes is not silently dropped. The is_keyframe flag is
     True when any Description carries LRT's keyframe marker (see
     LRT_NS_HINTS). deflicker_delta is taken from the first Description
-    that supplies one, or None.
+    that supplies one, or None. hg_ramps is the concatenation of every
+    Description's `<lrt:HolyGrailRamps>` block in document order.
 
     Uses defusedxml to harden against XXE / billion-laughs attacks on
     untrusted XMP input.
@@ -183,6 +251,7 @@ def parse_xmp_file(path: Path) -> tuple[DevelopOps, bool, float | None]:
     ops = DevelopOps()
     is_keyframe = False
     deflicker_delta: float | None = None
+    hg_ramps: list[HolyGrailRamp] = []
 
     for desc in descriptions:
         ops = _merge_ops(ops, _parse_description(desc))
@@ -199,7 +268,9 @@ def parse_xmp_file(path: Path) -> tuple[DevelopOps, bool, float | None]:
                 except ValueError:
                     deflicker_delta = None
 
-    return ops, is_keyframe, deflicker_delta
+        hg_ramps.extend(_parse_holy_grail_ramps(desc))
+
+    return ops, is_keyframe, deflicker_delta, hg_ramps
 
 
 def parse_sequence(folder: Path, raw_extensions: tuple[str, ...] = (
@@ -232,7 +303,7 @@ def parse_sequence(folder: Path, raw_extensions: tuple[str, ...] = (
         if not xmp.exists():
             continue
         try:
-            ops, is_kf, deflicker_delta = parse_xmp_file(xmp)
+            ops, is_kf, deflicker_delta, hg_ramps = parse_xmp_file(xmp)
         except (ET.ParseError, ValueError):
             continue
 
@@ -241,10 +312,15 @@ def parse_sequence(folder: Path, raw_extensions: tuple[str, ...] = (
                 frame_index=idx, ops=ops, is_lrt_keyframe=is_kf,
             ))
         if deflicker_delta is not None:
-            from lrt_cinema.ir import DeflickerOffset
             seq.deflicker_offsets.append(DeflickerOffset(
                 frame_index=idx, exposure_delta_ev=deflicker_delta,
             ))
+        # Holy Grail ramps are sequence-level metadata; LRT may write the
+        # same ramp block into every frame XMP or only the first keyframe.
+        # First-found-wins: take the ramps from the first XMP that supplies
+        # any, ignore later ones. SCHEMA TBR — see LRT_NS_HINTS.
+        if hg_ramps and not seq.holy_grail_ramps:
+            seq.holy_grail_ramps = hg_ramps
 
     return seq
 
