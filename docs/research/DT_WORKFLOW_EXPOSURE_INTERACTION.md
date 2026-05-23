@@ -1,5 +1,49 @@
 # `plugins/darkroom/workflow=none` vs explicit `exposure` history — source trace
 
+> **RESOLVED 2026-05-23 — root cause was in lrt-cinema, not darktable.**
+>
+> The actual bug: `src/lrt_cinema/xmp_emitter.py:_encode_exposure_params`
+> base64-encoded the params struct, but dt's XMP reader at
+> `src/common/exif.cc#L3252-3270` requires HEX-encoded ASCII (lowercase
+> `0-9a-f`). dt's decoder ran `strspn` against the base64 string, failed
+> on `+/=` characters, returned NULL with `param_length=0`, and
+> `develop.c#L2589` silently substituted `module->default_params`. Every
+> render to date used dt's default exposure regardless of XMP intent.
+>
+> The `workflow=none` symptom in this document was a red herring — the
+> EV value was being ignored under EVERY workflow setting, not just
+> `workflow=none`. The earlier "different keyframes produce different L*"
+> finding that suggested EV worked under default workflow was 100%
+> scene-content variation.
+>
+> **Fix shipped in commit [`77eec41`](https://github.com/turgid-secretion/lrt-cinema/commit/77eec41).**
+> Adversarial pass by Reality Checker agent surfaced the encoding
+> mismatch via end-to-end hex-encoded re-render test (EV=-2 strip mean
+> u16=697; EV=+2 strip mean u16=10170; ratio 14.6x ≈ 2^4 with mild
+> clipping). The source-trace analysis below remains accurate but
+> moot — the symptom it tried to explain is no longer present once
+> the encoder bug is fixed.
+>
+> **Retroactive invalidations from prior commits:**
+> - The "passthrough validated" claim in commit
+>   [`bf89107`](https://github.com/turgid-secretion/lrt-cinema/commit/bf89107)
+>   compared two renders whose exposure was both ignored. The
+>   byte-identical TIFFs proved nothing about passthrough fidelity.
+>   The pre-vs-post Auto Transition diff needs re-running.
+> - The "linear interp matches LRT smooth interp at typical keyframe
+>   spacing" claim from the same commit followed the same flawed
+>   methodology.
+> - The Phase 4 sigmoid experiment finding ("sigmoid makes things
+>   worse") was empirically correct but for the wrong reason — was
+>   comparing dt-default-with-sigmoid against LRT preview, not
+>   our-exposure-with-sigmoid.
+>
+> The analysis below is preserved as the dt source trace that was done.
+
+---
+
+ORIGINAL RESEARCH NOTE BELOW (now superseded):
+
 Research note: why setting `--core --conf plugins/darkroom/workflow=none`
 on `darktable-cli` appears to make an XMP `exposure` history entry
 non-effective on the rendered pixels, even though dt's debug log

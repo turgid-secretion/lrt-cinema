@@ -110,18 +110,39 @@ elements) in the `darktable:` namespace. Per-entry layout, read by
 | `darktable:operation` | string | Module op name (e.g. `exposure`, `colorbalancergb`) |
 | `darktable:enabled` | "0"/"1" | Whether this history entry is applied |
 | `darktable:modversion` | int | Per-module introspection version (the `DT_MODULE_INTROSPECTION` N — see MODULES.md) |
-| `darktable:params` | base64 | The C struct for op-at-modversion |
+| `darktable:params` | hex ASCII (or `gz<NN>`+base64-gzip — see below) | The C struct for op-at-modversion |
 | `darktable:multi_priority` | int | Instance index (0 for first/only instance) |
 | `darktable:multi_name` | string | User-set instance label (or empty) |
 | `darktable:multi_name_hand_edited` | "0"/"1" | Whether multi_name was user-set |
 | `darktable:blendop_version` | int | Blendop layout version |
-| `darktable:blendop_params` | base64 | The blendop struct (default = all-zeros 64-byte block) |
+| `darktable:blendop_params` | hex ASCII (or `gz<NN>`+base64-gzip) | The blendop struct (default = all-zeros 64-byte block) |
 | `darktable:iop_order` | float (optional) | Per-entry pipe order override; if present it overrides the iop_order_list lookup |
 
-The `darktable:params` blob is base64-encoded in current dt
-(decoded via Exiv2). Older dt versions (pre-3.0) wrote hex strings;
-the v1 reader at [`exif.cc#L3433`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/common/exif.cc#L3433)
-covers that.
+**CORRECTION 2026-05-23 — the original claim that `darktable:params` is
+base64 was wrong and caused a critical project bug ([`77eec41`](https://github.com/turgid-secretion/lrt-cinema/commit/77eec41)).**
+
+dt's `darktable:params` decoder (`exif.cc#L3199-L3271` at dt master SHA
+9402c65275) has two paths:
+
+1. **Compressed gzip-base64** — triggered when the string starts with
+   `gz` followed by two compression-factor digits (e.g. `gz09<base64>`).
+   The leading `gz` is stripped, the next two characters are parsed as
+   a decimal `factor`, the remainder is base64-decoded then
+   `uncompress()`'d with `bufLen = factor * compressed_size`.
+
+2. **Plain hex ASCII** — the fallback for any input that doesn't match
+   the `gz` prefix. dt runs `strspn(input, "0123456789abcdef") !=
+   strlen(input)` and returns NULL on any non-hex character — meaning
+   plain base64 (which uses `+`, `/`, `=`) WILL FAIL THIS STRSPN CHECK
+   and dt's decoder returns NULL with `param_length=0`, after which
+   `develop.c#L2589` silently substitutes `module->default_params`.
+
+Emitters writing pure binary params should use hex ASCII (lowercase).
+The gz-base64 path is only for round-tripping dt's own large-blob
+output (typically masks history); plain base64 without the gz prefix
+is invalid input that dt silently swallows.
+
+The same encoding rules apply to `darktable:blendop_params`.
 
 ## Masks layout (`Xmp.darktable.masks_history`)
 
