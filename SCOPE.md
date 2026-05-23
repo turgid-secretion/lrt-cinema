@@ -31,6 +31,10 @@ Honest per-feature status of this pre-alpha scaffold.
 - Bundled darktable `.style` files emit operations as structural placeholders only — their `op_params` are intentionally empty pending the calibration pass (`src/lrt_cinema/presets/CALIBRATION.md`). They are not yet loadable as-is.
 - Real-world DP review loop (preset tuning against real timelapse footage)
 
+## Validation gap (the "cinema-grade" claim)
+
+The README's "cinema-grade color" wording is currently aspirational, not measured. The bulletproof automated test for that claim is a ColorChecker ΔE2000 regression against published patch reference values; the methodology, first-class references (ACES TC, OCIO, ITU/SMPTE, X-Rite, `colour-science`), and an honest assessment of what is and is not automatable live in [docs/VALIDATION.md](docs/VALIDATION.md). Today the test would fast-fail because the emitter drops 9 of 12 parsed develop ops and the temperature module emits neutral multipliers regardless of source kelvin — see the "Emitted vs parsed DevelopOps" table above. The test is mechanical to implement; pre-calibration it serves as the CI gate that quantifies the gap.
+
 ## Calibration items (schema TBR against real LRT samples)
 
 The following parser schemas are the project's current contract but have NOT been validated against XMP emitted by a real LRTimelapse demo build. The synthetic fixtures under `tests/fixtures/` define the schema; when real samples land, both the parser constants (`xmp_parser.LRT_NS_HINTS`) AND the fixtures need updating in lockstep.

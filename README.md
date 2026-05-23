@@ -2,7 +2,7 @@
 
 Translate [LRTimelapse](https://lrtimelapse.com/) XMP develop instructions into [darktable](https://www.darktable.org/) history-stack XMP sidecars, then render a cinema-native intermediate sequence (linear Rec.2020 TIFF, ACES OpenEXR, or AgX-baked Rec.2020 TIFF) via `darktable-cli`.
 
-**Status:** Pre-alpha scaffold. Not yet usable for production work. See [SCOPE.md](SCOPE.md) for what is and is not implemented.
+**Status:** Pre-alpha scaffold. Not yet usable for production work. See [SCOPE.md](SCOPE.md) for what is and is not implemented, and [docs/VALIDATION.md](docs/VALIDATION.md) for how the project's "cinema-grade color" claim can be tested under CI (ColorChecker ΔE2000 methodology, what's testable vs unautomatable, first-class reference catalog).
 
 **Companion, not fork.** lrt-cinema does not modify or distribute LRTimelapse. It reads the XMP sidecars LRTimelapse writes and routes the develop intent through a different RAW pipeline. LRTimelapse is a separate commercial product by Gunther Wegner; this tool is independent.
 
