@@ -266,7 +266,13 @@ LRT's interpolation is asymmetric around the keyframe (less negative approaching
 
 **TIFF pixel data byte-identical** across all 21 frame pairs. The maximum ~0.0008 EV divergence falls below darktable's 16-bit linear TIFF quantization at the scene's midtone levels (~0.224 mean), so the numerical difference does not propagate to visible pixel difference at this keyframe spacing.
 
-**Practical conclusion:** for typical timelapse keyframe spacing (≥1000 frames per EV stop), `--interpolation linear` (lrt-cinema's default) and `--interpolation smooth` produce indistinguishable output, both indistinguishable from LRT's own Auto Transition output. At aggressive keyframe spacing (e.g., +3 EV across 200 frames) the smooth/linear divergence would become visible; `--interpolation smooth` is closer to LRT's behavior and is recommended for such cases.
+**What this test actually proved (be precise):** two lrt-cinema code paths (our linear interp on sparse keyframes, vs passthrough of LRT's per-frame Auto-Transition values) collapse to the same TIFFs *through the same darktable*. That is internal pipeline consistency, not output fidelity in the cinema sense. The byte-identical result was overdetermined: darktable's 16-bit linear TIFF quantization eats sub-LSB differences, so the test could not have failed even if our interp diverged more strongly from LRT's.
+
+**What this test did NOT prove:** that our rendered TIFFs match what an LRT + Adobe Camera Raw / Lightroom workflow would produce. We are entirely dependent on darktable's choices — demosaic algorithm (RCD/AMaZE vs ACR proprietary), camera color matrix application (LCMS+DCP vs ACR profile HSL tables), default modules applied, gamma encoding nuances, highlight reconstruction algorithm — for the actual pixel output. Equivalence to ACR is unverified and likely false in measurable ways.
+
+**For a defensible "cinema-grade output" claim, see the [ColorChecker ΔE2000 methodology](#the-bulletproof-automated-test-option-b) above.** That test compares lrt-cinema's output against published colorimetric reference values, not against LRT or ACR. It is the only currently-feasible automated path to a colorimetric-correctness claim.
+
+**Practical conclusion for the interpolation question:** for typical timelapse keyframe spacing (≥1000 frames per EV stop), `--interpolation linear` (lrt-cinema's default) and `--interpolation smooth` produce indistinguishable output through darktable, both indistinguishable from LRT's own Auto Transition output through darktable. At aggressive keyframe spacing (e.g., +3 EV across 200 frames) the smooth/linear divergence would become visible; `--interpolation smooth` is closer to LRT's spline behavior and is recommended for such cases. None of this constitutes evidence that lrt-cinema's output matches ACR's — only that our pipeline is internally consistent.
 
 ## Known environment issues (not lrt-cinema bugs)
 
