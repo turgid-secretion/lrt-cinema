@@ -30,26 +30,21 @@ def test_emitter_includes_exposure_operation(tmp_path):
     assert "exposure" in operations
 
 
-def test_emitter_includes_temperature_when_kelvin_set(tmp_path):
-    out = tmp_path / "frame.xmp"
-    emit_darktable_xmp(DevelopOps(temperature_k=5500), out)
-    root = _parse(out)
-    operations = [
-        li.get(f"{{{DT_NS}}}operation")
-        for li in root.iter(f"{{{RDF_NS}}}li")
-    ]
-    assert "temperature" in operations
-
-
-def test_emitter_omits_temperature_when_kelvin_none(tmp_path):
-    out = tmp_path / "frame.xmp"
-    emit_darktable_xmp(DevelopOps(temperature_k=None), out)
-    root = _parse(out)
-    operations = [
-        li.get(f"{{{DT_NS}}}operation")
-        for li in root.iter(f"{{{RDF_NS}}}li")
-    ]
-    assert "temperature" not in operations
+def test_emitter_does_not_emit_temperature_module_pre_calibration(tmp_path):
+    # Pre-calibration we deliberately do NOT emit the temperature module
+    # even when temperature_k is set, because neutral 1.0 multipliers
+    # produce a green cast (the as-shot AWB darktable would otherwise
+    # apply is correct). When the DCP-driven kelvin→multiplier
+    # calibration ships, this test flips to assert emission.
+    for kelvin in (None, 5500):
+        out = tmp_path / f"frame_{kelvin}.xmp"
+        emit_darktable_xmp(DevelopOps(temperature_k=kelvin), out)
+        root = _parse(out)
+        operations = [
+            li.get(f"{{{DT_NS}}}operation")
+            for li in root.iter(f"{{{RDF_NS}}}li")
+        ]
+        assert "temperature" not in operations
 
 
 def test_exposure_params_roundtrip(tmp_path):

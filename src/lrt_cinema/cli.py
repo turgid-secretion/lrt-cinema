@@ -31,6 +31,18 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command", required=True)
 
+    inspect = sub.add_parser(
+        "inspect",
+        help=(
+            "Parse an LRT folder and print what we saw — no rendering. "
+            "Use this as a parser-validation pass before render."
+        ),
+    )
+    inspect.add_argument("--input", required=True, type=Path,
+                         help="Folder containing source RAW frames + LRT XMP sidecars.")
+    inspect.add_argument("--show-fields", action="store_true",
+                         help="Print every parsed crs field per keyframe (verbose).")
+
     render = sub.add_parser("render", help="Render an LRT sequence.")
     render.add_argument("--input", required=True, type=Path,
                         help="Folder containing source RAW frames + LRT XMP sidecars.")
@@ -79,8 +91,145 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "render":
         return _cmd_render(args)
+    if args.command == "inspect":
+        return _cmd_inspect(args)
     parser.error(f"Unknown command: {args.command}")
     return 2
+
+
+_DROPPED_AT_EMIT_FIELDS = (
+    "contrast", "highlights", "shadows", "whites", "blacks",
+    "saturation", "vibrance", "sharpness",
+)
+
+
+def _cmd_inspect(args: argparse.Namespace) -> int:
+    """Parse the input folder and print a human-readable diagnostic.
+
+    Side-effect-free: does not write any files and does not invoke
+    darktable. Intended to validate parser behavior against real LRT
+    XMP before committing to a render — schemas like the LRT keyframe
+    marker and the Holy Grail ramp container are calibration items
+    (see SCOPE.md), so seeing what the parser actually extracted is
+    the cheapest way to catch a schema drift.
+    """
+    out = sys.stdout
+    try:
+        seq = parse_sequence(args.input)
+    except (FileNotFoundError, NotADirectoryError) as exc:
+        sys.stderr.write(f"error: {exc}\n")
+        return 2
+
+    n_frames = seq.frame_count()
+    out.write(f"Folder: {args.input}\n")
+    out.write(f"Source RAW frames: {n_frames}\n")
+    if n_frames:
+        out.write(f"  first: {seq.source_frames[0]}\n")
+        out.write(f"  last:  {seq.source_frames[-1]}\n")
+
+    kf_count = len(seq.keyframes)
+    lrt_flagged = sum(1 for k in seq.keyframes if k.is_lrt_keyframe)
+    out.write(f"\nKeyframes detected: {kf_count}\n")
+    out.write(
+        f"  flagged with lrt:keyframe attribute: {lrt_flagged} of {kf_count}\n"
+    )
+    if kf_count and lrt_flagged == 0:
+        out.write(
+            "  note: no lrt:keyframe markers found. All keyframes were inferred\n"
+            "        from XMPs carrying non-default develop intent. Either LRT\n"
+            "        is not flagging keyframes in this sequence, or the\n"
+            "        lrt:keyframe attribute schema we expect differs from what\n"
+            "        LRT writes (calibration item — see SCOPE.md).\n"
+        )
+
+    if args.show_fields and seq.keyframes:
+        out.write("\nPer-keyframe parsed develop ops:\n")
+        for kf in seq.keyframes:
+            ops = kf.ops
+            out.write(
+                f"  frame {kf.frame_index:6d} "
+                f"lrt_kf={kf.is_lrt_keyframe} "
+                f"ev={ops.exposure_ev:+.2f} "
+                f"k={ops.temperature_k} tint={ops.tint} "
+                f"c={ops.contrast:+.0f} h={ops.highlights:+.0f} "
+                f"s={ops.shadows:+.0f} w={ops.whites:+.0f} "
+                f"b={ops.blacks:+.0f} sat={ops.saturation:+.0f} "
+                f"vib={ops.vibrance:+.0f} sharp={ops.sharpness:.0f} "
+                f"curve_pts={len(ops.tone_curve)}\n"
+            )
+
+    out.write(f"\nHoly Grail ramps: {len(seq.holy_grail_ramps)}\n")
+    for r in seq.holy_grail_ramps:
+        out.write(
+            f"  [{r.start_frame}..{r.end_frame}] "
+            f"{r.start_exposure_ev:+.2f} EV → {r.end_exposure_ev:+.2f} EV "
+            f"smoothness={r.smoothness}\n"
+        )
+    if not seq.holy_grail_ramps:
+        out.write(
+            "  (none found. If you used LRT's Holy Grail workflow, the schema\n"
+            "   may differ from our current guess of <lrt:HolyGrailRamps> —\n"
+            "   see docs/VALIDATION.md and SCOPE.md calibration items.)\n"
+        )
+
+    out.write(f"\nDeflicker offsets: {len(seq.deflicker_offsets)}\n")
+    if seq.deflicker_offsets:
+        evs = [d.exposure_delta_ev for d in seq.deflicker_offsets]
+        out.write(
+            f"  range: {min(evs):+.3f} EV to {max(evs):+.3f} EV "
+            f"(mean abs: {sum(abs(e) for e in evs) / len(evs):.3f} EV)\n"
+        )
+
+    if seq.keyframes:
+        out.write("\nEmit warnings (fields parsed but dropped at darktable XMP emit):\n")
+        any_warning = False
+        for name in _DROPPED_AT_EMIT_FIELDS:
+            count = sum(
+                1 for kf in seq.keyframes
+                if getattr(kf.ops, name) != 0.0
+            )
+            if count:
+                out.write(
+                    f"  - {name}: set on {count} of {kf_count} keyframes — "
+                    f"DROPPED at emit (calibration item, see SCOPE.md)\n"
+                )
+                any_warning = True
+        tone_curve_count = sum(1 for kf in seq.keyframes if kf.ops.tone_curve)
+        if tone_curve_count:
+            out.write(
+                f"  - tone_curve: set on {tone_curve_count} of {kf_count} keyframes — "
+                f"DROPPED at emit (calibration item)\n"
+            )
+            any_warning = True
+        tint_count = sum(1 for kf in seq.keyframes if kf.ops.tint is not None)
+        if tint_count:
+            out.write(
+                f"  - tint: set on {tint_count} of {kf_count} keyframes — "
+                f"DROPPED at emit (depends on temperature calibration)\n"
+            )
+            any_warning = True
+        temp_count = sum(1 for kf in seq.keyframes if kf.ops.temperature_k is not None)
+        if temp_count:
+            out.write(
+                f"  - temperature_k: set on {temp_count} of {kf_count} keyframes — "
+                f"currently NOT emitted (calibration item; darktable's "
+                f"as-shot WB will be used instead)\n"
+            )
+            any_warning = True
+        if not any_warning:
+            out.write(
+                "  (none. All parsed develop ops on the keyframes have a path\n"
+                "   to the darktable XMP. Today that means exposure-only.)\n"
+            )
+
+    out.write(
+        "\nWhat WILL reach the rendered output:\n"
+        "  - Per-frame exposure_ev (linear + smooth interp + Holy Grail "
+        "ramp delta + deflicker delta).\n"
+        "  - darktable's default treatment for everything else "
+        "(as-shot WB, no tone curve, no contrast / shadow / highlight, etc.).\n"
+    )
+    return 0
 
 
 def _cmd_render(args: argparse.Namespace) -> int:

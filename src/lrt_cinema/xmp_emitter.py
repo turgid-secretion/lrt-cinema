@@ -83,10 +83,11 @@ def _encode_temperature_params(kelvin: int, tint: int) -> str:
     """Encode darktable temperature module params.
 
     Layout (modversion 3): four float channel multipliers (R, G1, B, G2).
-    A full kelvin→multipliers conversion needs the camera's input matrix.
-    For scaffold purposes we emit neutral multipliers and disable the
-    module if no temperature is set; calibrated kelvin → multiplier
-    conversion is a week-5+ task that needs the camera's DCP profile.
+    A full kelvin→multipliers conversion needs the camera's input
+    matrix from a DCP profile. Until that calibration ships (see
+    SCOPE.md / src/lrt_cinema/presets/CALIBRATION.md) we do not emit
+    the temperature module at all — see `emit_darktable_xmp` — so this
+    helper is kept only for the calibrated path.
     """
     payload = struct.pack("<ffff", 1.0, 1.0, 1.0, 1.0)
     return base64.b64encode(payload).decode("ascii")
@@ -133,24 +134,22 @@ def emit_darktable_xmp(ops: DevelopOps, output_path: Path) -> None:
     history = ET.SubElement(desc, f"{{{DT_NS}}}history")
     seq = ET.SubElement(history, f"{{{RDF_NS}}}Seq")
 
-    num = 0
-
     _make_history_entry(
-        seq, num=num, operation="exposure", enabled=True,
+        seq, num=0, operation="exposure", enabled=True,
         modversion=EXPOSURE_MODVERSION,
         params_b64=_encode_exposure_params(ops.exposure_ev),
     )
-    num += 1
 
-    if ops.temperature_k is not None:
-        _make_history_entry(
-            seq, num=num, operation="temperature", enabled=True,
-            modversion=TEMPERATURE_MODVERSION,
-            params_b64=_encode_temperature_params(
-                ops.temperature_k, ops.tint or 0,
-            ),
-        )
-        num += 1
+    # The temperature module is intentionally NOT emitted while the
+    # kelvin → channel-multipliers calibration is outstanding (see
+    # SCOPE.md / src/lrt_cinema/presets/CALIBRATION.md). Emitting
+    # enabled neutral 1.0 multipliers — the only thing we could write
+    # without a DCP profile — overrides darktable's correct as-shot
+    # AWB and produces a green-cast render. Skipping the module lets
+    # darktable's "white balance from camera" default apply, which is
+    # the right behavior for a user setting exposure-only keyframes.
+    # The parsed `temperature_k` value is therefore deliberately
+    # dropped at emit; `lrt-cinema inspect` surfaces this as a warning.
 
     tree = ET.ElementTree(root)
     ET.indent(tree, space=" ", level=0)
