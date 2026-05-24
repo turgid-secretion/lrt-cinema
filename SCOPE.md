@@ -84,7 +84,14 @@ The parser reads the full Camera Raw Settings field set the LRTimelapse XMP carr
 
 Dropped fields tagged "TBR" emit nothing today; render-time stderr prints a one-line `warning: dropped at emit` when any keyframe carries non-default-non-LR-default intent on those fields. LR defaults like Sharpness=25 and identity ToneCurvePV2012 [0,0]→[1,1] are correctly excluded — they fire on every XMP regardless of user touch and would otherwise produce a permanent false positive on every neutral keyframe.
 
-DCP path: `--dcp` and `--no-auto-dcp` flags control the optional DCP-driven emission. When neither is supplied AND auto-detect is enabled (default), the renderer probes the first source RAW's EXIF Make/Model (TIFF IFD0 reader covers NEF/DNG/ARW/RW2/RAF/ORF/FFF) and looks up the matching DCP under the standard Adobe install paths in this preference order: `Camera/<label>/<label> Camera Standard.dcp` → `Camera/<label>/<label> Adobe Standard.dcp` → `Adobe Standard/<label> Adobe Standard.dcp`. Canon CR3 (ISO BMFF) and other non-TIFF RAW formats fall through to the no-DCP path; the user can still pass `--dcp <path>` explicitly.
+DCP path: `--dcp` and `--no-auto-dcp` flags control the optional DCP-driven emission. `--dcp` accepts either Adobe `.dcp` files or lrt-cinema's project-defined `.npz` extracted-profile format. When neither is supplied AND auto-detect is enabled (default), the renderer probes the first source RAW's EXIF Make/Model (TIFF IFD0 reader covers NEF/DNG/ARW/RW2/RAF/ORF/FFF) and searches in this preference order:
+
+1. `$LRT_CINEMA_PROFILES` env var (highest priority — typically points at a cloned sister `lrt-cinema-profiles` data repo)
+2. `~/.config/lrt-cinema/profiles/` (or `%APPDATA%/lrt-cinema/profiles/` on Windows; honors `$XDG_CONFIG_HOME`) — populated by `tools/extract_dcp_library.py` against the user's Adobe DNG Converter install
+3. Adobe DNG Converter install paths (`/Library/Application Support/Adobe/CameraRaw/CameraProfiles/` on macOS; `%PROGRAMDATA%/Adobe/CameraRaw/CameraProfiles/` on Windows; LR Classic bundle as secondary root on macOS) — fallback for users still relying on Adobe at runtime
+4. None → no-DCP path with a clear actionable error message
+
+`.npz` is the project's lossless serialization of the DCP fields the renderer consumes (color matrices, baseline exposure, profile tone curve, HSV cubes). Adobe DCP `.dcp` files are NOT redistributed in-repo per `docs/research/KELVIN_MULTIPLIERS_RESEARCH.md`. Users wanting Adobe-free pan-camera coverage either (a) run `tools/extract_dcp_library.py` once against an Adobe DNG Converter install, populating `~/.config/lrt-cinema/profiles/`, or (b) clone the sister `lrt-cinema-profiles` data repo and set `LRT_CINEMA_PROFILES` to its path. Canon CR3 (ISO BMFF) and other non-TIFF RAW formats fall through to the no-DCP path regardless; the user can still pass `--dcp <path>` explicitly.
 
 ## Frame ordering
 

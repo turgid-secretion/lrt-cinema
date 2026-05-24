@@ -955,9 +955,247 @@ def auto_detect_dcp(raw_path: Path) -> Path | None:
 
     Returns None when the RAW's Make/Model cannot be read (non-TIFF
     format, truncated file) or when no matching DCP is installed.
+
+    Note: callers preferring format-agnostic profile loading (which also
+    picks up lrt-cinema's own .npz extracted-profile format from user
+    config / env-var roots, not just Adobe .dcp files) should use
+    `auto_detect_profile()` instead.
     """
     info = read_raw_make_model(raw_path)
     if info is None:
         return None
     make, model = info
     return find_dcp_for_camera(make, model)
+
+
+# ---------------------------------------------------------------------------
+# Extracted-profile format (.npz) — Adobe-free in-repo path
+# ---------------------------------------------------------------------------
+#
+# Project-defined lossless serialization of the DCP fields the renderer
+# actually consumes (matrices, illuminants, baseline exposure, tone curve,
+# HSV cubes). Storing extracted *data* — not Adobe's .dcp file format — is
+# the project's stance on Adobe DCP redistribution per
+# docs/research/KELVIN_MULTIPLIERS_RESEARCH.md.
+#
+# Format: numpy `.npz` (zip of zlib-compressed `.npy` arrays) with the
+# field names listed in `_PROFILE_NPZ_FIELDS`. All numeric arrays are
+# float32; calibration illuminant codes are int32; profile_name is a
+# 0-d unicode string array. Optional fields are simply absent from the
+# archive when the source DCP doesn't carry them.
+#
+# Version tag (`format_version`) is bumped only on backwards-incompatible
+# changes — additive fields land at the next minor without a bump.
+
+_PROFILE_FORMAT_VERSION = 1
+
+
+def save_profile(profile: DCPProfile, path: Path) -> None:
+    """Serialize a DCPProfile to lrt-cinema's `.npz` extracted format.
+
+    Lossless w.r.t. the fields lrt-cinema's renderer consumes. Adobe DCPs
+    carry additional metadata (UniqueCameraModel, ProfileCopyright, etc.)
+    that the renderer doesn't use; those are NOT preserved by the
+    extractor — re-extract from the source .dcp if more fields are ever
+    needed.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    arrays: dict[str, np.ndarray] = {
+        "format_version": np.int32(_PROFILE_FORMAT_VERSION),
+        "profile_name": np.array(profile.profile_name, dtype="U"),
+        "calibration_illuminant_1": np.int32(profile.calibration_illuminant_1),
+        "calibration_illuminant_2": np.int32(profile.calibration_illuminant_2),
+        "kelvin_1": np.float32(profile.kelvin_1),
+        "kelvin_2": np.float32(profile.kelvin_2),
+        "baseline_exposure": np.float32(profile.baseline_exposure),
+        "baseline_exposure_offset": np.float32(profile.baseline_exposure_offset),
+    }
+    if profile.color_matrix_1 is not None:
+        arrays["color_matrix_1"] = profile.color_matrix_1.astype(np.float32)
+    if profile.color_matrix_2 is not None:
+        arrays["color_matrix_2"] = profile.color_matrix_2.astype(np.float32)
+    if profile.forward_matrix_1 is not None:
+        arrays["forward_matrix_1"] = profile.forward_matrix_1.astype(np.float32)
+    if profile.forward_matrix_2 is not None:
+        arrays["forward_matrix_2"] = profile.forward_matrix_2.astype(np.float32)
+    if profile.camera_calibration_1 is not None:
+        arrays["camera_calibration_1"] = profile.camera_calibration_1.astype(np.float32)
+    if profile.camera_calibration_2 is not None:
+        arrays["camera_calibration_2"] = profile.camera_calibration_2.astype(np.float32)
+    if profile.profile_tone_curve is not None:
+        arrays["profile_tone_curve"] = profile.profile_tone_curve.astype(np.float32)
+    if profile.hue_sat_map is not None:
+        hsm = profile.hue_sat_map
+        arrays["hsm_dims"] = np.array(
+            [hsm.hue_divisions, hsm.sat_divisions, hsm.val_divisions], dtype=np.int32,
+        )
+        arrays["hsm_srgb_gamma"] = np.int32(1 if hsm.srgb_gamma else 0)
+        arrays["hsm_data_1"] = hsm.data_1.astype(np.float32)
+        if hsm.data_2 is not None:
+            arrays["hsm_data_2"] = hsm.data_2.astype(np.float32)
+    if profile.look_table is not None:
+        lt = profile.look_table
+        arrays["look_dims"] = np.array(
+            [lt.hue_divisions, lt.sat_divisions, lt.val_divisions], dtype=np.int32,
+        )
+        arrays["look_srgb_gamma"] = np.int32(1 if lt.srgb_gamma else 0)
+        arrays["look_data"] = lt.data_1.astype(np.float32)
+    np.savez_compressed(path, **arrays)
+
+
+def load_profile(path: Path) -> DCPProfile:
+    """Deserialize a DCPProfile from lrt-cinema's `.npz` extracted format.
+
+    Raises ValueError on missing required fields (ColorMatrix1, profile name)
+    or on a format-version we don't recognize. Optional fields default
+    consistently with `parse_dcp`'s behavior on a DCP that simply omits them.
+    """
+    path = Path(path)
+    with np.load(path, allow_pickle=False) as data:
+        version = int(data["format_version"])
+        if version != _PROFILE_FORMAT_VERSION:
+            raise ValueError(
+                f"{path}: unsupported profile format_version {version} "
+                f"(expected {_PROFILE_FORMAT_VERSION})"
+            )
+        if "color_matrix_1" not in data:
+            raise ValueError(f"{path}: missing color_matrix_1 — not a valid extracted profile")
+
+        def _opt(name: str) -> np.ndarray | None:
+            return data[name].astype(np.float32) if name in data else None
+
+        prof = DCPProfile(
+            profile_name=str(data["profile_name"]),
+            color_matrix_1=data["color_matrix_1"].astype(np.float32),
+            color_matrix_2=_opt("color_matrix_2"),
+            forward_matrix_1=_opt("forward_matrix_1"),
+            forward_matrix_2=_opt("forward_matrix_2"),
+            camera_calibration_1=_opt("camera_calibration_1"),
+            camera_calibration_2=_opt("camera_calibration_2"),
+            calibration_illuminant_1=int(data["calibration_illuminant_1"]),
+            calibration_illuminant_2=int(data["calibration_illuminant_2"]),
+            baseline_exposure=float(data["baseline_exposure"]),
+            baseline_exposure_offset=float(data["baseline_exposure_offset"]),
+            profile_tone_curve=_opt("profile_tone_curve"),
+            kelvin_1=float(data["kelvin_1"]),
+            kelvin_2=float(data["kelvin_2"]),
+        )
+        if "hsm_data_1" in data:
+            hsm_dims = data["hsm_dims"]
+            prof.hue_sat_map = HsvCube(
+                hue_divisions=int(hsm_dims[0]),
+                sat_divisions=int(hsm_dims[1]),
+                val_divisions=int(hsm_dims[2]),
+                srgb_gamma=bool(int(data["hsm_srgb_gamma"])),
+                data_1=data["hsm_data_1"].astype(np.float32),
+                data_2=(
+                    data["hsm_data_2"].astype(np.float32)
+                    if "hsm_data_2" in data else None
+                ),
+            )
+        if "look_data" in data:
+            look_dims = data["look_dims"]
+            prof.look_table = HsvCube(
+                hue_divisions=int(look_dims[0]),
+                sat_divisions=int(look_dims[1]),
+                val_divisions=int(look_dims[2]),
+                srgb_gamma=bool(int(data["look_srgb_gamma"])),
+                data_1=data["look_data"].astype(np.float32),
+            )
+    return prof
+
+
+def _extracted_profile_search_roots() -> list[Path]:
+    """Where to look for `.npz` extracted-profile files, in lookup order.
+
+    1. `$LRT_CINEMA_PROFILES` env var — explicit user override; takes any
+       absolute directory (typically points at a cloned sister
+       `lrt-cinema-profiles` repo or a custom local cache).
+    2. `~/.config/lrt-cinema/profiles/` — XDG-style per-user config dir,
+       written by `tools/extract_dcp_library.py` when the user runs the
+       one-shot extraction against their Adobe DCP install.
+
+    Linux / macOS use the XDG path verbatim; Windows uses the
+    `%APPDATA%/lrt-cinema/profiles` equivalent. Honors the
+    `XDG_CONFIG_HOME` env var on platforms where it applies.
+    """
+    import os
+    roots: list[Path] = []
+    env = os.environ.get("LRT_CINEMA_PROFILES")
+    if env:
+        p = Path(env)
+        if p.is_dir():
+            roots.append(p)
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            roots.append(Path(appdata) / "lrt-cinema" / "profiles")
+    else:
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        config_home = Path(xdg) if xdg else (Path.home() / ".config")
+        roots.append(config_home / "lrt-cinema" / "profiles")
+    return [r for r in roots if r.is_dir()]
+
+
+def find_extracted_profile_for_camera(
+    make: str,
+    model: str,
+    extra_roots: list[Path] | None = None,
+) -> Path | None:
+    """Locate an `.npz` extracted profile for (make, model).
+
+    Filename convention mirrors Adobe's DCP naming:
+    `<label> Camera Standard.npz` (preferred) or `<label> Adobe Standard.npz`
+    (fallback), where `<label>` is the Adobe-style camera label
+    (e.g. "Nikon D750"). Returns the first match across the search roots
+    in `_extracted_profile_search_roots()` plus any `extra_roots` passed
+    in (used by tests to point at fixture dirs).
+    """
+    label = _adobe_camera_label(make, model)
+    roots = _extracted_profile_search_roots()
+    if extra_roots:
+        roots.extend(r for r in extra_roots if r.is_dir())
+    for root in roots:
+        for candidate in (
+            root / f"{label} Camera Standard.npz",
+            root / f"{label} Adobe Standard.npz",
+        ):
+            if candidate.is_file():
+                return candidate
+    return None
+
+
+def auto_detect_profile(
+    raw_path: Path,
+    extra_extracted_roots: list[Path] | None = None,
+) -> tuple[DCPProfile, Path] | None:
+    """End-to-end profile lookup: try extracted `.npz` first, then Adobe `.dcp`.
+
+    Probes the RAW's EXIF Make/Model, then:
+      1. Searches the extracted-profile roots (env var, user config,
+         optional `extra_extracted_roots`). When a match is found, loads
+         and returns the DCPProfile directly — no Adobe install required.
+      2. Falls back to the Adobe DCP install paths (matches dt's libraw
+         /lr's bundled-profile convention on macOS / Windows). Parses the
+         `.dcp` and returns the DCPProfile.
+      3. Returns None when neither path turns up a match (caller logs a
+         clear "install profile data or pass --dcp" message).
+
+    Returns `(profile, source_path)` so callers can log where the profile
+    came from. Both lookup arms share the same DCPProfile shape — the
+    caller doesn't need to know which arm fired.
+    """
+    info = read_raw_make_model(raw_path)
+    if info is None:
+        return None
+    make, model = info
+    extracted_path = find_extracted_profile_for_camera(
+        make, model, extra_roots=extra_extracted_roots,
+    )
+    if extracted_path is not None:
+        return load_profile(extracted_path), extracted_path
+    dcp_path = find_dcp_for_camera(make, model)
+    if dcp_path is not None:
+        return parse_dcp(dcp_path), dcp_path
+    return None

@@ -22,18 +22,23 @@ import pytest
 
 from lrt_cinema.dcp import (
     DCPProfile,
+    HsvCube,
     _adobe_camera_label,
     _build_hsv_cube,
     adobe_make_for_camera,
     auto_detect_dcp,
+    auto_detect_profile,
     find_dcp_for_camera,
+    find_extracted_profile_for_camera,
     illuminant_code_to_kelvin,
     interpolate_color_matrix,
     interpolate_hsv_cube,
     kelvin_tint_to_dt_multipliers,
     kelvin_tint_to_xy,
+    load_profile,
     parse_dcp,
     read_raw_make_model,
+    save_profile,
     uv_to_kelvin,
     xy_to_camera_neutral,
     xy_to_uv,
@@ -591,3 +596,203 @@ def test_real_adobe_dcp_multipliers_match_lr_expected_range():
     assert 1.5 < r < 2.5, f"R multiplier {r} outside expected Nikon range"
     assert g == pytest.approx(1.0)
     assert 1.0 < b < 1.6, f"B multiplier {b} outside expected Nikon range"
+
+
+# ---------------------------------------------------------------------------
+# Extracted-profile .npz format — save/load round-trip + auto-detect
+# ---------------------------------------------------------------------------
+
+_BUNDLED_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "dcp_data"
+_BUNDLED_D750 = _BUNDLED_FIXTURE_DIR / "Nikon D750 Camera Standard.npz"
+
+
+def _build_minimal_profile() -> DCPProfile:
+    """A minimal DCPProfile with all the optional fields populated.
+
+    Used to round-trip the save/load path without depending on a real DCP.
+    """
+    return DCPProfile(
+        profile_name="Test Camera Standard",
+        color_matrix_1=np.array([
+            [1.0, -0.4,  0.0],
+            [-0.5, 1.3,  0.3],
+            [-0.1,  0.2, 0.8],
+        ]),
+        color_matrix_2=np.array([
+            [0.9, -0.3, -0.1],
+            [-0.5, 1.3,  0.2],
+            [-0.1,  0.2, 0.7],
+        ]),
+        forward_matrix_1=np.eye(3) * 0.5,
+        forward_matrix_2=np.eye(3) * 0.6,
+        calibration_illuminant_1=17,
+        calibration_illuminant_2=21,
+        baseline_exposure=-0.5,
+        baseline_exposure_offset=0.25,
+        profile_tone_curve=np.stack(
+            [np.linspace(0, 1, 32), np.linspace(0, 1, 32) ** 0.5], axis=1,
+        ),
+        kelvin_1=2856.0,
+        kelvin_2=6504.0,
+    )
+
+
+def test_save_load_profile_round_trip_minimal(tmp_path):
+    profile = _build_minimal_profile()
+    out = tmp_path / "min.npz"
+    save_profile(profile, out)
+    loaded = load_profile(out)
+    assert loaded.profile_name == profile.profile_name
+    np.testing.assert_allclose(loaded.color_matrix_1, profile.color_matrix_1)
+    np.testing.assert_allclose(loaded.color_matrix_2, profile.color_matrix_2)
+    np.testing.assert_allclose(loaded.forward_matrix_1, profile.forward_matrix_1)
+    np.testing.assert_allclose(loaded.forward_matrix_2, profile.forward_matrix_2)
+    assert loaded.calibration_illuminant_1 == 17
+    assert loaded.calibration_illuminant_2 == 21
+    assert loaded.baseline_exposure == pytest.approx(-0.5)
+    assert loaded.baseline_exposure_offset == pytest.approx(0.25)
+    np.testing.assert_allclose(loaded.profile_tone_curve, profile.profile_tone_curve)
+    assert loaded.kelvin_1 == pytest.approx(2856.0)
+    assert loaded.kelvin_2 == pytest.approx(6504.0)
+    # Optional fields default to None when not saved.
+    assert loaded.hue_sat_map is None
+    assert loaded.look_table is None
+
+
+def test_save_load_profile_round_trip_with_cubes(tmp_path):
+    profile = _build_minimal_profile()
+    profile.hue_sat_map = HsvCube(
+        hue_divisions=4, sat_divisions=3, val_divisions=2,
+        srgb_gamma=True,
+        data_1=np.arange(72, dtype=np.float32).reshape(2, 4, 3, 3),
+        data_2=np.arange(72, 144, dtype=np.float32).reshape(2, 4, 3, 3),
+    )
+    profile.look_table = HsvCube(
+        hue_divisions=6, sat_divisions=4, val_divisions=2,
+        srgb_gamma=False,
+        data_1=np.arange(144, dtype=np.float32).reshape(2, 6, 4, 3),
+    )
+    out = tmp_path / "cubes.npz"
+    save_profile(profile, out)
+    loaded = load_profile(out)
+    assert loaded.hue_sat_map is not None
+    assert loaded.hue_sat_map.hue_divisions == 4
+    assert loaded.hue_sat_map.sat_divisions == 3
+    assert loaded.hue_sat_map.val_divisions == 2
+    assert loaded.hue_sat_map.srgb_gamma is True
+    np.testing.assert_array_equal(loaded.hue_sat_map.data_1, profile.hue_sat_map.data_1)
+    np.testing.assert_array_equal(loaded.hue_sat_map.data_2, profile.hue_sat_map.data_2)
+    assert loaded.look_table is not None
+    assert loaded.look_table.hue_divisions == 6
+    assert loaded.look_table.srgb_gamma is False
+    np.testing.assert_array_equal(loaded.look_table.data_1, profile.look_table.data_1)
+    assert loaded.look_table.data_2 is None
+
+
+def test_load_profile_rejects_unsupported_version(tmp_path):
+    out = tmp_path / "bad.npz"
+    np.savez_compressed(
+        out,
+        format_version=np.int32(99),
+        profile_name=np.array("X", dtype="U"),
+        color_matrix_1=np.eye(3, dtype=np.float32),
+        calibration_illuminant_1=np.int32(0),
+        calibration_illuminant_2=np.int32(0),
+        kelvin_1=np.float32(2856),
+        kelvin_2=np.float32(6504),
+        baseline_exposure=np.float32(0),
+        baseline_exposure_offset=np.float32(0),
+    )
+    with pytest.raises(ValueError, match="unsupported profile format_version"):
+        load_profile(out)
+
+
+def test_load_profile_rejects_missing_color_matrix(tmp_path):
+    out = tmp_path / "no_cm1.npz"
+    np.savez_compressed(
+        out,
+        format_version=np.int32(1),
+        profile_name=np.array("X", dtype="U"),
+        calibration_illuminant_1=np.int32(0),
+        calibration_illuminant_2=np.int32(0),
+        kelvin_1=np.float32(2856),
+        kelvin_2=np.float32(6504),
+        baseline_exposure=np.float32(0),
+        baseline_exposure_offset=np.float32(0),
+    )
+    with pytest.raises(ValueError, match="missing color_matrix_1"):
+        load_profile(out)
+
+
+def test_find_extracted_profile_for_camera_via_extra_roots(tmp_path):
+    profile = _build_minimal_profile()
+    save_profile(profile, tmp_path / "Acme X100 Camera Standard.npz")
+    found = find_extracted_profile_for_camera(
+        "Acme", "X100", extra_roots=[tmp_path],
+    )
+    assert found is not None
+    assert found.name == "Acme X100 Camera Standard.npz"
+    # Fallback Adobe-Standard naming also works.
+    save_profile(profile, tmp_path / "Acme Z200 Adobe Standard.npz")
+    found_adobe = find_extracted_profile_for_camera(
+        "Acme", "Z200", extra_roots=[tmp_path],
+    )
+    assert found_adobe is not None
+    assert found_adobe.name == "Acme Z200 Adobe Standard.npz"
+
+
+def test_find_extracted_profile_returns_none_on_miss(tmp_path):
+    assert find_extracted_profile_for_camera(
+        "Unknown", "Camera", extra_roots=[tmp_path],
+    ) is None
+
+
+def test_bundled_d750_fixture_loads():
+    # The repo ships one camera's extracted profile under tests/fixtures/
+    # so the test suite can exercise the end-to-end auto-detect path
+    # without requiring Adobe DNG Converter installed on the test machine.
+    assert _BUNDLED_D750.is_file(), (
+        f"Bundled D750 fixture not present at {_BUNDLED_D750}; "
+        f"re-generate via `python3 tools/extract_dcp.py ...`"
+    )
+    profile = load_profile(_BUNDLED_D750)
+    assert profile.profile_name == "Camera Standard"
+    assert profile.color_matrix_1 is not None
+    assert profile.look_table is not None
+    assert profile.look_table.hue_divisions == 90
+    assert profile.look_table.sat_divisions == 16
+    assert profile.look_table.val_divisions == 16
+
+
+def test_auto_detect_profile_prefers_bundled_npz_over_adobe_dcp(tmp_path):
+    """When both an extracted .npz and a system Adobe .dcp exist, .npz wins.
+
+    Setup: synthesize a TIFF-shaped NEF that reports the user's actual
+    D750 Make/Model, then point auto-detect at our bundled fixture via
+    extra_extracted_roots. The bundled .npz is what comes back.
+    """
+    nef = tmp_path / "fake.NEF"
+    nef.write_bytes(_build_synthetic_nef("NIKON CORPORATION", "NIKON D750"))
+    result = auto_detect_profile(
+        nef, extra_extracted_roots=[_BUNDLED_FIXTURE_DIR],
+    )
+    assert result is not None
+    profile, source = result
+    assert source == _BUNDLED_D750
+    assert profile.profile_name == "Camera Standard"
+
+
+def test_auto_detect_profile_returns_none_when_nothing_found(tmp_path):
+    nef = tmp_path / "fake.NEF"
+    nef.write_bytes(_build_synthetic_nef("ACMECAM", "Z9999"))
+    # No bundled profile for ACMECAM; no system Adobe DCP either.
+    # extra_extracted_roots points at tmp_path which has no .npz.
+    result = auto_detect_profile(nef, extra_extracted_roots=[tmp_path])
+    assert result is None
+
+
+def test_auto_detect_profile_skips_non_tiff_raw(tmp_path):
+    cr3 = tmp_path / "fake.CR3"
+    cr3.write_bytes(b"\x00\x00\x00\x18ftypcrx ")  # ISO BMFF (Canon CR3)
+    result = auto_detect_profile(cr3, extra_extracted_roots=[_BUNDLED_FIXTURE_DIR])
+    assert result is None

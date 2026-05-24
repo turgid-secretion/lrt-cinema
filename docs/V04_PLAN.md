@@ -14,7 +14,8 @@ declined to map for 12 years).
 
 | Item | dt module | Source of mapping |
 |---|---|---|
-| **DCP auto-detect** from RAW EXIF Make/Model | n/a (CLI plumbing) | Adobe DNG Converter install-path convention (Camera/<label>/ → Adobe Standard/) |
+| **DCP auto-detect** from RAW EXIF Make/Model | n/a (CLI plumbing) | env-var `LRT_CINEMA_PROFILES` → user-config `~/.config/lrt-cinema/profiles/` → Adobe DNG Converter install-path (fallback only) |
+| **`.npz` extracted-profile format** + `save_profile`/`load_profile` + `tools/extract_dcp.py` + `tools/extract_dcp_library.py` | n/a (parser/tools) | Project-defined; lossless serialization of the DCP fields the renderer consumes; ~70% of source `.dcp` byte size after zlib compression |
 | Exposure2012 (already) | `exposure.exposure` | 1:1 |
 | Blacks2012 (NEW) | `exposure.black` | Verbatim from dt's `lr2dt_blacks_table` (src/develop/lightroom.c#L279-L285 SHA 9402c65275) |
 | Temperature_k + Tint (already) | `temperature` | DCP color matrices + Robertson kelvin↔xy + DNG SDK iterative neutral solver |
@@ -34,6 +35,18 @@ declined to map for 12 years).
   dependency. Out of scope for v0.4; deferred to v0.4.x once the
   dependency-cost decision is made (the only DCP-format we definitively
   handle today is DNG, which embeds AsShotNeutral as tag 50728).
+- **Pan-camera bundled profile data in the main repo.** Per the
+  size/coverage/in-repo trilemma (full LookTable cubes are 270 KB per
+  camera × 4304 Adobe-supported cameras = 1.2 GB), the main repo
+  ships only the parser + extractor + one test fixture
+  (`tests/fixtures/dcp_data/Nikon D750 Camera Standard.npz`). Users
+  wanting bundled pan-camera coverage either run
+  `tools/extract_dcp_library.py` against their Adobe install or
+  clone a sister `lrt-cinema-profiles` data repo and set
+  `$LRT_CINEMA_PROFILES`. The sister repo is a v0.4.x deliverable.
+- **Algorithmic alternative pipeline (libraw matrices + colour-science
+  chromatic adaptation, no DCP dependency).** Substantial new engine;
+  separate PR after the DCP-localization work lands.
 - **PV2012 Contrast2012 / Highlights2012 / Shadows2012 / Whites2012 to
   per-tone modules.** dt's own LR-import drops Contrast/Highlights/
   Shadows/Whites and has done so since 2013 — the underlying PV2012
