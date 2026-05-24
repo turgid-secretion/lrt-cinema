@@ -26,6 +26,10 @@ classifiers = [
 ]
 dependencies = [
     "defusedxml>=0.7",
+    # NumPy is used by the DCP color-matrix math in src/lrt_cinema/dcp.py;
+    # the rest of the runtime is numpy-free. Users running darktable
+    # already have it via its image-processing stack.
+    "numpy>=1.24",
 ]
 
 [project.optional-dependencies]
