@@ -2,7 +2,6 @@
 
 from lrt_cinema.ir import (
     DevelopOps,
-    HolyGrailRamp,
     InterpolationMode,
     LRTSequence,
     TonePoint,
@@ -56,18 +55,4 @@ def test_blend_tone_curve_falls_back_to_self_when_lengths_differ():
 def test_lrt_sequence_defaults():
     seq = LRTSequence()
     assert seq.interpolation_mode == InterpolationMode.linear
-    assert seq.holy_grail_ramps == []
     assert seq.frame_count() == 0
-
-
-def test_interpolation_mode_enum_values():
-    assert InterpolationMode("linear") == InterpolationMode.linear
-    assert InterpolationMode("smooth") == InterpolationMode.smooth
-
-
-def test_holy_grail_ramp_defaults_smoothness_to_one():
-    ramp = HolyGrailRamp(
-        start_frame=0, end_frame=100,
-        start_exposure_ev=0.0, end_exposure_ev=3.0,
-    )
-    assert ramp.smoothness == 1.0

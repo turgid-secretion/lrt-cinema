@@ -145,72 +145,6 @@ def apply_lrt_mask_offsets(
     return per_frame_ops
 
 
-def apply_holy_grail_ramps(
-    per_frame_ops: list[DevelopOps], seq: LRTSequence,
-) -> list[DevelopOps]:
-    """Overlay LRT Holy Grail exposure-ramp deltas on per-frame ops in place.
-
-    Each ramp computes a per-frame EV delta over its window using a
-    blended smoothstep:
-
-        s(t) = t * t * (3 - 2t)
-        delta_t = (1 - smoothness) * t + smoothness * s(t)
-        ev_at_frame = start_ev + (end_ev - start_ev) * delta_t
-
-    The frame window is `[start_frame, end_frame]` inclusive. When
-    multiple ramps cover the same frame, the LAST ramp in declaration
-    order wins (it overwrites the prior ramp's delta rather than
-    summing). This makes joined segments behave correctly: the typical
-    LRT pattern of ramp A ending at frame N and ramp B starting at
-    frame N means both define the same EV at N, so the order is moot;
-    if they disagree (true overlap, likely user error) the later one
-    wins deterministically.
-
-    Once each frame's ramp delta is resolved, it is added on top of
-    the existing `exposure_ev` (same contract as `apply_deflicker`),
-    not overwritten.
-
-    Raises ValueError if any ramp has `end_frame <= start_frame` or
-    `smoothness` outside [0.0, 1.0].
-
-    Mutates `per_frame_ops` in place and returns it.
-    """
-    if not seq.holy_grail_ramps:
-        return per_frame_ops
-
-    n = len(per_frame_ops)
-    ramp_delta: dict[int, float] = {}
-
-    for ramp in seq.holy_grail_ramps:
-        if ramp.end_frame <= ramp.start_frame:
-            raise ValueError(
-                f"HolyGrailRamp end_frame ({ramp.end_frame}) must be > "
-                f"start_frame ({ramp.start_frame})"
-            )
-        if not 0.0 <= ramp.smoothness <= 1.0:
-            raise ValueError(
-                f"HolyGrailRamp smoothness ({ramp.smoothness}) must be in [0.0, 1.0]"
-            )
-
-        span = ramp.end_frame - ramp.start_frame
-        lo = max(0, ramp.start_frame)
-        hi = min(n - 1, ramp.end_frame)
-        for i in range(lo, hi + 1):
-            t = (i - ramp.start_frame) / span
-            s = t * t * (3.0 - 2.0 * t)
-            delta_t = (1.0 - ramp.smoothness) * t + ramp.smoothness * s
-            ramp_delta[i] = (
-                ramp.start_exposure_ev
-                + (ramp.end_exposure_ev - ramp.start_exposure_ev) * delta_t
-            )
-
-    for i, delta in ramp_delta.items():
-        per_frame_ops[i] = replace(
-            per_frame_ops[i], exposure_ev=per_frame_ops[i].exposure_ev + delta,
-        )
-    return per_frame_ops
-
-
 def _catmull_rom_scalar(p0: float, p1: float, p2: float, p3: float, t: float) -> float:
     """Uniform Catmull-Rom interpolation between p1 and p2 with neighbors p0, p3.
 
@@ -348,7 +282,6 @@ def _smooth_blend(
 
 __all__ = [
     "apply_deflicker",
-    "apply_holy_grail_ramps",
     "apply_lrt_mask_offsets",
     "interpolate",
     "materialize_all_frames",
