@@ -49,7 +49,7 @@ XMPMM_NS = "http://ns.adobe.com/xap/1.0/mm/"
 
 DT_XMP_VERSION = "5"
 """dt sidecar xmp_version. dt master writes "5" (src/common/exif.cc#L81 at SHA
-635c0c55b6...); accepts 0..5, rejects >=6 (see docs/reference/darktable/
+9402c65275...); accepts 0..5, rejects >=6 (see docs/reference/darktable/
 XMP_FORMAT.md). Our prior value "1" worked because dt's legacy reader accepts
 lower versions, but is forward-incompatible with future bumps."""
 
@@ -104,7 +104,7 @@ def _encode_exposure_params(exposure_ev: float) -> str:
     """Encode darktable exposure module params (modversion 7) as HEX ASCII.
 
     Struct layout from src/iop/exposure.c#L66-75 at dt master SHA
-    635c0c55b6... (DT_MODULE_INTROSPECTION(7, dt_iop_exposure_params_t)):
+    9402c65275... (DT_MODULE_INTROSPECTION(7, dt_iop_exposure_params_t)):
 
         dt_iop_exposure_mode_t mode      // enum = int32, default MANUAL=0
         float black                      // -1.0..1.0, default 0.0

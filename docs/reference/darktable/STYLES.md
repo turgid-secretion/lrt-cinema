@@ -1,14 +1,14 @@
 # Darktable `.style` files
 
-Authoritative source: [`src/common/styles.c`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/common/styles.c)
-at commit `635c0c55b64331481dffe30f937ba3fe72f83857`. Citations to
+Authoritative source: [`src/common/styles.c`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/common/styles.c)
+at commit `9402c65275bebebc4649c6dc91d3798d4bd63a0f`. Citations to
 that SHA throughout.
 
 ## File format
 
 A `.style` file is XML parsed by GLib's `g_markup` SAX parser. The
 parser tags handled, from
-[`styles.c#L1433-L1544`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/common/styles.c#L1433-L1544):
+[`styles.c#L1433-L1544`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/common/styles.c#L1433-L1544):
 
 Top-level element children (any names, recognized by the text handler):
 
@@ -46,7 +46,7 @@ if the running dt has a migration covering the gap.
 ## How dt loads styles
 
 `dt_styles_import_from_file()` at
-[`styles.c#L1619-L1680`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/common/styles.c#L1619-L1680)
+[`styles.c#L1619-L1680`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/common/styles.c#L1619-L1680)
 streams the file through the SAX parser in 8 KiB chunks, fills a
 `StyleData` struct, then `dt_style_save()` inserts:
 
@@ -55,7 +55,7 @@ streams the file through the SAX parser in 8 KiB chunks, fills a
 
 When the style is applied to an image (CLI: `--style NAME
 --style-overwrite`), `dt_styles_apply_to_image()` at
-[`styles.c#L1003`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/common/styles.c#L1003)
+[`styles.c#L1003`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/common/styles.c#L1003)
 copies each style item into `main.history` for that image, then the
 darkroom-reload path runs the per-module `legacy_params()` migration
 on each blob.
@@ -85,9 +85,9 @@ For lrt-cinema's per-frame rendering:
   computation of `colorout` / `sigmoid` / etc. blobs.
 
 dt-cli's argv flag handling for `--style` / `--style-overwrite` is
-at [`src/cli/main.c#L334-L342`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/cli/main.c#L334-L342)
+at [`src/cli/main.c#L334-L342`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/cli/main.c#L334-L342)
 and the runtime application at
-[`src/cli/main.c#L820-L832`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/cli/main.c#L820-L832).
+[`src/cli/main.c#L820-L832`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/cli/main.c#L820-L832).
 The CLI's `style[]` field is limited to `DT_MAX_STYLE_NAME_LENGTH`
 (128 chars including terminator).
 

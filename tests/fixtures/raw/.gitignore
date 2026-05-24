@@ -1,0 +1,6 @@
+# User-supplied RAW fixtures for tests/test_dt_integration.py.
+# Symlinks + RAW files stay out of the repo (copyright); only this
+# .gitignore and README.md are tracked.
+*
+!.gitignore
+!README.md

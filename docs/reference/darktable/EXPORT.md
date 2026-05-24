@@ -2,11 +2,11 @@
 
 Authoritative sources: `src/cli/main.c`, `src/imageio/format/tiff.c`,
 `src/imageio/format/exr.cc`, `data/darktableconfig.xml.in`. All at
-commit `635c0c55b64331481dffe30f937ba3fe72f83857`.
+commit `9402c65275bebebc4649c6dc91d3798d4bd63a0f`.
 
 ## `darktable-cli` invocation shape
 
-From [`src/cli/main.c#L74-L106`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/cli/main.c#L74-L106):
+From [`src/cli/main.c#L74-L106`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/cli/main.c#L74-L106):
 
 ```
 darktable-cli [IMAGE_FILE | IMAGE_FOLDER]
@@ -47,7 +47,7 @@ for the full set of keys.
 
 ## `--bpp` is unsupported
 
-Source: [`src/cli/main.c#L279-L290`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/cli/main.c#L279-L290):
+Source: [`src/cli/main.c#L279-L290`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/cli/main.c#L279-L290):
 
 ```c
 else if(!strcmp(arg[k], "--bpp") && argc > k + 1)
@@ -63,9 +63,9 @@ else if(!strcmp(arg[k], "--bpp") && argc > k + 1)
 The value is parsed into a local `bpp` variable, a notice is printed
 to stderr, and the variable is never propagated to the export
 pipeline. The source comments confirm: at
-[`src/cli/main.c#L21`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/cli/main.c#L21)
+[`src/cli/main.c#L21`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/cli/main.c#L21)
 `make --bpp work` is listed as a top-of-file TODO, and at
-[`src/cli/main.c#L841`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/cli/main.c#L841)
+[`src/cli/main.c#L841`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/cli/main.c#L841)
 the comment reads "`TODO: add a callback to set the bpp without
 going through the config`."
 
@@ -73,9 +73,9 @@ The actual bit-depth comes from the format plugin's conf entry,
 loaded at `get_params()` time:
 
 - TIFF: `dt_conf_get_int("plugins/imageio/format/tiff/bpp")` at
-  [`tiff.c#L743`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/imageio/format/tiff.c#L743)
+  [`tiff.c#L743`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/imageio/format/tiff.c#L743)
 - EXR: `dt_conf_get_int("plugins/imageio/format/exr/bpp")` at
-  [`exr.cc#L549`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/imageio/format/exr.cc#L549)
+  [`exr.cc#L549`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/imageio/format/exr.cc#L549)
 
 ## Bit-depth defaults
 
@@ -114,10 +114,10 @@ Explanation:
   (sigmoid / filmic prepend). With this off, dt processes only what
   the sidecar requests.
 - `--icc-type LIN_REC2020` is converted by
-  [`src/cli/main.c#L154`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/cli/main.c#L154)
+  [`src/cli/main.c#L154`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/cli/main.c#L154)
   to `DT_COLORSPACE_LIN_REC2020 = 4`, which is passed to
   `storage->store(...)` at
-  [`src/cli/main.c#L863`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/cli/main.c#L863).
+  [`src/cli/main.c#L863`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/cli/main.c#L863).
   That override propagates to the colorout module's params at export
   time, regardless of the sidecar's own colorout history entry.
 - `--core --conf ...` sets the TIFF format plugin's params before
@@ -127,7 +127,7 @@ Explanation:
   for LZW or `9` for ZIP if disk space matters.
 
 `--icc-type` valid values, from
-[`src/cli/main.c#L115-L144`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/cli/main.c#L115-L144):
+[`src/cli/main.c#L115-L144`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/cli/main.c#L115-L144):
 
 ```
 NONE, FILE, SRGB, ADOBERGB, LIN_REC709, LIN_REC2020, XYZ, LAB,
@@ -153,7 +153,7 @@ darktable-cli SOURCE.NEF SIDECAR.xmp OUTPUT.exr \
     --conf plugins/imageio/format/exr/compression=2
 ```
 
-Compression values for OpenEXR ([`exr.cc`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/imageio/format/exr.cc)
+Compression values for OpenEXR ([`exr.cc`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/imageio/format/exr.cc)
 defines them as enum; 2 is PIZ, the default cinema-friendly lossless
 codec).
 

@@ -1,13 +1,13 @@
 # Lightroom XMP import — what darktable actually understands
 
-Source: [`src/develop/lightroom.c`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/develop/lightroom.c)
-at commit `635c0c55b64331481dffe30f937ba3fe72f83857`. The file has
+Source: [`src/develop/lightroom.c`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/develop/lightroom.c)
+at commit `9402c65275bebebc4649c6dc91d3798d4bd63a0f`. The file has
 been in tree since 2013 (per the file header copyright); structural
 changes have been infrequent.
 
 dt routes a sidecar through `lightroom.c` when the XMP has
 **no** `xmlns:darktable=` namespace declaration; the dispatch is at
-[`src/common/exif.cc#L4071-L4074`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/common/exif.cc#L4071-L4074).
+[`src/common/exif.cc#L4071-L4074`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/common/exif.cc#L4071-L4074).
 For dt-authored sidecars this code never runs. For LRT-authored
 sidecars (which carry only the Adobe `crs:`/`xmp:`/`exif:` namespaces),
 this is the import path dt uses when an LRT-edited image is loaded
@@ -30,21 +30,21 @@ Extracted by `grep -oE '"[A-Z][a-zA-Z0-9]+2?0?1?2?"'` on
 
 **Exposure module (dt `exposure`):**
 - `Exposure2012` (mapped float-to-float)
-- `Blacks2012` (mapped via [`lr2dt_blacks_table`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/develop/lightroom.c#L279-L284):
+- `Blacks2012` (mapped via [`lr2dt_blacks_table`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/develop/lightroom.c#L279-L284):
   `{-100, 0.020}, {-50, 0.005}, {0, 0}, {50, -0.005}, {100, -0.010}` —
   this is the 5-point LUT lrt-cinema's calibration work referenced)
 
 **Tone curve (dt `tonecurve`):**
 - `ToneCurveName2012` (Linear / Medium Contrast / Strong Contrast / Custom)
 - `ToneCurvePV2012` (li-list of `(x, y)` integer pairs in 0..255;
-  parsed at [`lightroom.c#L965-L981`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/develop/lightroom.c#L965-L981))
+  parsed at [`lightroom.c#L965-L981`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/develop/lightroom.c#L965-L981))
 
 **Parametric tone curve:**
 - `ParametricShadows`, `ParametricDarks`, `ParametricLights`, `ParametricHighlights`
 - `ParametricShadowSplit`, `ParametricMidtoneSplit`, `ParametricHighlightSplit`
 
 **Vignette (dt `vignette`):**
-- `PostCropVignetteAmount` (via [`lr2dt_vignette_gain`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/develop/lightroom.c#L287-L292))
+- `PostCropVignetteAmount` (via [`lr2dt_vignette_gain`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/develop/lightroom.c#L287-L292))
 - `PostCropVignetteMidpoint`
 - `PostCropVignetteStyle` (1 = Highlight Priority -> saturation -0.300; else -0.200)
 - `PostCropVignetteFeather`, `PostCropVignetteRoundness`
@@ -56,12 +56,12 @@ Extracted by `grep -oE '"[A-Z][a-zA-Z0-9]+2?0?1?2?"'` on
 
 Mapping: lightness uses a `lfactor = 4/9` (4 out of 9 colorzones
 boxes), hue uses `hfactor = 3/9`, saturation uses 1:1. See
-[`lightroom.c#L671-L740`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/develop/lightroom.c#L671-L740).
+[`lightroom.c#L671-L740`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/develop/lightroom.c#L671-L740).
 
 **Split toning (dt `splittoning`):**
 - `SplitToningShadowHue`, `SplitToningShadowSaturation`
 - `SplitToningHighlightHue`, `SplitToningHighlightSaturation`
-- `SplitToningBalance` (via [`lr2dt_splittoning_balance`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/develop/lightroom.c#L315-L320))
+- `SplitToningBalance` (via [`lr2dt_splittoning_balance`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/develop/lightroom.c#L315-L320))
 
 **Grain (dt `grain`):**
 - `GrainAmount`, `GrainFrequency` (via piecewise tables)
@@ -148,22 +148,22 @@ diverge:
 
 ## Mapping execution
 
-`_lrop()` at [`lightroom.c#L486`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/develop/lightroom.c#L486)
+`_lrop()` at [`lightroom.c#L486`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/develop/lightroom.c#L486)
 is the dispatch — it's a long chain of `else if` blocks keyed on XML
 attribute name. Fields ending in `*Adjustment*` are accumulated into
 the `colorzones` data struct; once all 8x3 = 24 hue/sat/lum entries
 are read, dt synthesizes a `colorzones` history entry.
 
-`_handle_xpath()` at [`lightroom.c#L1056`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/develop/lightroom.c#L1056)
+`_handle_xpath()` at [`lightroom.c#L1056`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/develop/lightroom.c#L1056)
 walks the parsed XML tree with xmlXPath queries; each query points
 at a known LR field path. Any path with no XPath registered above is
 silently ignored.
 
-`dt_add_hist()` at [`lightroom.c#L329`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/develop/lightroom.c#L329)
+`dt_add_hist()` at [`lightroom.c#L329`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/develop/lightroom.c#L329)
 takes a built params struct and inserts it as a history entry for
 the imgid being imported. Each module's struct used here is a frozen
 copy of an older dt params layout — see the file's top comment at
-[`lightroom.c#L39-L48`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/develop/lightroom.c#L39-L48):
+[`lightroom.c#L39-L48`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/develop/lightroom.c#L39-L48):
 
 > // copy here the iop params struct with the actual version. This is so to
 > // be as independent as possible of any iop evolutions. Indeed, we create

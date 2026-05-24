@@ -5,7 +5,7 @@ operations (modules), and the scene-referred / display-referred split
 that pipeline encodes.
 
 All source citations pin to darktable commit
-`635c0c55b64331481dffe30f937ba3fe72f83857` (master, fetched 2026-05).
+`9402c65275bebebc4649c6dc91d3798d4bd63a0f` (master, fetched 2026-05).
 Permalinks use that SHA; replace with a newer SHA when refreshing.
 
 ## The pipeline is iop-order, not history-stack order
@@ -19,7 +19,7 @@ the undo timeline; the pipeline reorders edits by `iop_order` before
 running them.
 
 The current default table is `v50_order`, declared at
-[`src/common/iop_order.c#L298-L415`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/common/iop_order.c#L298-L415).
+[`src/common/iop_order.c#L298-L415`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/common/iop_order.c#L298-L415).
 It became the default for new RAW edits in darktable 5.0 (released
 2024-12-21; release notes:
 <https://github.com/darktable-org/darktable/releases/tag/release-5.0.0>;
@@ -34,9 +34,9 @@ Prior history versions still apply per-image:
 | `DT_IOP_ORDER_V50` | 4 | **default for new RAW edits since dt 5.0** |
 | `DT_IOP_ORDER_V50_JPG` | 5 | **default for new LDR edits since dt 5.0** |
 
-Defined at [`src/common/iop_order.h#L128-L140`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/common/iop_order.h#L128-L140).
+Defined at [`src/common/iop_order.h#L128-L140`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/common/iop_order.h#L128-L140).
 The constant `DT_IOP_ORDER_VERSION = 5` at
-[`src/common/iop_order.c#L31`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/common/iop_order.c#L31)
+[`src/common/iop_order.c#L31`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/common/iop_order.c#L31)
 is the table-count, not a history-format version.
 
 When darktable reads an XMP it picks the table from
@@ -96,7 +96,7 @@ The split is by where in the pipeline the display transform sits. Up
 to and including `colorout` (priority 70.0), values are **linear,
 scene-referred** — they represent relative scene luminance, can exceed
 1.0, and color is expressed in the working profile (Lin Rec2020 by
-default; see [`src/iop/colorin.c#L71-L81`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/colorin.c#L71-L81)
+default; see [`src/iop/colorin.c#L71-L81`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/colorin.c#L71-L81)
 where the colorin default workspace is `DT_COLORSPACE_LIN_REC2020`).
 
 The display transform — one of `sigmoid` / `filmicrgb` / `agx` /
@@ -107,7 +107,7 @@ gamma-encoded data and is incorrect on scene-linear input. Hence the
 ordering `colorbalancergb` (41.5, scene-referred) appears before
 `sigmoid` (45.3) but `tonecurve` (48.0, display-referred) appears
 after. Comments in the iop_order table label the transition explicitly
-at [`src/common/iop_order.c#L374-L380`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/common/iop_order.c#L374-L380).
+at [`src/common/iop_order.c#L374-L380`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/common/iop_order.c#L374-L380).
 
 For cinema-native intermediate output, the right answer is to either
 disable all display transforms (linear scene-referred Rec.2020 TIFF,
@@ -124,11 +124,11 @@ master:
 | Module | Default-enabled when | Source |
 |---|---|---|
 | `rawprepare` | raw image, not pre-normalized | rawprepare.c |
-| `temperature` | raw image (AWB) | [temperature.c#L1184](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/temperature.c#L1184) |
+| `temperature` | raw image (AWB) | [temperature.c#L1184](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/temperature.c#L1184) |
 | `highlights` | raw, non-monochrome | highlights.c |
-| `demosaic` | raw or mono-sRAW | [demosaic.c#L1484](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/demosaic.c#L1484) |
-| `colorin` | always | [colorin.c#L1690](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/colorin.c#L1690) |
-| `colorout` | always | [colorout.c#L811](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/colorout.c#L811) |
+| `demosaic` | raw or mono-sRAW | [demosaic.c#L1484](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/demosaic.c#L1484) |
+| `colorin` | always | [colorin.c#L1690](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/colorin.c#L1690) |
+| `colorout` | always | [colorout.c#L811](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/colorout.c#L811) |
 | `flip` | always (honors EXIF orientation) | flip.c |
 | `gamma` | always (display encoding) | gamma.c |
 | `finalscale` | always | finalscale.c |
@@ -136,15 +136,15 @@ master:
 | `rawoverexposed` | always (display-only guide) | rawoverexposed.c |
 
 Workflow-conditional auto-applied modules (via `data.presets` table at
-darktable startup, see [`develop.c#L1822-L2106`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/develop/develop.c#L1822-L2106)):
+darktable startup, see [`develop.c#L1822-L2106`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/develop/develop.c#L1822-L2106)):
 
 - Under `scene-referred (sigmoid)`: `sigmoid` preset "scene-referred
-  default" auto-applies. Source: [`sigmoid.c#L227-L246`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/sigmoid.c#L227-L246).
+  default" auto-applies. Source: [`sigmoid.c#L227-L246`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/sigmoid.c#L227-L246).
 - Under `scene-referred (filmic)`: `filmicrgb` analogous preset.
-  Source: [`filmicrgb.c#L3179-L3199`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/filmicrgb.c#L3179-L3199).
+  Source: [`filmicrgb.c#L3179-L3199`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/filmicrgb.c#L3179-L3199).
 - Under `display-referred (legacy)`: `basecurve` joins the auto-apply
   query (see `is_display_referred ? "" : "basecurve"` at
-  [`develop.c#L1991`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/develop/develop.c#L1991)).
+  [`develop.c#L1991`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/develop/develop.c#L1991)).
 
 **Not** default-enabled under any workflow: `lens`, `cacorrect`,
 `ashift`, `clipping`, `sharpen`, `colorbalancergb`, `tonecurve`,

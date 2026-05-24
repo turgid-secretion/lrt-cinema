@@ -2,7 +2,7 @@
 
 Authoritative sources: `src/iop/lens.cc`, `src/iop/cacorrect.c`,
 `src/iop/ashift.c`, `src/develop/develop.c`. At commit
-`635c0c55b64331481dffe30f937ba3fe72f83857`.
+`9402c65275bebebc4649c6dc91d3798d4bd63a0f`.
 
 ## The three geometry modules
 
@@ -11,20 +11,20 @@ darktable distinguishes:
 - **`lens`** (lensfun-based) — radial distortion, transverse CA,
   vignetting. The "lens profile" module. Pipeline position 13.0
   (post-demosaic, pre-clipping). Source:
-  [`src/iop/lens.cc`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/lens.cc).
-  Current modversion **10** ([`lens.cc#L68`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/lens.cc#L68)).
+  [`src/iop/lens.cc`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/lens.cc).
+  Current modversion **10** ([`lens.cc#L68`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/lens.cc#L68)).
 - **`cacorrect`** — pre-demosaic CA correction (operates on raw
   Bayer data). Pipeline position 5.0. Source:
-  [`src/iop/cacorrect.c`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/cacorrect.c).
+  [`src/iop/cacorrect.c`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/cacorrect.c).
   Current modversion 2.
 - **`cacorrectrgb`** — post-demosaic CA cleanup; helps when `lens`
   has reintroduced CA via its distortion warp. Pipeline position 13.5
   (right after `lens`). The iop_order table comment explains it
-  explicitly: see [`src/common/iop_order.c#L313-L317`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/common/iop_order.c#L313-L317).
+  explicitly: see [`src/common/iop_order.c#L313-L317`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/common/iop_order.c#L313-L317).
 - **`ashift`** — perspective correction (keystone, projection). Not
   what most users mean by "lens correction" but lives in this family.
   Pipeline position 15.0. Source:
-  [`src/iop/ashift.c`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/ashift.c).
+  [`src/iop/ashift.c`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/ashift.c).
 
 ## None of these auto-enable
 
@@ -34,28 +34,28 @@ it detects the Nikon D750." That is false per source:
 
 - `lens.cc` contains zero `self->default_enabled = TRUE`
   assignments. `reload_defaults()` at
-  [`lens.cc#L3435-L3534`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/lens.cc#L3435-L3534)
+  [`lens.cc#L3435-L3534`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/lens.cc#L3435-L3534)
   populates the GUI sliders from EXIF + lensfun DB lookup, but
   **never sets `default_enabled`.** So the module appears in the
   history as "available but disabled" until the user clicks
   to enable.
 - `cacorrect.c` explicitly sets `self->default_enabled = FALSE` —
-  twice, at [`cacorrect.c#L1256`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/cacorrect.c#L1256)
-  and [`cacorrect.c#L1291`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/cacorrect.c#L1291)
+  twice, at [`cacorrect.c#L1256`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/cacorrect.c#L1256)
+  and [`cacorrect.c#L1291`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/cacorrect.c#L1291)
   (in the `is_camera_supported` branch).
 - `ashift.c` sets `self->default_enabled = FALSE` at
-  [`ashift.c#L5662`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/ashift.c#L5662).
+  [`ashift.c#L5662`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/ashift.c#L5662).
 
 The only path that could insert a `lens` history entry on a fresh
 image is the auto-apply preset machinery at
-[`develop.c#L1822-L2106`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/develop/develop.c#L1822-L2106)
+[`develop.c#L1822-L2106`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/develop/develop.c#L1822-L2106)
 — specifically, a user-defined preset in the `data.presets` table
 with `operation = 'lens'` and `autoapply = 1` matched to the camera /
 lens / focal length. That is an explicit user setup, not a default.
 
 The lensfun-DB-driven auto-distortion-detection feature exists for
 **fixed-lens cameras** (e.g. Sony RX100): see
-[`lens.cc#L3489-L3503`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/lens.cc#L3489-L3503)
+[`lens.cc#L3489-L3503`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/lens.cc#L3489-L3503)
 which detects "this is a fixed-lens camera" by checking
 `islower(cam[0]->Mount[0])`, and even then it only populates the
 default params — `default_enabled` stays FALSE.
@@ -91,7 +91,7 @@ preview for one of these reasons (in order of likelihood):
 
 2. **Crop bake-in.** LR sidecars carry `crs:HasCrop="True"` with
    `Crop{Top,Bottom,Left,Right,Angle}` floats. dt's `lightroom.c`
-   does read those at [`lightroom.c#L494-L519`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/develop/lightroom.c#L494-L519),
+   does read those at [`lightroom.c#L494-L519`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/develop/lightroom.c#L494-L519),
    but again, lrt-cinema's emitter does not — we do not emit a
    `clipping` history entry. So LRT's preview shows the cropped
    frame; dt's render shows the full sensor frame.
@@ -100,7 +100,7 @@ preview for one of these reasons (in order of likelihood):
 
 3. **EXIF auto-rotate via the `flip` module.** dt's `flip` is
    default-enabled and honors EXIF Orientation
-   ([`src/iop/flip.c`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/flip.c)).
+   ([`src/iop/flip.c`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/flip.c)).
    LR also honors EXIF Orientation. This should match between
    them; if it doesn't, the cause is one of LRT pre-processing the
    raw or dt mis-detecting the orientation tag.
@@ -112,7 +112,7 @@ inspection alone.
 ## The lens module's params
 
 For reference if/when we want to emit a `lens` history entry — the
-struct at [`lens.cc#L121-L163`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/lens.cc#L121-L163):
+struct at [`lens.cc#L121-L163`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/lens.cc#L121-L163):
 
 - `method` (lensfun / metadata / none)
 - `modify_flags` (bitfield: DISTORTION | TCA | VIGNETTING)
@@ -128,7 +128,7 @@ Loading a `lens` module via XMP requires:
 2. The struct's strings have to exactly match the lensfun DB key
    strings — which dt's lensfun DB does NOT use the EXIF strings
    verbatim. dt has a sanitizer (`_lens_sanitize`) at
-   [`lens.cc#L3444`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/lens.cc#L3444)
+   [`lens.cc#L3444`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/lens.cc#L3444)
    that normalizes EXIF strings before lookup.
 3. Per-frame variation (zoom, aperture) requires per-frame XMP
    updates — which we already emit one XMP per frame, so this is

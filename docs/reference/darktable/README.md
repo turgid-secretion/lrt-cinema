@@ -2,7 +2,7 @@
 
 Authoritative reference for the darktable behaviors lrt-cinema
 depends on. Citations are source-anchored to the dt master commit
-`635c0c55b64331481dffe30f937ba3fe72f83857` (refresh the SHA when
+`9402c65275bebebc4649c6dc91d3798d4bd63a0f` (refresh the SHA when
 significant changes land; current snapshot fetched 2026-05).
 
 Every claim in any other repo doc that describes darktable behavior
