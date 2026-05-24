@@ -213,3 +213,70 @@ def test_inspect_neutral_lrt_keyframe_no_false_dropped_warnings(tmp_path, capsys
     assert "DROPPED at emit" not in out, (
         f"neutral LRT keyframe falsely flagged dropped fields:\n{out}"
     )
+
+
+def test_engine_algorithmic_suppresses_dcp_modules(tmp_path, capsys):
+    """--engine algorithmic must NOT emit any DCP-derived dt module
+    (temperature / basecurve / lut3d) even when --dcp is explicitly
+    supplied, and must log that --dcp is being ignored."""
+    bundled_npz = (
+        Path(__file__).parent / "fixtures" / "dcp_data"
+        / "Nikon D750 Camera Standard.npz"
+    )
+    assert bundled_npz.exists(), "bundled .npz test fixture missing"
+
+    src = tmp_path / "input"
+    src.mkdir()
+    (src / "frame_0001.NEF").write_bytes(b"raw-stub")
+    (src / "frame_0001.NEF.xmp").write_bytes(_make_neutral_lrt_xmp(rating=4))
+
+    out = tmp_path / "output"
+    rc = main([
+        "render",
+        "--input", str(src),
+        "--output", str(out),
+        "--preset", "cinema-linear",
+        "--engine", "algorithmic",
+        "--dcp", str(bundled_npz),
+        "--dry-run",
+        "--quiet",
+    ])
+    assert rc == 0
+
+    captured = capsys.readouterr()
+    assert "--engine algorithmic ignores --dcp" in captured.err
+    assert "DCP-derived modules suppressed" in captured.err
+    # The DCP "loaded" info line must NOT appear (we skipped loading).
+    assert "loaded DCP" not in captured.err
+
+    emitted = (out / "frame_0001.NEF.dt.xmp").read_text()
+    for dcp_module in ('operation="temperature"', 'operation="basecurve"',
+                       'operation="lut3d"'):
+        assert dcp_module not in emitted, (
+            f"algorithmic engine leaked DCP-derived module {dcp_module}: {emitted}"
+        )
+
+
+def test_engine_dcp_default_unchanged(tmp_path, capsys):
+    """Default --engine=dcp preserves existing behavior: no auto-detect
+    happens for an unsupported RAW stub, the 'no DCP supplied' warning
+    fires, and render still succeeds with a libraw-default fallback."""
+    src = tmp_path / "input"
+    src.mkdir()
+    (src / "frame_0001.CR3").write_bytes(b"raw-stub")
+    (src / "frame_0001.CR3.xmp").write_bytes(_make_neutral_lrt_xmp())
+
+    out = tmp_path / "output"
+    rc = main([
+        "render",
+        "--input", str(src),
+        "--output", str(out),
+        "--preset", "cinema-linear",
+        "--dry-run",
+        "--quiet",
+    ])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "no DCP supplied or detected" in err
+    # algorithmic-mode-specific messages must NOT appear under the default.
+    assert "DCP-derived modules suppressed" not in err
