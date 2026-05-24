@@ -54,7 +54,12 @@ PRESETS: dict[str, Preset] = {
         style_filename="cinema_linear.style",
         description=(
             "16-bit linear Rec.2020 TIFF. Display transform disabled. "
-            "Resolve clip-tag as Linear Rec.2020 input."
+            "Resolve clip-tag as Linear Rec.2020 input. NOTE: when "
+            "--dcp is supplied AND --no-dcp-tone-curve is NOT set, the "
+            "DCP's bundled tone curve emits via basecurve, producing a "
+            "tone-mapped (not strictly linear) output that visually "
+            "matches LR. For truly-linear cinema-linear output suitable "
+            "for ACES timelines or OCIO chains, pass --no-dcp-tone-curve."
         ),
     ),
     "cinema-aces": Preset(

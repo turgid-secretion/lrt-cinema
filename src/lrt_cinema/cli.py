@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from lrt_cinema import __version__
+from lrt_cinema.dcp import parse_dcp
 from lrt_cinema.interpolation import (
     apply_deflicker,
     apply_holy_grail_ramps,
@@ -79,6 +80,30 @@ def _build_parser() -> argparse.ArgumentParser:
                              "'all' = HG + Deflicker + Global (default). 'none' = ignore. "
                              "'hg' / 'deflicker' / 'global' = single source. See "
                              "docs/reference/lrtimelapse/XMP_SCHEMA.md for schema.")
+    render.add_argument("--dcp", type=Path, default=None,
+                        help="Path to an Adobe DNG Camera Profile (DCP) file. When "
+                             "supplied, the emitter uses the DCP's bundled tone curve "
+                             "and BaselineExposure to close the gap against LR's "
+                             "render. If the LRT XMP carries an explicit kelvin "
+                             "override, the DCP's color matrices are also used to "
+                             "derive the temperature module's RGGB multipliers. "
+                             "Adobe DNG Converter installs DCPs at "
+                             "/Library/Application Support/Adobe/CameraRaw/"
+                             "CameraProfiles/Camera/<Make>/<Camera Standard>.dcp "
+                             "on macOS. Without --dcp, the renderer falls back to "
+                             "darktable's libraw-derived defaults — the output will "
+                             "diverge from LR's by the DCP-application gap (typically "
+                             "ΔE2000 mean 5-10 on real footage).")
+    render.add_argument("--no-dcp-tone-curve", dest="apply_dcp_tone_curve",
+                        action="store_false", default=True,
+                        help="When --dcp is supplied, suppress emission of the "
+                             "DCP-bundled ProfileToneCurve into dt's basecurve "
+                             "module. The cinema-linear preset's output stays "
+                             "truly linear (consumable by ACES timelines / OCIO "
+                             "chains that expect linear input); the trade-off is "
+                             "the LR-look midtone lift is not applied. "
+                             "BaselineExposure and (when explicit kelvin is set) "
+                             "temperature multipliers from the DCP still emit.")
     render.add_argument("--from-frame", type=int, default=0,
                         help="First frame index to render (inclusive).")
     render.add_argument("--to-frame", type=int, default=None,
@@ -309,6 +334,26 @@ def _cmd_render(args: argparse.Namespace) -> int:
 
     preset = get_preset(args.preset)
 
+    dcp_profile = None
+    if args.dcp is not None:
+        try:
+            dcp_profile = parse_dcp(args.dcp)
+        except (FileNotFoundError, ValueError) as exc:
+            sys.stderr.write(f"error: --dcp: {exc}\n")
+            return 2
+        sys.stderr.write(
+            f"info: loaded DCP {dcp_profile.profile_name!r} "
+            f"(baseline_exposure={dcp_profile.baseline_exposure:+.2f} EV, "
+            f"tone_curve_pts="
+            f"{0 if dcp_profile.profile_tone_curve is None else dcp_profile.profile_tone_curve.shape[0]})"
+            f"\n"
+        )
+    else:
+        sys.stderr.write(
+            "warning: no --dcp supplied; render will diverge from LR's by the "
+            "DCP-application gap. See `lrt-cinema render --help`.\n"
+        )
+
     try:
         seq = parse_sequence(args.input)
     except (FileNotFoundError, NotADirectoryError) as exc:
@@ -364,6 +409,8 @@ def _cmd_render(args: argparse.Namespace) -> int:
             from_frame=args.from_frame,
             to_frame=args.to_frame,
             custom_style=args.style,
+            dcp_profile=dcp_profile,
+            apply_dcp_tone_curve=args.apply_dcp_tone_curve,
             dry_run=args.dry_run,
         )
     except DarktableCliNotFound as exc:
