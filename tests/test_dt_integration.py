@@ -176,6 +176,11 @@ def _assert_module_loaded_ok(log: str, op_name: str, modversion: int) -> None:
     but rejects the params blob (wrong size, wrong encoding, wrong
     modversion) and substitutes module defaults. See
     docs/research/ADVERSARIAL_AUDIT_2026-05-23 HIGH-1 / base64-bug.
+
+    Also runs the blanket _SILENT_SUBSTITUTION_PATTERNS scan — if dt
+    logged "version WRONG" / "params WRONG" / "legacy_params" for any
+    module (not just `op_name`), a regression elsewhere is silently
+    producing wrong pixels.
     """
     assert f"successfully loaded module {op_name} from history" in log, (
         f"dt did not report loading our {op_name} entry; log tail: {log[-2000:]}"
@@ -188,16 +193,49 @@ def _assert_module_loaded_ok(log: str, op_name: str, modversion: int) -> None:
     )
     assert op_idx is not None
     # The next "params v. N:" line within ~10 lines is ours.
+    found = False
     for ln in lines[op_idx:op_idx + 10]:
         if "params v." in ln and ":" in ln:
             assert "version ok" in ln and "params ok" in ln, (
                 f"{op_name} params verification not 'ok ok': {ln!r}"
             )
-            return
-    raise AssertionError(
-        f"could not find 'params v.' line for {op_name}; "
-        f"window: {lines[op_idx:op_idx + 10]!r}"
-    )
+            found = True
+            break
+    if not found:
+        raise AssertionError(
+            f"could not find 'params v.' line for {op_name}; "
+            f"window: {lines[op_idx:op_idx + 10]!r}"
+        )
+    _assert_no_silent_substitution(log, exclude_op=op_name)
+
+
+def _assert_no_silent_substitution(log: str, exclude_op: str | None = None) -> None:
+    """Scan the full dt-cli log for any of the substitution-warning patterns.
+
+    Excludes lines mentioning `blendop`: lrt-cinema deliberately does NOT
+    emit blendop params (audit HIGH-1 / 2026-05-23 Option B), so dt's
+    expected "blendop v. N: version WRONG params WRONG" lines are
+    benign-by-design — dt's default-substitute branch produces the
+    passthrough mask_mode we want. Any OTHER substitution-warning line
+    is a real regression.
+
+    _SILENT_SUBSTITUTION_PATTERNS was declared module-level and sat
+    unused until the 2026-05-24 audit; activating it closes the
+    coverage hole flagged as test 2.7 / pattern 3.3.
+    """
+    hits: list[str] = []
+    for ln in log.splitlines():
+        if "blendop" in ln:
+            continue
+        for pat in _SILENT_SUBSTITUTION_PATTERNS:
+            if pat in ln:
+                hits.append(ln)
+                break
+    if hits:
+        raise AssertionError(
+            "dt-cli logged silent-substitution-class warnings:\n  "
+            + "\n  ".join(hits[:20])
+        )
 
 
 def test_dt_cli_accepts_temperature_module_emission(tmp_path):
