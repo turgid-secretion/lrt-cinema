@@ -335,6 +335,52 @@ def test_dt_cli_tonecurve_actually_affects_pixels(tmp_path):
     )
 
 
+def test_dt_cli_accepts_colorbalancergb_module_emission(tmp_path):
+    """dt-cli must report 'params ok' for our colorbalancergb v5 emission.
+
+    Validates dt_iop_colorbalancergb_params_t struct layout — 32 floats
+    + 1 int = 132 bytes at modversion 5 (src/iop/colorbalancergb.c#L52
+    + L60-L106 at SHA 9402c65275). Largest non-curve params blob we emit;
+    a size mismatch (e.g. forgotten v5 saturation_formula trailer) would
+    trip dt's silent-substitution path.
+    """
+    xmp = tmp_path / f"{_RAW.stem}{_RAW.suffix}.xmp"
+    # Saturation=50 (non-default) triggers emission; vib/contrast stay 0.
+    emit_darktable_xmp(DevelopOps(exposure_ev=0.0, saturation=50.0), xmp)
+    out_tif = tmp_path / "out.tif"
+    proc = _run_dt_cli(_RAW, xmp, out_tif)
+    assert proc.returncode == 0, (
+        f"darktable-cli failed: {proc.stderr[-500:] or proc.stdout[-500:]}"
+    )
+    log = proc.stdout + proc.stderr
+    _assert_module_loaded_ok(log, "colorbalancergb", 5)
+
+
+def test_dt_cli_colorbalancergb_actually_affects_pixels(tmp_path):
+    """Render with + without LR Saturation; pixels must differ.
+
+    Sat=0 leaves colorbalancergb un-emitted (gate skip). Sat=+100 maps to
+    saturation_global=+1.0 (dt's max). Different pixel data proves the
+    LR-driven field reaches dt's pipe.
+    """
+    xmp_no = tmp_path / "sat0.xmp"
+    emit_darktable_xmp(DevelopOps(exposure_ev=0.0, saturation=0.0), xmp_no)
+    xmp_yes = tmp_path / "sat100.xmp"
+    emit_darktable_xmp(DevelopOps(exposure_ev=0.0, saturation=100.0), xmp_yes)
+    out_no = tmp_path / "no.tif"
+    out_yes = tmp_path / "yes.tif"
+    proc_no = _run_dt_cli(_RAW, xmp_no, out_no)
+    proc_yes = _run_dt_cli(_RAW, xmp_yes, out_yes)
+    assert proc_no.returncode == 0, proc_no.stderr[-500:]
+    assert proc_yes.returncode == 0, proc_yes.stderr[-500:]
+    b_no = out_no.read_bytes()[65536:65536 + 1_000_000]
+    b_yes = out_yes.read_bytes()[65536:65536 + 1_000_000]
+    assert b_no != b_yes, (
+        "Saturation=0 and Saturation=+100 produced byte-identical renders — "
+        "dt is silently ignoring our colorbalancergb saturation_global field."
+    )
+
+
 def test_dt_cli_accepts_sharpen_module_emission(tmp_path):
     """dt-cli must report 'params ok' for our sharpen v1 emission.
 
