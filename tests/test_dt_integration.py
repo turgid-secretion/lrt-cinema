@@ -25,9 +25,11 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import numpy as np
 import pytest
 
-from lrt_cinema.ir import DevelopOps
+from lrt_cinema.dcp import DCPProfile
+from lrt_cinema.ir import DevelopOps, TonePoint
 from lrt_cinema.xmp_emitter import emit_darktable_xmp
 
 FIXTURES_RAW = Path(__file__).parent / "fixtures" / "raw"
@@ -136,6 +138,200 @@ def test_dt_cli_accepts_emitter_output_without_silent_substitution(tmp_path):
     assert found, (
         f"could not find 'params v.' verification line for our exposure entry; "
         f"window: {lines[exposure_idx:exposure_idx + 10]!r}"
+    )
+
+
+def _make_test_dcp_with_curve_and_matrix() -> DCPProfile:
+    """Plausible Nikon-shaped DCP for integration tests.
+
+    Matrices chosen so the green-normalized multipliers at 5500 K fall
+    in dt's accepted 0..8 multiplier range (src/iop/temperature.c#L78-81).
+    """
+    return DCPProfile(
+        color_matrix_1=np.array([
+            [1.0, -0.4,  0.0],
+            [-0.5, 1.3,  0.3],
+            [-0.1,  0.2, 0.8],
+        ]),
+        color_matrix_2=np.array([
+            [0.9, -0.3, -0.1],
+            [-0.5, 1.3,  0.2],
+            [-0.1,  0.2, 0.7],
+        ]),
+        kelvin_1=2856.0,
+        kelvin_2=6504.0,
+        baseline_exposure=0.0,
+        baseline_exposure_offset=0.0,
+        profile_tone_curve=np.stack(
+            [np.linspace(0, 1, 32), np.linspace(0, 1, 32) ** 0.5],
+            axis=1,
+        ),
+    )
+
+
+def _assert_module_loaded_ok(log: str, op_name: str, modversion: int) -> None:
+    """Assert dt-cli loaded `op_name` from history AND reported 'params ok'.
+
+    Catches the silent-substitution failure mode where dt accepts the XMP
+    but rejects the params blob (wrong size, wrong encoding, wrong
+    modversion) and substitutes module defaults. See
+    docs/research/ADVERSARIAL_AUDIT_2026-05-23 HIGH-1 / base64-bug.
+    """
+    assert f"successfully loaded module {op_name} from history" in log, (
+        f"dt did not report loading our {op_name} entry; log tail: {log[-2000:]}"
+    )
+    lines = log.splitlines()
+    op_idx = next(
+        (i for i, ln in enumerate(lines)
+         if f"loaded module {op_name} from history" in ln),
+        None,
+    )
+    assert op_idx is not None
+    # The next "params v. N:" line within ~10 lines is ours.
+    for ln in lines[op_idx:op_idx + 10]:
+        if "params v." in ln and ":" in ln:
+            assert "version ok" in ln and "params ok" in ln, (
+                f"{op_name} params verification not 'ok ok': {ln!r}"
+            )
+            return
+    raise AssertionError(
+        f"could not find 'params v.' line for {op_name}; "
+        f"window: {lines[op_idx:op_idx + 10]!r}"
+    )
+
+
+def test_dt_cli_accepts_temperature_module_emission(tmp_path):
+    """dt-cli must report 'params ok' for our temperature v4 emission.
+
+    Validates the dt_iop_temperature_params_t struct layout — 4 floats
+    + int preset = 20 bytes at modversion 4 (src/iop/temperature.c#L76-82
+    + L46 at dt master SHA 9402c65275). A size mismatch would trigger
+    dt's silent-substitution path (the base64-bug class).
+    """
+    xmp = tmp_path / f"{_RAW.stem}{_RAW.suffix}.xmp"
+    emit_darktable_xmp(
+        DevelopOps(exposure_ev=0.0, temperature_k=5500),
+        xmp,
+        dcp_profile=_make_test_dcp_with_curve_and_matrix(),
+    )
+    out_tif = tmp_path / "out.tif"
+    proc = _run_dt_cli(_RAW, xmp, out_tif)
+    assert proc.returncode == 0, (
+        f"darktable-cli failed: {proc.stderr[-500:] or proc.stdout[-500:]}"
+    )
+    log = proc.stdout + proc.stderr
+    _assert_module_loaded_ok(log, "temperature", 4)
+
+
+def test_dt_cli_accepts_basecurve_module_emission(tmp_path):
+    """dt-cli must report 'params ok' for our basecurve v6 emission.
+
+    Validates dt_iop_basecurve_params_t struct layout — 480 bytes of
+    nodes + 40 bytes of trailers = 520 bytes at modversion 6
+    (src/iop/basecurve.c#L63-76 + L57 at dt master SHA 9402c65275).
+    basecurve is dt's designated camera-baseline-tone-curve module and
+    the emission target for DCP-bundled ProfileToneCurves. Same
+    silent-substitution class as the temperature test.
+    """
+    xmp = tmp_path / f"{_RAW.stem}{_RAW.suffix}.xmp"
+    emit_darktable_xmp(
+        DevelopOps(exposure_ev=0.0),
+        xmp,
+        dcp_profile=_make_test_dcp_with_curve_and_matrix(),
+    )
+    out_tif = tmp_path / "out.tif"
+    proc = _run_dt_cli(_RAW, xmp, out_tif)
+    assert proc.returncode == 0, (
+        f"darktable-cli failed: {proc.stderr[-500:] or proc.stdout[-500:]}"
+    )
+    log = proc.stdout + proc.stderr
+    _assert_module_loaded_ok(log, "basecurve", 6)
+
+
+def test_dt_cli_accepts_tonecurve_module_emission(tmp_path):
+    """dt-cli must report 'params ok' for our tonecurve v5 emission.
+
+    Validates dt_iop_tonecurve_params_t struct layout — 520 bytes
+    (src/iop/tonecurve.c#L108-117 + L72 at dt master SHA 9402c65275).
+    Tonecurve is the LR-explicit-curve emission target (not DCP).
+    """
+    xmp = tmp_path / f"{_RAW.stem}{_RAW.suffix}.xmp"
+    emit_darktable_xmp(
+        DevelopOps(
+            exposure_ev=0.0,
+            tone_curve=[
+                TonePoint(0.0, 0.0),
+                TonePoint(0.5, 0.5),
+                TonePoint(1.0, 1.0),
+            ],
+        ),
+        xmp,
+        dcp_profile=None,
+    )
+    # Override identity check: emit an S-curve so the emitter actually writes.
+    emit_darktable_xmp(
+        DevelopOps(
+            exposure_ev=0.0,
+            tone_curve=[
+                TonePoint(0.0, 0.0),
+                TonePoint(0.25, 0.1),
+                TonePoint(0.75, 0.9),
+                TonePoint(1.0, 1.0),
+            ],
+        ),
+        xmp,
+        dcp_profile=None,
+    )
+    out_tif = tmp_path / "out.tif"
+    proc = _run_dt_cli(_RAW, xmp, out_tif)
+    assert proc.returncode == 0, (
+        f"darktable-cli failed: {proc.stderr[-500:] or proc.stdout[-500:]}"
+    )
+    log = proc.stdout + proc.stderr
+    _assert_module_loaded_ok(log, "tonecurve", 5)
+
+
+def test_dt_cli_tonecurve_actually_affects_pixels(tmp_path):
+    """Render with + without a steep highlight-lift tonecurve; pixels must differ.
+
+    Mirrors test_dt_cli_ev_value_actually_reaches_pixels for tonecurve:
+    if dt silently substituted defaults (identity 2-point L curve) the
+    two renders would be byte-identical.
+    """
+    # No-tonecurve: ops with no LR curve and no DCP curve → no tonecurve
+    # module emitted. Reference for "what the pipeline does without us".
+    xmp_no_tc = tmp_path / "no_tc.xmp"
+    emit_darktable_xmp(DevelopOps(exposure_ev=0.0), xmp_no_tc, dcp_profile=None)
+
+    # With-tonecurve: emit an S-curve via the LR tone-curve path.
+    xmp_tc = tmp_path / "tc.xmp"
+    emit_darktable_xmp(
+        DevelopOps(
+            exposure_ev=0.0,
+            tone_curve=[
+                TonePoint(0.0, 0.0),
+                TonePoint(0.25, 0.1),
+                TonePoint(0.75, 0.9),
+                TonePoint(1.0, 1.0),
+            ],
+        ),
+        xmp_tc,
+        dcp_profile=None,
+    )
+
+    out_no = tmp_path / "no.tif"
+    out_yes = tmp_path / "yes.tif"
+    proc_no = _run_dt_cli(_RAW, xmp_no_tc, out_no)
+    proc_yes = _run_dt_cli(_RAW, xmp_tc, out_yes)
+    assert proc_no.returncode == 0, proc_no.stderr[-500:]
+    assert proc_yes.returncode == 0, proc_yes.stderr[-500:]
+    b_no = out_no.read_bytes()[65536:65536 + 1_000_000]
+    b_yes = out_yes.read_bytes()[65536:65536 + 1_000_000]
+    assert b_no != b_yes, (
+        "no-tonecurve and S-curve renders produced byte-identical pixel data — "
+        "dt is silently ignoring our tonecurve params. "
+        "Likely cause: emitter params encoding rejected by dt's reader "
+        "(see ADVERSARIAL_AUDIT_2026-05-23 HIGH-1 / base64 bug class)."
     )
 
 

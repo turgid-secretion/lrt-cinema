@@ -18,6 +18,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from lrt_cinema.dcp import DCPProfile
 from lrt_cinema.ir import DevelopOps
 from lrt_cinema.presets import Preset
 from lrt_cinema.xmp_emitter import emit_darktable_xmp
@@ -61,6 +62,8 @@ def render_frame(
     preset: Preset,
     bundled_style_dir: Path | None = None,
     custom_style: Path | None = None,
+    dcp_profile: DCPProfile | None = None,
+    apply_dcp_tone_curve: bool = True,
     dry_run: bool = False,
     timeout_s: float | None = DEFAULT_PER_FRAME_TIMEOUT_S,
 ) -> FrameResult:
@@ -79,7 +82,11 @@ def render_frame(
 
     output_path = output_dir / f"{source_path.stem}{preset.output_extension}"
     xmp_path = output_dir / f"{source_path.stem}{source_path.suffix}.dt.xmp"
-    emit_darktable_xmp(ops, xmp_path)
+    emit_darktable_xmp(
+        ops, xmp_path,
+        dcp_profile=dcp_profile,
+        apply_dcp_tone_curve=apply_dcp_tone_curve,
+    )
 
     style_path: Path | None = None
     if custom_style is not None:
@@ -211,6 +218,8 @@ def render_sequence(
     to_frame: int | None = None,
     bundled_style_dir: Path | None = None,
     custom_style: Path | None = None,
+    dcp_profile: DCPProfile | None = None,
+    apply_dcp_tone_curve: bool = True,
     dry_run: bool = False,
     timeout_s: float | None = DEFAULT_PER_FRAME_TIMEOUT_S,
 ) -> list[FrameResult]:
@@ -228,6 +237,8 @@ def render_sequence(
             preset=preset,
             bundled_style_dir=bundled_style_dir,
             custom_style=custom_style,
+            dcp_profile=dcp_profile,
+            apply_dcp_tone_curve=apply_dcp_tone_curve,
             dry_run=dry_run,
             timeout_s=timeout_s,
         )
