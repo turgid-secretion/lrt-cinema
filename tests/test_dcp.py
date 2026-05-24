@@ -23,11 +23,13 @@ import pytest
 from lrt_cinema.dcp import (
     DCPProfile,
     _adobe_camera_label,
+    _build_hsv_cube,
     adobe_make_for_camera,
     auto_detect_dcp,
     find_dcp_for_camera,
     illuminant_code_to_kelvin,
     interpolate_color_matrix,
+    interpolate_hsv_cube,
     kelvin_tint_to_dt_multipliers,
     kelvin_tint_to_xy,
     parse_dcp,
@@ -482,6 +484,86 @@ def test_auto_detect_dcp_end_to_end_with_synthetic(tmp_path):
     nef.write_bytes(_build_synthetic_nef("ACMECAM", "Z1"))
     # No DCP planted anywhere — returns None.
     assert auto_detect_dcp(nef) is None
+
+
+# ---------------------------------------------------------------------------
+# HSV-cube parser tests
+# ---------------------------------------------------------------------------
+
+def test_build_hsv_cube_reshapes_in_value_hue_sat_order():
+    # 2 hue × 2 sat × 3 val × 3 floats = 36 floats.
+    # Value-major, hue-medium, sat-minor layout means flat index 0..2 is
+    # the cell (v=0, h=0, s=0); 3..5 is (v=0, h=0, s=1); etc.
+    flat = list(range(36))
+    cube = _build_hsv_cube([2, 2, 3], 0, [float(x) for x in flat], None)
+    assert cube.hue_divisions == 2
+    assert cube.sat_divisions == 2
+    assert cube.val_divisions == 3
+    assert cube.srgb_gamma is False
+    # Shape order must be (V, H, S, 3) — matches RT cell traversal.
+    assert cube.data_1.shape == (3, 2, 2, 3)
+    # Cell (v=0, h=0, s=0) = [0, 1, 2]; (v=0, h=0, s=1) = [3, 4, 5];
+    # (v=0, h=1, s=0) = [6, 7, 8].
+    np.testing.assert_array_equal(cube.data_1[0, 0, 0], [0, 1, 2])
+    np.testing.assert_array_equal(cube.data_1[0, 0, 1], [3, 4, 5])
+    np.testing.assert_array_equal(cube.data_1[0, 1, 0], [6, 7, 8])
+
+
+def test_build_hsv_cube_decodes_srgb_gamma_encoding():
+    flat = [0.0] * 12  # 2 × 2 × 1 × 3 = 12 floats
+    cube_lin = _build_hsv_cube([2, 2, 1], 0, flat, None)
+    cube_srgb = _build_hsv_cube([2, 2, 1], 1, flat, None)
+    assert cube_lin.srgb_gamma is False
+    assert cube_srgb.srgb_gamma is True
+
+
+def test_build_hsv_cube_rejects_size_mismatch():
+    with pytest.raises(ValueError, match="size mismatch"):
+        _build_hsv_cube([2, 2, 1], 0, [0.0] * 10, None)
+
+
+def test_build_hsv_cube_rejects_data2_size_mismatch():
+    flat = [0.0] * 12
+    with pytest.raises(ValueError, match="Data2 size"):
+        _build_hsv_cube([2, 2, 1], 0, flat, [0.0] * 8)
+
+
+def test_interpolate_hsv_cube_returns_data1_when_no_data2():
+    flat = list(range(12))
+    cube = _build_hsv_cube([2, 2, 1], 0, [float(x) for x in flat], None)
+    out = interpolate_hsv_cube(cube, kelvin=5500, kelvin_1=2856, kelvin_2=6504)
+    np.testing.assert_array_equal(out, cube.data_1)
+
+
+def test_interpolate_hsv_cube_blends_in_mired_space():
+    # Data1 all 0, Data2 all 1. At mired midpoint, expect 0.5.
+    n = 12
+    cube = _build_hsv_cube([2, 2, 1], 0, [0.0] * n, [1.0] * n)
+    # Mired midpoint between 2856 and 6504 K:
+    mid_inv = (1.0/2856 + 1.0/6504) / 2
+    mid_k = 1.0 / mid_inv
+    out = interpolate_hsv_cube(cube, kelvin=mid_k, kelvin_1=2856, kelvin_2=6504)
+    np.testing.assert_allclose(out, np.full(cube.data_1.shape, 0.5), atol=1e-5)
+
+
+@pytest.mark.skipif(
+    not _REAL_DCP.exists(),
+    reason="real Adobe DCP not installed at standard macOS path",
+)
+def test_real_d750_dcp_carries_looktable_no_hsm():
+    # Per the agent's empirical survey: Nikon D750 Camera Standard.dcp has
+    # ONLY a LookTable (no HueSatMap). This regression-guards that finding.
+    p = parse_dcp(_REAL_DCP)
+    assert p.hue_sat_map is None
+    assert p.look_table is not None
+    lt = p.look_table
+    assert lt.hue_divisions == 90
+    assert lt.sat_divisions == 16
+    assert lt.val_divisions == 16
+    assert lt.srgb_gamma is True
+    assert lt.data_1.shape == (16, 90, 16, 3)
+    # First cell should be ~identity (no shift at hue=0, sat=0, val=0).
+    np.testing.assert_allclose(lt.data_1[0, 0, 0], [0.0, 1.0, 1.0], atol=1e-3)
 
 
 @pytest.mark.skipif(

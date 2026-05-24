@@ -39,8 +39,16 @@ import struct
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from lrt_cinema.dcp import DCPProfile, kelvin_tint_to_dt_multipliers
+from lrt_cinema.dcp import (
+    DCPProfile,
+    interpolate_hsv_cube,
+    kelvin_tint_to_dt_multipliers,
+)
 from lrt_cinema.ir import DevelopOps, TonePoint
+from lrt_cinema.lut3d_baker import (
+    RECOMMENDED_CUBE_SIZE,
+    bake_dcp_cubes_to_resolve_cube,
+)
 
 DT_NS = "http://darktable.sf.net/"
 X_NS = "adobe:ns:meta/"
@@ -81,6 +89,37 @@ EXPOSURE_MODVERSION = "7"
 Bumped from 6 to 7 in dt 5.x when `compensate_hilite_pres` gboolean was added
 to the params struct. dt's legacy_params migration would handle v6→v7 on read,
 but emitting the canonical current modversion is preferred."""
+
+LUT3D_MODVERSION = "3"
+"""dt lut3d module current modversion (src/iop/lut3d.c#L45 at SHA 9402c65275).
+v3 has been the canonical layout since dt 4.6; legacy_params at L161-225
+upgrades v1/v2 on read. params struct is 12940 bytes (mostly the 512-byte
+filepath buffer + 12288-byte c_clut zero-pad + 128-byte lutname zero-pad).
+We emit `nb_keypoints=0` so dt's `_calculate_clut` at L1175-1196 follows
+the file-on-disk path and the c_clut buffer is ignored."""
+
+# Cube-emission constants matching dt's enum definitions
+# (src/iop/lut3d.c#L52-L67 at SHA 9402c65275).
+_LUT3D_COLORSPACE_LIN_PROPHOTO = 5
+"""DT_IOP_LIN_PROPHOTO. Tells dt the cube's domain is linear ProPhoto RGB
+(D50); dt's `process` at src/iop/lut3d.c#L1085-L1110 then converts
+working-space → ProPhoto → applies cube → ProPhoto → working-space
+automatically via `dt_ioppr_transform_image_colorspace_rgb`. Lets the
+baker stay decoupled from lrt-cinema's working-space choice."""
+
+_LUT3D_INTERPOLATION_TETRAHEDRAL = 0
+"""DT_IOP_TETRAHEDRAL. dt's own default + the smoothest interpolation for
+numerically-baked cubes. Trilinear (=1) and pyramid (=2) are alternatives
+not preferred here."""
+
+_LUT3D_MAX_PATHNAME = 512
+"""src/iop/lut3d.c#L40 DT_IOP_LUT3D_MAX_PATHNAME."""
+
+_LUT3D_MAX_LUTNAME = 128
+"""src/iop/lut3d.c#L42 DT_IOP_LUT3D_MAX_LUTNAME."""
+
+_LUT3D_MAX_KEYPOINTS = 2048
+"""src/iop/lut3d.c#L41 DT_IOP_LUT3D_MAX_KEYPOINTS."""
 
 COLORBALANCERGB_MODVERSION = "5"
 """dt colorbalancergb module current modversion (src/iop/colorbalancergb.c#L52
@@ -278,6 +317,56 @@ def _encode_exposure_params(exposure_ev: float, black: float = 0.0) -> str:
         -4.0,          # deflicker_target_level
         0,             # compensate_exposure_bias = FALSE (default)
         1,             # compensate_hilite_pres = TRUE (default per v7)
+    )
+    return payload.hex()
+
+
+def _encode_lut3d_params(
+    filepath_relative: str,
+    colorspace: int = _LUT3D_COLORSPACE_LIN_PROPHOTO,
+    interpolation: int = _LUT3D_INTERPOLATION_TETRAHEDRAL,
+) -> str:
+    """Encode darktable lut3d v3 params (12940 bytes) as HEX ASCII.
+
+    Struct layout from src/iop/lut3d.c#L69-L77 at dt SHA 9402c65275
+    (DT_MODULE_INTROSPECTION(3, dt_iop_lut3d_params_t)):
+
+        char filepath[512];     // null-terminated; resolved against the
+                                // plugins/darkroom/lut3d/def_path config
+                                // key — runner must set this to the
+                                // directory holding the emitted .cube
+        int colorspace;         // dt_iop_lut3d_colorspace_t enum
+                                //   (LIN_PROPHOTO=5 here)
+        int interpolation;      // dt_iop_lut3d_interpolation_t enum
+                                //   (TETRAHEDRAL=0 here)
+        int nb_keypoints;       // 0 → fall back to file-on-disk; the
+                                // in-blob c_clut is then ignored
+        char c_clut[12288];     // GMIC-compressed inline cube; unused
+                                // when nb_keypoints=0
+        char lutname[128];      // for nested lut names; empty here
+
+    Total: 512 + 4 + 4 + 4 + 12288 + 128 = 12940 bytes (24-bit-aligned;
+    no struct padding because all char arrays + 4-byte enums sit on
+    natural alignment).
+    """
+    fp = filepath_relative.encode("utf-8")
+    if len(fp) >= _LUT3D_MAX_PATHNAME:
+        raise ValueError(
+            f"lut3d filepath > {_LUT3D_MAX_PATHNAME - 1} bytes "
+            f"(must leave room for null terminator): {filepath_relative!r}"
+        )
+    filepath_buf = fp + b"\x00" * (_LUT3D_MAX_PATHNAME - len(fp))
+    c_clut_buf = b"\x00" * (_LUT3D_MAX_KEYPOINTS * 2 * 3)
+    lutname_buf = b"\x00" * _LUT3D_MAX_LUTNAME
+    payload = (
+        filepath_buf
+        + struct.pack("<iii", int(colorspace), int(interpolation), 0)
+        + c_clut_buf
+        + lutname_buf
+    )
+    assert len(payload) == 12940, (
+        f"lut3d params struct size mismatch: got {len(payload)}, expected 12940. "
+        f"dt's reader will silently substitute defaults — see ADVERSARIAL_AUDIT."
     )
     return payload.hex()
 
@@ -680,6 +769,9 @@ def emit_darktable_xmp(
     output_path: Path,
     dcp_profile: DCPProfile | None = None,
     apply_dcp_tone_curve: bool = True,
+    apply_dcp_hsv_cubes: bool = True,
+    cube_size: int = RECOMMENDED_CUBE_SIZE,
+    dt_lut3d_def_path: Path | None = None,
 ) -> None:
     """Emit a darktable XMP sidecar for `ops` to `output_path`.
 
@@ -731,10 +823,23 @@ def emit_darktable_xmp(
     # Exposure picks up DCP baseline bias if a profile is supplied. LR
     # applies BaselineExposure + BaselineExposureOffset additively on
     # top of the user's Exposure2012 — same convention here.
+    #
+    # When DCP HSV cubes (HueSatMap / LookTable) will emit, the
+    # BaselineExposureOffset is baked into the cube's V scaling between
+    # HSM and LookTable (matching Adobe's pipeline order: HSM →
+    # BaselineExposureOffset → LookTable). Adding it through the exposure
+    # module too would apply it twice. Detect that case here and pre-skip.
+    cube_will_emit = (
+        apply_dcp_hsv_cubes
+        and dcp_profile is not None
+        and (dcp_profile.hue_sat_map is not None
+             or dcp_profile.look_table is not None)
+    )
     effective_exposure_ev = ops.exposure_ev
     if dcp_profile is not None:
         effective_exposure_ev += dcp_profile.baseline_exposure
-        effective_exposure_ev += dcp_profile.baseline_exposure_offset
+        if not cube_will_emit:
+            effective_exposure_ev += dcp_profile.baseline_exposure_offset
 
     # PV2012 Blacks2012 piggybacks on dt's exposure.black field via dt's
     # own lr2dt mapping (src/develop/lightroom.c#L279-L285). Verbatim port
@@ -767,6 +872,69 @@ def emit_darktable_xmp(
             seq, num=num, operation="temperature", enabled=True,
             modversion=TEMPERATURE_MODVERSION,
             params_b64=_encode_temperature_params(r_mul, g1_mul, b_mul, g2_mul),
+        )
+        num += 1
+
+    # DCP HSV cubes (HueSatMap + LookTable) — emit BEFORE basecurve to
+    # match Adobe's pipeline order (HSM/LookTable position 36.0 in dt V50
+    # vs basecurve at 44.0 per src/common/iop_order.c#L500 SHA 9402c65275).
+    # When both HSM and LookTable are present in the DCP, both bake into
+    # the same Resolve .cube file with the BaselineExposureOffset baked
+    # into the V scaling between them — Adobe's exact pipeline-position
+    # semantics. For Nikon D750's Camera Standard.dcp (no HSM, only
+    # LookTable), this collapses to a single-cube bake; the baker handles
+    # either-or-both cleanly.
+    if cube_will_emit:
+        if dt_lut3d_def_path is None:
+            raise ValueError(
+                "DCP HSV cube emission requires dt_lut3d_def_path; the .cube "
+                "file is written to that directory and dt's `plugins/darkroom/"
+                "lut3d/def_path` config must point at it. Set "
+                "dt_lut3d_def_path=output_path.parent or pass "
+                "apply_dcp_hsv_cubes=False to skip cube emission."
+            )
+        cube_filename = output_path.with_suffix(".cube").name
+        cube_full_path = Path(dt_lut3d_def_path) / cube_filename
+
+        # Target kelvin for the per-cell mired blend of the HSM cube. For
+        # the Nikon D750 LookTable code path (no HSM, no per-illuminant
+        # variant) this branch never triggers the blend; for cameras with
+        # an HSM, we use the explicit user kelvin when set, otherwise
+        # default to 5500 K (mid-daylight, the conventional fallback used
+        # by dt's libraw-derived as-shot before the DCP refines it).
+        # An AsShotNeutral path that recovers the true as-shot kelvin from
+        # MakerNote/AsShotNeutral is the v0.4.x follow-up that closes the
+        # remaining wb-divergence; until then the 5500 K default is a
+        # reasonable choice that matches LR's default-WB behavior on
+        # daylight-temperature scenes (the user's test sequence).
+        target_k = (
+            float(ops.temperature_k) if ops.temperature_k is not None else 5500.0
+        )
+        hsm_blended = None
+        if dcp_profile.hue_sat_map is not None:
+            hsm_blended = interpolate_hsv_cube(
+                dcp_profile.hue_sat_map,
+                kelvin=target_k,
+                kelvin_1=dcp_profile.kelvin_1,
+                kelvin_2=dcp_profile.kelvin_2,
+            )
+        look_blended = (
+            dcp_profile.look_table.data_1
+            if dcp_profile.look_table is not None else None
+        )
+        bake_dcp_cubes_to_resolve_cube(
+            out_path=cube_full_path,
+            cube_size=cube_size,
+            hsm_blended=hsm_blended,
+            hsm_meta=dcp_profile.hue_sat_map,
+            look_blended=look_blended,
+            look_meta=dcp_profile.look_table,
+            baseline_exposure_offset_ev=dcp_profile.baseline_exposure_offset,
+        )
+        _make_history_entry(
+            seq, num=num, operation="lut3d", enabled=True,
+            modversion=LUT3D_MODVERSION,
+            params_b64=_encode_lut3d_params(filepath_relative=cube_filename),
         )
         num += 1
 

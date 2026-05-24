@@ -94,6 +94,24 @@ _TAG_FORWARD_MATRIX_1 = 50964
 _TAG_FORWARD_MATRIX_2 = 50965
 _TAG_BASELINE_EXPOSURE_OFFSET = 50970
 
+# DCP HueSatMap (DNG 1.7.1 §"Hue Sat Map"). Applied BEFORE
+# BaselineExposureOffset in Adobe's pipeline. Two cubes (per-illuminant); the
+# kelvin-driven mired blend selects per-cell between Data1 and Data2.
+_TAG_PROFILE_HUE_SAT_MAP_DIMS = 50937
+_TAG_PROFILE_HUE_SAT_MAP_DATA_1 = 50938
+_TAG_PROFILE_HUE_SAT_MAP_DATA_2 = 50939
+_TAG_PROFILE_HUE_SAT_MAP_ENCODING = 51107
+
+# DCP LookTable (DNG 1.7.1 §"Profile Look Table"). Binary-identical algorithm
+# to HueSatMap; Adobe applies it AFTER BaselineExposureOffset, BEFORE the
+# ProfileToneCurve. Single cube (no per-illuminant variant). For the project's
+# test camera (Nikon D750 Camera Standard.dcp) this is the only HSV cube
+# present, and is the source of the ΔE post-fit 2.24 structural residual the
+# diagnostic flagged on DSC_4053.
+_TAG_PROFILE_LOOK_TABLE_DIMS = 50981
+_TAG_PROFILE_LOOK_TABLE_DATA = 50982
+_TAG_PROFILE_LOOK_TABLE_ENCODING = 51108
+
 # TIFF type IDs (TIFF 6.0)
 _TYPE_BYTE = 1
 _TYPE_ASCII = 2
@@ -153,6 +171,45 @@ def illuminant_code_to_kelvin(code: int) -> float:
 
 
 # ---------------------------------------------------------------------------
+# DCP HSV-cube dataclass (HueSatMap + LookTable share this layout)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class HsvCube:
+    """A DCP HSV-cube transformation — covers HueSatMap and LookTable.
+
+    Both tags decode to the same shape (hue × sat × val × {hueShift_deg,
+    satScale, valScale}) and run through the same trilinear-sampling
+    algorithm (RawTherapee `dcp.cc::hsdApply` at L2013-2133 — used for
+    both). Differences are pipeline position (Adobe applies HSM before
+    BaselineExposureOffset, LookTable after) and Data2 presence (HSM has
+    per-illuminant variants; LookTable is single-illuminant).
+
+    Cube array shape: (val_divisions, hue_divisions, sat_divisions, 3) —
+    the order matches DNG 1.7.1 §"Hue Sat Map" cell traversal
+    (value-major, hue-medium, sat-minor) so reshape from the raw float
+    sequence is direct.
+
+    `srgb_gamma=True` means the cube's V axis was authored against an
+    sRGB-gamma-ENCODED V (`HueSatMapEncoding`/`LookTableEncoding` = 1
+    per DNG 1.7.1 §"Hue Sat Map Encoding"). The baker must OETF-encode
+    the linear V into perceptual space before indexing the cube and
+    EOTF-decode after applying valScale.
+    """
+
+    hue_divisions: int
+    sat_divisions: int
+    val_divisions: int
+    srgb_gamma: bool
+    data_1: np.ndarray
+    data_2: np.ndarray | None = None
+
+    @property
+    def cell_count(self) -> int:
+        return self.hue_divisions * self.sat_divisions * self.val_divisions
+
+
+# ---------------------------------------------------------------------------
 # DCP profile dataclass
 # ---------------------------------------------------------------------------
 
@@ -188,6 +245,14 @@ class DCPProfile:
 
     # Tone curve as Nx2 array of (x, y) in 0..1. None if not present.
     profile_tone_curve: np.ndarray | None = None
+
+    # DCP HSV-cube transformations (DNG 1.7.1 §"Hue Sat Map", §"Profile
+    # Look Table"). Both are HsvCube instances. HSM has Data2; LookTable
+    # never does. For Nikon D750 Camera Standard.dcp on the dev machine,
+    # `hue_sat_map` is None and `look_table` is the 90×16×16 cube that
+    # produces the ΔE post-fit ~2.24 structural residual.
+    hue_sat_map: HsvCube | None = None
+    look_table: HsvCube | None = None
 
     # Cached calibration kelvin (set after parse).
     kelvin_1: float = field(default=0.0)
@@ -281,6 +346,16 @@ def parse_dcp(path: Path) -> DCPProfile:
         n_entries = struct.unpack(f"{byte_order}H", f.read(2))[0]
 
         prof = DCPProfile()
+        # HSV-cube fields are deferred — Dims/Data/Encoding tags may appear
+        # in any IFD order, so we collect raw decoded values during the loop
+        # and resolve them to HsvCube instances afterward.
+        hsm_dims: list[int] | None = None
+        hsm_enc: int = 0
+        hsm_data1: list[float] | None = None
+        hsm_data2: list[float] | None = None
+        lt_dims: list[int] | None = None
+        lt_enc: int = 0
+        lt_data: list[float] | None = None
         for _ in range(n_entries):
             entry = f.read(12)
             tag, tag_type, count = struct.unpack(f"{byte_order}HHI", entry[:8])
@@ -328,6 +403,42 @@ def parse_dcp(path: Path) -> DCPProfile:
             ):
                 floats = _decode_floats(data, count, byte_order)
                 prof.profile_tone_curve = np.asarray(floats).reshape(count // 2, 2)
+            # HueSatMap (two illuminants — same algorithm + layout as
+            # LookTable below, just different tag IDs and pipeline position).
+            elif tag == _TAG_PROFILE_HUE_SAT_MAP_DIMS and count == 3:
+                # DNG spec mandates SHORT (type 3) but accept LONG (type 4)
+                # for symmetry with the LookTable-Dims Adobe-non-spec case.
+                if tag_type == _TYPE_SHORT:
+                    hsm_dims = _decode_short(data, 3, byte_order)
+                elif tag_type == _TYPE_LONG:
+                    hsm_dims = _decode_long(data, 3, byte_order)
+            elif tag == _TAG_PROFILE_HUE_SAT_MAP_ENCODING and tag_type == _TYPE_LONG:
+                hsm_enc = _decode_long(data, 1, byte_order)[0]
+            elif tag == _TAG_PROFILE_HUE_SAT_MAP_DATA_1 and tag_type == _TYPE_FLOAT:
+                hsm_data1 = _decode_floats(data, count, byte_order)
+            elif tag == _TAG_PROFILE_HUE_SAT_MAP_DATA_2 and tag_type == _TYPE_FLOAT:
+                hsm_data2 = _decode_floats(data, count, byte_order)
+            # LookTable (single cube, same algorithm). Adobe's real DCPs
+            # emit LookTableDims as type=4 LONG (count=3) — NOT the
+            # spec-mandated type=3 SHORT. Verified empirically against the
+            # Nikon D750 Camera Standard.dcp (LookTableDims is type=4
+            # LONG, value (90, 16, 16)). Accept both forms; fail silent on
+            # neither (cube simply not loaded).
+            elif tag == _TAG_PROFILE_LOOK_TABLE_DIMS and count == 3:
+                if tag_type == _TYPE_LONG:
+                    lt_dims = _decode_long(data, 3, byte_order)
+                elif tag_type == _TYPE_SHORT:
+                    lt_dims = _decode_short(data, 3, byte_order)
+            elif tag == _TAG_PROFILE_LOOK_TABLE_ENCODING and tag_type == _TYPE_LONG:
+                lt_enc = _decode_long(data, 1, byte_order)[0]
+            elif tag == _TAG_PROFILE_LOOK_TABLE_DATA and tag_type == _TYPE_FLOAT:
+                lt_data = _decode_floats(data, count, byte_order)
+
+    # Resolve deferred HSV-cube tags now that the IFD walk is complete.
+    if hsm_dims is not None and hsm_data1 is not None:
+        prof.hue_sat_map = _build_hsv_cube(hsm_dims, hsm_enc, hsm_data1, hsm_data2)
+    if lt_dims is not None and lt_data is not None:
+        prof.look_table = _build_hsv_cube(lt_dims, lt_enc, lt_data, None)
 
     if prof.color_matrix_1 is None:
         raise ValueError(f"{path}: missing ColorMatrix1 — not a valid DCP")
@@ -484,6 +595,82 @@ def uv_to_kelvin(u: float, v: float) -> float:
 # ---------------------------------------------------------------------------
 # DCP color matrix → camera-neutral multipliers
 # ---------------------------------------------------------------------------
+
+def _build_hsv_cube(
+    dims: list[int],
+    encoding: int,
+    data_1_floats: list[float],
+    data_2_floats: list[float] | None,
+) -> HsvCube:
+    """Construct an HsvCube from the raw DNG-IFD payload.
+
+    `dims` is the (hueDivisions, satDivisions, valDivisions) triple as
+    decoded from the file. `encoding` is the HueSatMapEncoding /
+    LookTableEncoding LONG (0 = linear V axis, 1 = sRGB-gamma-encoded V).
+    `data_1_floats` / `data_2_floats` are flat lists of 3 ×
+    hueDivisions × satDivisions × valDivisions IEEE floats; the reshape
+    order (V, H, S, 3) matches the DNG spec's cell-traversal convention
+    (value-major, hue-medium, sat-minor — see RT dcp.cc#L2088-L2091).
+    """
+    h_div, s_div, v_div = dims
+    expected = 3 * h_div * s_div * v_div
+    if len(data_1_floats) != expected:
+        raise ValueError(
+            f"DCP HSV cube size mismatch: dims={dims} → expected "
+            f"{expected} floats, got {len(data_1_floats)}"
+        )
+    arr1 = np.asarray(data_1_floats, dtype=np.float32).reshape(
+        v_div, h_div, s_div, 3
+    )
+    arr2: np.ndarray | None = None
+    if data_2_floats is not None:
+        if len(data_2_floats) != expected:
+            raise ValueError(
+                f"DCP HSV cube Data2 size {len(data_2_floats)} does not match "
+                f"Data1 size {expected} — invalid DCP"
+            )
+        arr2 = np.asarray(data_2_floats, dtype=np.float32).reshape(
+            v_div, h_div, s_div, 3
+        )
+    return HsvCube(
+        hue_divisions=h_div,
+        sat_divisions=s_div,
+        val_divisions=v_div,
+        srgb_gamma=bool(encoding & 1),
+        data_1=arr1,
+        data_2=arr2,
+    )
+
+
+def interpolate_hsv_cube(
+    cube: HsvCube,
+    kelvin: float,
+    kelvin_1: float,
+    kelvin_2: float,
+) -> np.ndarray:
+    """Per-cell mired-linear blend of an HsvCube's Data1/Data2 arrays.
+
+    LookTable cubes always have `data_2=None` and return `data_1` unchanged.
+    HSM cubes blend per-corresponding-cell between the two calibration
+    illuminants — identical math to `interpolate_color_matrix`, just on
+    the full (V, H, S, 3) cube instead of a 3×3 matrix. Numpy broadcast
+    handles the per-cell linear combination in one allocation.
+    """
+    if cube.data_2 is None or kelvin_2 == 0.0:
+        return cube.data_1
+    k_lo, k_hi = sorted([kelvin_1, kelvin_2])
+    if kelvin_1 <= kelvin_2:
+        c_lo, c_hi = cube.data_1, cube.data_2
+    else:
+        c_lo, c_hi = cube.data_2, cube.data_1
+    if kelvin <= k_lo:
+        return c_lo
+    if kelvin >= k_hi:
+        return c_hi
+    inv_lo, inv_hi = 1.0 / k_lo, 1.0 / k_hi
+    f = (1.0 / kelvin - inv_lo) / (inv_hi - inv_lo)
+    return ((1.0 - f) * c_lo + f * c_hi).astype(np.float32)
+
 
 def interpolate_color_matrix(profile: DCPProfile, kelvin: float) -> np.ndarray:
     """Interpolate ColorMatrix1/2 by kelvin per DNG SDK convention.

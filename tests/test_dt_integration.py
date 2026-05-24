@@ -335,6 +335,80 @@ def test_dt_cli_tonecurve_actually_affects_pixels(tmp_path):
     )
 
 
+def _make_test_dcp_with_looktable() -> DCPProfile:
+    """DCPProfile with a tiny identity LookTable cube.
+
+    Identity cell = (hueShift=0, satScale=1, valScale=1). dt's lut3d must
+    accept the emitted params and the cube must round-trip the pipeline
+    without distorting pixels.
+    """
+    from lrt_cinema.dcp import HsvCube
+    identity_cell = np.array([0.0, 1.0, 1.0], dtype=np.float32)
+    look = HsvCube(
+        hue_divisions=6, sat_divisions=2, val_divisions=2,
+        srgb_gamma=False,
+        data_1=np.tile(identity_cell, (2, 6, 2, 1)),
+    )
+    return DCPProfile(
+        color_matrix_1=np.array([
+            [1.0, -0.4,  0.0],
+            [-0.5, 1.3,  0.3],
+            [-0.1,  0.2, 0.8],
+        ]),
+        color_matrix_2=np.array([
+            [0.9, -0.3, -0.1],
+            [-0.5, 1.3,  0.2],
+            [-0.1,  0.2, 0.7],
+        ]),
+        kelvin_1=2856.0, kelvin_2=6504.0,
+        baseline_exposure=0.0, baseline_exposure_offset=0.0,
+        look_table=look,
+    )
+
+
+def _run_dt_cli_with_lut3d(raw: Path, xmp: Path, out_tif: Path, def_path: Path):
+    """Like _run_dt_cli but adds the lut3d def_path conf needed for cube loading."""
+    argv = [
+        "darktable-cli", str(raw), str(xmp), str(out_tif),
+        "--apply-custom-presets", "0",
+        "--icc-type", "LIN_REC2020", "--icc-intent", "RELATIVE_COLORIMETRIC",
+        "--core",
+        "-d", "common", "-d", "params",
+        "--conf", "plugins/imageio/format/tiff/bpp=16",
+        "--conf", "plugins/imageio/format/tiff/compress=0",
+        "--conf", "plugins/imageio/format/tiff/pixelformat=0",
+        "--conf", f"plugins/darkroom/lut3d/def_path={def_path}",
+    ]
+    return subprocess.run(argv, capture_output=True, text=True, timeout=120)
+
+
+def test_dt_cli_accepts_lut3d_module_emission(tmp_path):
+    """dt-cli must report 'version ok / params ok' for our lut3d v3 emission.
+
+    Validates the 12940-byte params struct layout (src/iop/lut3d.c#L69-L77
+    at SHA 9402c65275) + the .cube file emission + dt's def_path-relative
+    cube load + the trilinear-tetrahedral interpolation accepts our
+    33³ baked output. Identity LookTable so the cube has no visible effect
+    on pixels; the test is about dt accepting the emission, not about ΔE.
+    """
+    xmp = tmp_path / f"{_RAW.stem}{_RAW.suffix}.xmp"
+    emit_darktable_xmp(
+        DevelopOps(exposure_ev=0.0),
+        xmp,
+        dcp_profile=_make_test_dcp_with_looktable(),
+        dt_lut3d_def_path=tmp_path,
+    )
+    out_tif = tmp_path / "out.tif"
+    proc = _run_dt_cli_with_lut3d(_RAW, xmp, out_tif, def_path=tmp_path)
+    assert proc.returncode == 0, (
+        f"darktable-cli failed: {proc.stderr[-500:] or proc.stdout[-500:]}"
+    )
+    log = proc.stdout + proc.stderr
+    _assert_module_loaded_ok(log, "lut3d", 3)
+    # The emitted .cube must exist on disk next to the XMP.
+    assert (tmp_path / f"{_RAW.stem}{_RAW.suffix}.cube").is_file()
+
+
 def test_dt_cli_accepts_colorbalancergb_module_emission(tmp_path):
     """dt-cli must report 'params ok' for our colorbalancergb v5 emission.
 
