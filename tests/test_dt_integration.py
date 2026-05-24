@@ -405,8 +405,11 @@ def test_dt_cli_accepts_lut3d_module_emission(tmp_path):
     )
     log = proc.stdout + proc.stderr
     _assert_module_loaded_ok(log, "lut3d", 3)
-    # The emitted .cube must exist on disk next to the XMP.
-    assert (tmp_path / f"{_RAW.stem}{_RAW.suffix}.cube").is_file()
+    # A content-hashed .cube must exist on disk in the def_path dir
+    # (filename pattern: lrt-cinema-cube-<sha16>.cube). The hashing dedupes
+    # identical cubes across frames in a fixed-WB sequence.
+    cubes = list(tmp_path.glob("lrt-cinema-cube-*.cube"))
+    assert len(cubes) == 1, f"expected one content-hashed cube, got: {cubes}"
 
 
 def test_dt_cli_accepts_colorbalancergb_module_emission(tmp_path):
