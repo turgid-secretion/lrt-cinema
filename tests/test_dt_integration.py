@@ -335,6 +335,77 @@ def test_dt_cli_tonecurve_actually_affects_pixels(tmp_path):
     )
 
 
+def test_dt_cli_accepts_sharpen_module_emission(tmp_path):
+    """dt-cli must report 'params ok' for our sharpen v1 emission.
+
+    Validates dt_iop_sharpen_params_t struct layout — 3 floats (radius,
+    amount, threshold) = 12 bytes at modversion 1 (src/iop/sharpen.c#L39-L48
+    at SHA 9402c65275). Mirrors the silent-substitution gate from the
+    base64-bug class.
+    """
+    xmp = tmp_path / f"{_RAW.stem}{_RAW.suffix}.xmp"
+    # Sharpness=50 (LR mid-range) → dt amount 1.0; non-default and
+    # non-default-LR, so the emit gate fires.
+    emit_darktable_xmp(DevelopOps(exposure_ev=0.0, sharpness=50.0), xmp)
+    out_tif = tmp_path / "out.tif"
+    proc = _run_dt_cli(_RAW, xmp, out_tif)
+    assert proc.returncode == 0, (
+        f"darktable-cli failed: {proc.stderr[-500:] or proc.stdout[-500:]}"
+    )
+    log = proc.stdout + proc.stderr
+    _assert_module_loaded_ok(log, "sharpen", 1)
+
+
+def test_dt_cli_sharpen_actually_affects_pixels(tmp_path):
+    """Render with + without sharpen; pixels must differ.
+
+    Catches the silent-substitution failure mode where dt accepts the XMP
+    but rejects the params blob and substitutes module defaults.
+    """
+    xmp_no = tmp_path / "no_sharp.xmp"
+    emit_darktable_xmp(DevelopOps(exposure_ev=0.0), xmp_no)  # sharpness=0 = no emit
+    xmp_yes = tmp_path / "sharp.xmp"
+    emit_darktable_xmp(DevelopOps(exposure_ev=0.0, sharpness=100.0), xmp_yes)  # → amount 2.0
+    out_no = tmp_path / "no.tif"
+    out_yes = tmp_path / "yes.tif"
+    proc_no = _run_dt_cli(_RAW, xmp_no, out_no)
+    proc_yes = _run_dt_cli(_RAW, xmp_yes, out_yes)
+    assert proc_no.returncode == 0, proc_no.stderr[-500:]
+    assert proc_yes.returncode == 0, proc_yes.stderr[-500:]
+    b_no = out_no.read_bytes()[65536:65536 + 1_000_000]
+    b_yes = out_yes.read_bytes()[65536:65536 + 1_000_000]
+    assert b_no != b_yes, (
+        "no-sharpen and sharpen renders produced byte-identical pixel data — "
+        "dt is silently ignoring our sharpen params."
+    )
+
+
+def test_dt_cli_blacks_actually_affects_pixels(tmp_path):
+    """Render with + without Blacks2012; pixels must differ.
+
+    Validates that the exposure.black field — set via dt's own
+    lr2dt_blacks mapping at src/develop/lightroom.c#L279-L285 — actually
+    reaches the pipe. Blacks2012=-100 → dt black=+0.020 (lifts shadows);
+    Blacks2012=0 → dt black=0 (no-op).
+    """
+    xmp_no = tmp_path / "blk0.xmp"
+    emit_darktable_xmp(DevelopOps(exposure_ev=0.0, blacks=0.0), xmp_no)
+    xmp_yes = tmp_path / "blk_neg.xmp"
+    emit_darktable_xmp(DevelopOps(exposure_ev=0.0, blacks=-100.0), xmp_yes)
+    out_no = tmp_path / "no.tif"
+    out_yes = tmp_path / "yes.tif"
+    proc_no = _run_dt_cli(_RAW, xmp_no, out_no)
+    proc_yes = _run_dt_cli(_RAW, xmp_yes, out_yes)
+    assert proc_no.returncode == 0, proc_no.stderr[-500:]
+    assert proc_yes.returncode == 0, proc_yes.stderr[-500:]
+    b_no = out_no.read_bytes()[65536:65536 + 1_000_000]
+    b_yes = out_yes.read_bytes()[65536:65536 + 1_000_000]
+    assert b_no != b_yes, (
+        "Blacks2012=0 and Blacks2012=-100 produced byte-identical renders — "
+        "dt is silently ignoring the black field in our exposure params."
+    )
+
+
 def test_dt_cli_ev_value_actually_reaches_pixels(tmp_path):
     """Render same RAW with EV=0 and EV=+2; assert pixel data differs.
 

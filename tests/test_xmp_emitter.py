@@ -4,10 +4,17 @@ import struct
 import xml.etree.ElementTree as ET
 
 import numpy as np
+import pytest
 
 from lrt_cinema.dcp import DCPProfile
 from lrt_cinema.ir import DevelopOps, TonePoint
-from lrt_cinema.xmp_emitter import DT_NS, RDF_NS, emit_darktable_xmp
+from lrt_cinema.xmp_emitter import (
+    DT_NS,
+    RDF_NS,
+    emit_darktable_xmp,
+    lr_blacks_to_dt_black,
+    lr_sharpness_to_dt_amount,
+)
 
 
 def _parse(path):
@@ -356,3 +363,94 @@ def test_exposure_params_roundtrip(tmp_path):
             break
     else:
         raise AssertionError("exposure entry missing")
+
+
+# ---------------------------------------------------------------------------
+# PV2012 → dt mapping helpers (Blacks2012 + Sharpness)
+# ---------------------------------------------------------------------------
+
+def test_lr_blacks_to_dt_black_breakpoints_match_dt_lightroom_c():
+    # Verbatim from darktable's src/develop/lightroom.c#L279-L285 at SHA
+    # 9402c65275. Any drift from these exact values means we've diverged
+    # from dt's own LR-import behavior, which is the bug we explicitly
+    # don't want. Float comparison uses a tight tolerance — endpoints
+    # match exactly, interior interpolation accumulates the usual IEEE
+    # noise.
+    assert lr_blacks_to_dt_black(-100.0) == pytest.approx(0.020, abs=1e-9)
+    assert lr_blacks_to_dt_black( -50.0) == pytest.approx(0.005, abs=1e-9)
+    assert lr_blacks_to_dt_black(   0.0) == pytest.approx(0.000, abs=1e-9)
+    assert lr_blacks_to_dt_black(  50.0) == pytest.approx(-0.005, abs=1e-9)
+    assert lr_blacks_to_dt_black( 100.0) == pytest.approx(-0.010, abs=1e-9)
+
+
+def test_lr_blacks_to_dt_black_interpolates_between_breakpoints():
+    # Midpoints linearly interpolate.
+    assert lr_blacks_to_dt_black(-75.0) == pytest.approx(0.0125, abs=1e-9)
+    assert lr_blacks_to_dt_black( 25.0) == pytest.approx(-0.0025, abs=1e-9)
+
+
+def test_lr_blacks_to_dt_black_clamps_out_of_range():
+    assert lr_blacks_to_dt_black(-9999.0) == pytest.approx(0.020, abs=1e-9)
+    assert lr_blacks_to_dt_black( 9999.0) == pytest.approx(-0.010, abs=1e-9)
+
+
+def test_lr_sharpness_to_dt_amount_defaults_align():
+    # LR default 25 → dt default 0.5 (both modules' own out-of-box values).
+    assert lr_sharpness_to_dt_amount(25.0) == 0.5
+    assert lr_sharpness_to_dt_amount( 0.0) == 0.0
+    assert lr_sharpness_to_dt_amount(100.0) == 2.0
+    # Above LR 100 clamps to dt max 2.0 (avoids overdriving dt's USM).
+    assert lr_sharpness_to_dt_amount(150.0) == 2.0
+
+
+def test_emitter_uses_lr2dt_blacks_mapping(tmp_path):
+    # Blacks2012=-100 → dt exposure.black=+0.020 reaches the params blob.
+    out = tmp_path / "frame.xmp"
+    emit_darktable_xmp(DevelopOps(exposure_ev=0.0, blacks=-100.0), out)
+    root = _parse(out)
+    for li in root.iter(f"{{{RDF_NS}}}li"):
+        if li.get(f"{{{DT_NS}}}operation") == "exposure":
+            params_hex = li.get(f"{{{DT_NS}}}params")
+            decoded = bytes.fromhex(params_hex)
+            _mode, black, *_ = struct.unpack("<iffffii", decoded)
+            assert black == pytest.approx(0.020, abs=1e-6)
+            break
+    else:
+        raise AssertionError("exposure entry missing")
+
+
+def test_emitter_omits_sharpen_for_lr_default(tmp_path):
+    # LR Sharpness=25 is the out-of-camera default — emit gate must skip,
+    # otherwise every neutral keyframe in a real LRT sequence gets a
+    # spurious sharpen module added to the history. Also skips
+    # Sharpness=0 (LR's explicit "no sharpening").
+    for s in (0.0, 25.0):
+        out = tmp_path / f"sharp_{s}.xmp"
+        emit_darktable_xmp(DevelopOps(exposure_ev=0.0, sharpness=s), out)
+        root = _parse(out)
+        ops_present = [
+            li.get(f"{{{DT_NS}}}operation")
+            for li in root.iter(f"{{{RDF_NS}}}li")
+        ]
+        assert "sharpen" not in ops_present, (
+            f"sharpen should not emit for LR default Sharpness={s}, got history "
+            f"{ops_present}"
+        )
+
+
+def test_emitter_emits_sharpen_for_non_default_sharpness(tmp_path):
+    # Sharpness=50 is user-set creative intent → emit.
+    out = tmp_path / "sharp_50.xmp"
+    emit_darktable_xmp(DevelopOps(exposure_ev=0.0, sharpness=50.0), out)
+    root = _parse(out)
+    sharpen_entries = [
+        li for li in root.iter(f"{{{RDF_NS}}}li")
+        if li.get(f"{{{DT_NS}}}operation") == "sharpen"
+    ]
+    assert len(sharpen_entries) == 1
+    params_hex = sharpen_entries[0].get(f"{{{DT_NS}}}params")
+    assert all(c in "0123456789abcdef" for c in params_hex)
+    radius, amount, threshold = struct.unpack("<fff", bytes.fromhex(params_hex))
+    assert radius == pytest.approx(2.0, abs=1e-6)
+    assert amount == pytest.approx(1.0, abs=1e-6)  # LR 50 → dt 1.0
+    assert threshold == pytest.approx(0.5, abs=1e-6)

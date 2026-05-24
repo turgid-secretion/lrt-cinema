@@ -82,6 +82,16 @@ Bumped from 6 to 7 in dt 5.x when `compensate_hilite_pres` gboolean was added
 to the params struct. dt's legacy_params migration would handle v6→v7 on read,
 but emitting the canonical current modversion is preferred."""
 
+SHARPEN_MODVERSION = "1"
+"""dt sharpen module modversion (src/iop/sharpen.c#L39 at dt SHA 9402c65275).
+Three floats: radius, amount, threshold. dt's USM (unsharp mask). LR's
+Sharpness slider (0..150, default 25) maps to dt sharpen.amount via a
+linear scale picked so the defaults line up (LR 25 ↔ dt amount 0.5) and
+LR's maxed-out 150 lands at dt amount 3.0 (clamped to dt's max 2.0). The
+LR sub-knobs SharpenRadius / SharpenDetail / SharpenEdgeMasking are NOT
+parsed by lrt-cinema today — we map only the master amount, matching
+darktable's own lightroom.c which also drops the sub-knobs."""
+
 TEMPERATURE_MODVERSION = "4"
 """dt temperature module current modversion (src/iop/temperature.c#L46 in dt
 master at SHA 9402c65275). v4 added the `int preset` field to the params
@@ -144,6 +154,13 @@ _TONECURVE_PRESERVE_AVERAGE = 3
 # preset value — it only matters for GUI display.
 _TEMPERATURE_PRESET_USER = 2
 
+# LR's out-of-camera default for Sharpness. Real LRT 7.5.3 writes this on
+# every keyframe XMP regardless of user touch (validated against the user's
+# production sequence DSC_*.xmp), so it cannot carry creative intent and
+# emit-gating must treat it as "no intent." Public name (no leading
+# underscore) so cli.py can import it for the dropped-warning consistency.
+LR_SHARPNESS_DEFAULT = 25.0
+
 # Blendop attrs (`darktable:blendop_version`, `darktable:blendop_params`)
 # are intentionally NOT emitted. Per docs/research/ADVERSARIAL_AUDIT_2026-05-23.md
 # HIGH-1, our prior values (`blendop_version="11"` + 64-byte zero blob) were
@@ -158,7 +175,59 @@ _TEMPERATURE_PRESET_USER = 2
 # (e.g. masked exposure for a specific look).
 
 
-def _encode_exposure_params(exposure_ev: float) -> str:
+# PV2012 Blacks2012 → dt exposure.black 5-point LUT.
+#
+# Verbatim from darktable's own LR-import mapping at
+# src/develop/lightroom.c#L279-L285 (SHA 9402c65275). LR Blacks2012 is in
+# 0..100 "Adobe perceptual units"; dt exposure.black is in linear-RGB
+# displacement units. The LUT is dt's calibrated answer to "what dt black
+# offset approximates LR Blacks2012=v". Values between breakpoints linearly
+# interpolate. dt drops nothing else from PV2012 — this is the one slider
+# they shipped a measured mapping for.
+_LR2DT_BLACKS_TABLE: tuple[tuple[float, float], ...] = (
+    (-100.0,  0.020),
+    ( -50.0,  0.005),
+    (   0.0,  0.000),
+    (  50.0, -0.005),
+    ( 100.0, -0.010),
+)
+
+
+def lr_blacks_to_dt_black(value: float) -> float:
+    """Map an LR Blacks2012 value (-100..+100) to a dt exposure.black float.
+
+    Linear interpolation between the 5 breakpoints in `_LR2DT_BLACKS_TABLE`.
+    Out-of-range inputs clamp to the nearest endpoint (LR's slider clamps
+    at the GUI; the parser allows over-range numerics so this guards).
+    """
+    if value <= _LR2DT_BLACKS_TABLE[0][0]:
+        return _LR2DT_BLACKS_TABLE[0][1]
+    if value >= _LR2DT_BLACKS_TABLE[-1][0]:
+        return _LR2DT_BLACKS_TABLE[-1][1]
+    for i in range(len(_LR2DT_BLACKS_TABLE) - 1):
+        lr_lo, dt_lo = _LR2DT_BLACKS_TABLE[i]
+        lr_hi, dt_hi = _LR2DT_BLACKS_TABLE[i + 1]
+        if lr_lo <= value <= lr_hi:
+            if lr_hi == lr_lo:
+                return dt_lo
+            t = (value - lr_lo) / (lr_hi - lr_lo)
+            return dt_lo + t * (dt_hi - dt_lo)
+    return 0.0  # unreachable — endpoints clamped above
+
+
+def lr_sharpness_to_dt_amount(value: float) -> float:
+    """Map LR Sharpness (0..150) to dt sharpen.amount (clamped to 0..2.0).
+
+    Linear scale picked so defaults line up: LR 25 (LR's out-of-camera
+    default) → dt amount 0.5 (dt's own default per src/iop/sharpen.c#L46
+    at SHA 9402c65275). LR 100 → dt 2.0 (dt's max). Above LR 100 we clamp
+    rather than overdrive — values that high are unusual in production
+    timelapse XMP and dt's max amount of 2.0 is already an aggressive USM.
+    """
+    return max(0.0, min(2.0, float(value) / 50.0))
+
+
+def _encode_exposure_params(exposure_ev: float, black: float = 0.0) -> str:
     """Encode darktable exposure module params (modversion 7) as HEX ASCII.
 
     Struct layout from src/iop/exposure.c#L66-75 at dt master SHA
@@ -174,6 +243,10 @@ def _encode_exposure_params(exposure_ev: float) -> str:
 
     Total: 7 fields * 4 bytes = 28 bytes (no struct padding; all 4-aligned).
 
+    The `black` field carries the lr2dt-mapped Blacks2012 displacement
+    (see `lr_blacks_to_dt_black`), matching darktable's own LR-import
+    behavior at src/develop/lightroom.c#L279-L285.
+
     ENCODING: hexadecimal ASCII (lowercase 0-9a-f), not base64. dt's XMP
     reader at src/common/exif.cc#L3252-3270 runs
     `strspn(input, "0123456789abcdef")` and rejects anything that fails.
@@ -187,12 +260,45 @@ def _encode_exposure_params(exposure_ev: float) -> str:
     payload = struct.pack(
         "<iffffii",
         0,             # mode = manual
-        0.0,           # black
+        float(black),
         float(exposure_ev),
         50.0,          # deflicker_percentile
         -4.0,          # deflicker_target_level
         0,             # compensate_exposure_bias = FALSE (default)
         1,             # compensate_hilite_pres = TRUE (default per v7)
+    )
+    return payload.hex()
+
+
+def _encode_sharpen_params(
+    amount: float,
+    radius: float = 2.0,
+    threshold: float = 0.5,
+) -> str:
+    """Encode darktable sharpen module params (modversion 1) as HEX ASCII.
+
+    Struct layout from src/iop/sharpen.c#L43-L48 at dt SHA 9402c65275
+    (DT_MODULE_INTROSPECTION(1, dt_iop_sharpen_params_t)):
+
+        float radius;    // $DEFAULT: 2.0  ($MAX: 99.0)
+        float amount;    // $DEFAULT: 0.5  ($MAX:  2.0)
+        float threshold; // $DEFAULT: 0.5  ($MAX:100.0)
+
+    Total: 12 bytes. Module operates in Lab colorspace
+    (src/iop/sharpen.c#L83-L88 default_colorspace=IOP_CS_LAB) — sharpen
+    runs post-display-transform regardless of the cinema-linear preset.
+    That's consistent with LR's own pipeline position for the Sharpness
+    slider; the cinema-linear preset's "truly linear" promise is about
+    the OUTPUT color encoding, not the absence of any non-linear ops.
+    """
+    payload = struct.pack(
+        "<fff",
+        float(radius),
+        float(amount),
+        float(threshold),
+    )
+    assert len(payload) == 12, (
+        f"sharpen params struct size mismatch: got {len(payload)}, expected 12"
     )
     return payload.hex()
 
@@ -547,11 +653,18 @@ def emit_darktable_xmp(
         effective_exposure_ev += dcp_profile.baseline_exposure
         effective_exposure_ev += dcp_profile.baseline_exposure_offset
 
+    # PV2012 Blacks2012 piggybacks on dt's exposure.black field via dt's
+    # own lr2dt mapping (src/develop/lightroom.c#L279-L285). Verbatim port
+    # — dt is the source of truth for "what dt black approximates LR
+    # Blacks2012". When ops.blacks is 0 (LR default), this resolves to
+    # black=0.0 and is a no-op.
+    effective_black = lr_blacks_to_dt_black(ops.blacks)
+
     num = 0
     _make_history_entry(
         seq, num=num, operation="exposure", enabled=True,
         modversion=EXPOSURE_MODVERSION,
-        params_b64=_encode_exposure_params(effective_exposure_ev),
+        params_b64=_encode_exposure_params(effective_exposure_ev, black=effective_black),
     )
     num += 1
 
@@ -608,6 +721,22 @@ def emit_darktable_xmp(
             seq, num=num, operation="basecurve", enabled=True,
             modversion=BASECURVE_MODVERSION,
             params_b64=_encode_basecurve_params(dcp_curve),
+        )
+        num += 1
+
+    # Sharpen — emit only when ops.sharpness carries authored intent.
+    # Skip the LR out-of-camera default (Sharpness=25, which the dropped-
+    # warning helper also ignores) AND the explicit-zero case (LR's "no
+    # sharpening"); both should leave dt's pipeline unsharpened. Real
+    # creative intent on this slider is rare in production timelapse XMP,
+    # so the per-frame cost of the emit gate is acceptable.
+    if ops.sharpness not in (0.0, LR_SHARPNESS_DEFAULT):
+        _make_history_entry(
+            seq, num=num, operation="sharpen", enabled=True,
+            modversion=SHARPEN_MODVERSION,
+            params_b64=_encode_sharpen_params(
+                amount=lr_sharpness_to_dt_amount(ops.sharpness),
+            ),
         )
         num += 1
 
