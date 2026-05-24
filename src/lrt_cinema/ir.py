@@ -9,22 +9,6 @@ inputs.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from enum import Enum
-
-
-class InterpolationMode(str, Enum):
-    """How per-frame DevelopOps are derived from sparse keyframes.
-
-    `linear` — piecewise-linear between adjacent keyframes (v0.1 default).
-    `smooth` — uniform Catmull-Rom cubic spline with mirror-extrapolated
-              phantom tangents at the endpoints. With only two keyframes
-              the phantoms collapse the cubic to an exact line; with
-              three or more keyframes the spline runs through every
-              keyframe and matches chord slope at the sequence ends.
-    """
-
-    linear = "linear"
-    smooth = "smooth"
 
 
 @dataclass(frozen=True)
@@ -199,7 +183,6 @@ class LRTSequence:
     # Real-LRT per-frame mask-correction deltas (HG / Deflicker / Global).
     # Schema observed in LRT 7.5.3 sequence XMPs; see LRTMaskOffset.
     lrt_mask_offsets: list[LRTMaskOffset] = field(default_factory=list)
-    interpolation_mode: InterpolationMode = InterpolationMode.linear
 
     def frame_count(self) -> int:
         return len(self.source_frames)

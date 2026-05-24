@@ -26,7 +26,6 @@ from lrt_cinema.dcp import (
     _adobe_camera_label,
     _build_hsv_cube,
     adobe_make_for_camera,
-    auto_detect_dcp,
     auto_detect_profile,
     find_dcp_for_camera,
     find_extracted_profile_for_camera,
@@ -482,13 +481,6 @@ def test_find_dcp_for_camera_searches_extra_roots(tmp_path):
 
 def test_find_dcp_for_camera_returns_none_on_miss(tmp_path):
     assert find_dcp_for_camera("UnknownVendor", "X", extra_roots=[tmp_path]) is None
-
-
-def test_auto_detect_dcp_end_to_end_with_synthetic(tmp_path):
-    nef = tmp_path / "fake.NEF"
-    nef.write_bytes(_build_synthetic_nef("ACMECAM", "Z1"))
-    # No DCP planted anywhere — returns None.
-    assert auto_detect_dcp(nef) is None
 
 
 # ---------------------------------------------------------------------------

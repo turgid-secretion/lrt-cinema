@@ -950,24 +950,6 @@ def find_dcp_for_camera(
     return None
 
 
-def auto_detect_dcp(raw_path: Path) -> Path | None:
-    """End-to-end: probe a RAW's Make/Model and return a matching DCP path.
-
-    Returns None when the RAW's Make/Model cannot be read (non-TIFF
-    format, truncated file) or when no matching DCP is installed.
-
-    Note: callers preferring format-agnostic profile loading (which also
-    picks up lrt-cinema's own .npz extracted-profile format from user
-    config / env-var roots, not just Adobe .dcp files) should use
-    `auto_detect_profile()` instead.
-    """
-    info = read_raw_make_model(raw_path)
-    if info is None:
-        return None
-    make, model = info
-    return find_dcp_for_camera(make, model)
-
-
 # ---------------------------------------------------------------------------
 # Extracted-profile format (.npz) — Adobe-free in-repo path
 # ---------------------------------------------------------------------------

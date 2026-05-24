@@ -60,7 +60,6 @@ def render_frame(
     output_dir: Path,
     ops: DevelopOps,
     preset: Preset,
-    bundled_style_dir: Path | None = None,
     custom_style: Path | None = None,
     dcp_profile: DCPProfile | None = None,
     apply_dcp_tone_curve: bool = True,
@@ -104,10 +103,6 @@ def render_frame(
     style_path: Path | None = None
     if custom_style is not None:
         style_path = custom_style.resolve()
-    elif bundled_style_dir is not None and preset.style_filename:
-        candidate = (bundled_style_dir / preset.style_filename).resolve()
-        if candidate.exists():
-            style_path = candidate
 
     # Build argv per dt EXPORT.md (docs/reference/darktable/EXPORT.md).
     #
@@ -238,7 +233,6 @@ def render_sequence(
     source_frames: list[str],
     from_frame: int = 0,
     to_frame: int | None = None,
-    bundled_style_dir: Path | None = None,
     custom_style: Path | None = None,
     dcp_profile: DCPProfile | None = None,
     apply_dcp_tone_curve: bool = True,
@@ -258,7 +252,6 @@ def render_sequence(
             output_dir=output_dir,
             ops=ops,
             preset=preset,
-            bundled_style_dir=bundled_style_dir,
             custom_style=custom_style,
             dcp_profile=dcp_profile,
             apply_dcp_tone_curve=apply_dcp_tone_curve,

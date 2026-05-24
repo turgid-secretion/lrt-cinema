@@ -13,7 +13,6 @@ from lrt_cinema.interpolation import (
     apply_lrt_mask_offsets,
     materialize_all_frames,
 )
-from lrt_cinema.ir import InterpolationMode
 from lrt_cinema.presets import PRESETS, get_preset
 from lrt_cinema.runner import DarktableCliNotFound, render_sequence
 from lrt_cinema.xmp_parser import parse_sequence
@@ -53,14 +52,6 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Output preset.")
     render.add_argument("--style", type=Path, default=None,
                         help="Optional custom darktable .style overriding the bundled preset style.")
-    render.add_argument("--interpolation", choices=("linear", "smooth"),
-                        default="linear",
-                        help="Keyframe interpolation mode. 'smooth' uses uniform "
-                             "Catmull-Rom with mirror-extrapolated phantom tangents "
-                             "(degenerates to linear for 2-keyframe sequences). "
-                             "NOT validated to match LRT's spline shape — for "
-                             "LRT-fidelity, prefer 'linear' or run Auto Transition "
-                             "in LRT first (we then exact-match LRT's per-frame values).")
     render.add_argument("--deflicker", choices=("none", "apply-lrt-offsets"),
                         default="apply-lrt-offsets",
                         help="Deflicker mode. 'apply-lrt-offsets' uses the per-frame "
@@ -140,8 +131,6 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="First frame index to render (inclusive).")
     render.add_argument("--to-frame", type=int, default=None,
                         help="Last frame index to render (exclusive). Default: end of sequence.")
-    render.add_argument("--workers", type=int, default=1,
-                        help="Parallel render workers. v0.1 supports 1 only.")
     render.add_argument("--dry-run", action="store_true",
                         help="Emit XMPs but skip the darktable-cli invocation.")
     render.add_argument("--quiet", action="store_true",
@@ -346,11 +335,6 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
 
 
 def _cmd_render(args: argparse.Namespace) -> int:
-    if args.workers != 1:
-        sys.stderr.write(
-            "warning: --workers > 1 is not yet implemented; falling back to 1.\n"
-        )
-
     preset = get_preset(args.preset)
 
     try:
@@ -455,8 +439,6 @@ def _cmd_render(args: argparse.Namespace) -> int:
             f"{args.from_frame} < to-frame <= {seq.frame_count()}\n"
         )
         return 2
-
-    seq.interpolation_mode = InterpolationMode(args.interpolation)
 
     per_frame = materialize_all_frames(seq)
     # Pipeline ordering: keyframe-interpolated values are the base; then
