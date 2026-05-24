@@ -324,8 +324,23 @@ def parse_dcp(path: Path) -> DCPProfile:
 
     DCPs use the TIFF/IFD container format. We read IFD0 only — DCPs
     have a single IFD by spec (DNG 1.7.1 §"Camera Profile Format").
+
+    Raises ValueError on malformed input (bad magic, truncated header,
+    short read mid-IFD). A bare struct.error from a truncated DCP would
+    surface to callers as an opaque traceback; rewrapping it here keeps
+    DCP-error handling uniform on the `(FileNotFoundError, ValueError)`
+    contract every callsite already catches.
     """
     path = Path(path)
+    try:
+        return _parse_dcp_impl(path)
+    except struct.error as exc:
+        raise ValueError(
+            f"{path}: malformed DCP (struct unpack failed: {exc})"
+        ) from exc
+
+
+def _parse_dcp_impl(path: Path) -> DCPProfile:
     with open(path, "rb") as f:
         header = f.read(8)
         if header[:2] == b"II":
@@ -1039,7 +1054,11 @@ def load_profile(path: Path) -> DCPProfile:
         if version != _PROFILE_FORMAT_VERSION:
             raise ValueError(
                 f"{path}: unsupported profile format_version {version} "
-                f"(expected {_PROFILE_FORMAT_VERSION})"
+                f"(this lrt-cinema build understands "
+                f"format_version={_PROFILE_FORMAT_VERSION}). "
+                f"Re-extract by running `tools/extract_dcp_library.py` "
+                f"with the current version, or upgrade/downgrade "
+                f"lrt-cinema to match the file's version."
             )
         if "color_matrix_1" not in data:
             raise ValueError(f"{path}: missing color_matrix_1 — not a valid extracted profile")
