@@ -63,24 +63,28 @@ Smooth interpolation uses uniform Catmull-Rom: keyframe spacing (in frame indice
 
 ## Emitted vs parsed DevelopOps
 
-The parser reads the full Camera Raw Settings field set the LRTimelapse XMP carries. The emitter, at v0.1, only writes a subset into the darktable history stack:
+The parser reads the full Camera Raw Settings field set the LRTimelapse XMP carries. v0.4 emits an expanded subset into the darktable history stack:
 
-| Field | Parsed | Interpolated | Emitted to darktable XMP |
-|---|---|---|---|
-| `exposure_ev` | yes | yes | yes |
-| `temperature_k` | yes | yes | yes (module enabled, but params are neutral 1.0 multipliers — kelvin→multipliers needs the camera's DCP profile, calibration item) |
-| `tint` | yes | yes | dropped (depends on temperature calibration) |
-| `contrast` | yes | yes | dropped |
-| `highlights` | yes | yes | dropped |
-| `shadows` | yes | yes | dropped |
-| `whites` | yes | yes | dropped |
-| `blacks` | yes | yes | dropped |
-| `saturation` | yes | yes | dropped |
-| `vibrance` | yes | yes | dropped |
-| `sharpness` | yes | yes | dropped |
-| `tone_curve` | yes | yes | dropped |
+| Field | Parsed | Interpolated | Emitted to darktable XMP | dt module |
+|---|---|---|---|---|
+| `exposure_ev` | yes | yes | yes | `exposure` |
+| `temperature_k` | yes | yes | yes (when explicit kelvin AND a DCP is supplied; DCP color matrices derive RGGB multipliers) | `temperature` |
+| `tint` | yes | yes | yes (rides on the temperature emission via DCP kelvin→xy→multiplier math; emits only when temperature_k is also set) | `temperature` |
+| `contrast` | yes | yes | dropped (TBR; dt's own LR-import also drops this — PV2012 contrast math is closed-source and the right dt-module target is unsettled) | — |
+| `highlights` | yes | yes | dropped (TBR; same — PV2012 highlights is Local-Laplacian-Filter family, dt has no LR-equivalent module) | — |
+| `shadows` | yes | yes | dropped (TBR; same — PV2012 shadows is LLF family) | — |
+| `whites` | yes | yes | dropped (TBR; LR's whites pivot has no dt-native equivalent) | — |
+| `blacks` | yes | yes | **yes** (5-point LUT verbatim from dt's `lr2dt_blacks_table` at src/develop/lightroom.c#L279-L285, SHA 9402c65275; piggybacks on the exposure module's `black` field) | `exposure.black` |
+| `saturation` | yes | yes | dropped (TBR; right target is `colorbalancergb` global saturation, large params struct — pending v0.4.x landing alongside HSM) | — |
+| `vibrance` | yes | yes | dropped (TBR; same — `colorbalancergb` global vibrance) | — |
+| `sharpness` | yes | yes | **yes** (LR Sharpness → dt sharpen.amount via linear scale with default-alignment; LR 25 → dt 0.5, LR 100 → dt 2.0. LR sub-knobs SharpenRadius/Detail/EdgeMasking ignored, consistent with dt's lightroom.c also dropping them) | `sharpen` |
+| `tone_curve` | yes | yes | **yes** (`crs:ToneCurvePV2012` → dt tonecurve module, AUTOMATIC_RGB autoscale; LR-authored non-identity curve wins over any DCP-bundled curve) | `tonecurve` |
+| DCP ProfileToneCurve | (via --dcp) | n/a | yes (when --dcp and no LR-authored curve; via basecurve module with preserve_colors=MAX) | `basecurve` |
+| DCP BaselineExposure | (via --dcp) | n/a | yes (additive on top of ops.exposure_ev) | `exposure.exposure` |
 
-Dropped fields are honored once `presets/*.style` files carry calibrated `op_params` (see `CALIBRATION.md`) AND a per-frame style-emission path replaces the current "one bundled style + per-frame XMP override" split. v0.1 emits only the modules whose binary params layout we know is stable: `exposure` (well-known 6-field struct).
+Dropped fields tagged "TBR" emit nothing today; render-time stderr prints a one-line `warning: dropped at emit` when any keyframe carries non-default-non-LR-default intent on those fields. LR defaults like Sharpness=25 and identity ToneCurvePV2012 [0,0]→[1,1] are correctly excluded — they fire on every XMP regardless of user touch and would otherwise produce a permanent false positive on every neutral keyframe.
+
+DCP path: `--dcp` and `--no-auto-dcp` flags control the optional DCP-driven emission. When neither is supplied AND auto-detect is enabled (default), the renderer probes the first source RAW's EXIF Make/Model (TIFF IFD0 reader covers NEF/DNG/ARW/RW2/RAF/ORF/FFF) and looks up the matching DCP under the standard Adobe install paths in this preference order: `Camera/<label>/<label> Camera Standard.dcp` → `Camera/<label>/<label> Adobe Standard.dcp` → `Adobe Standard/<label> Adobe Standard.dcp`. Canon CR3 (ISO BMFF) and other non-TIFF RAW formats fall through to the no-DCP path; the user can still pass `--dcp <path>` explicitly.
 
 ## Frame ordering
 
