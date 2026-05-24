@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from lrt_cinema import __version__
-from lrt_cinema.dcp import auto_detect_dcp, parse_dcp, read_raw_make_model
+from lrt_cinema.dcp import auto_detect_profile, parse_dcp, read_raw_make_model
 from lrt_cinema.interpolation import (
     apply_deflicker,
     apply_holy_grail_ramps,
@@ -82,31 +82,34 @@ def _build_parser() -> argparse.ArgumentParser:
                              "'hg' / 'deflicker' / 'global' = single source. See "
                              "docs/reference/lrtimelapse/XMP_SCHEMA.md for schema.")
     render.add_argument("--dcp", type=Path, default=None,
-                        help="Path to an Adobe DNG Camera Profile (DCP) file. When "
-                             "supplied, the emitter uses the DCP's bundled tone curve "
-                             "and BaselineExposure to close the gap against LR's "
-                             "render. If the LRT XMP carries an explicit kelvin "
-                             "override, the DCP's color matrices are also used to "
-                             "derive the temperature module's RGGB multipliers. "
-                             "Without an explicit --dcp the renderer tries to "
-                             "AUTO-DETECT a DCP by reading the source RAW's EXIF "
-                             "Make/Model and looking up the matching "
-                             "<Make> <Model> Camera Standard.dcp under the standard "
-                             "Adobe DNG Converter install paths "
+                        help="Explicit path to a DCP profile. Accepts either Adobe "
+                             "DNG Converter `.dcp` files or lrt-cinema's `.npz` "
+                             "extracted profile format (per "
+                             "`tools/extract_dcp.py`). Without --dcp the renderer "
+                             "AUTO-DETECTS by reading the source RAW's EXIF "
+                             "Make/Model and searching, in order: "
+                             "(1) $LRT_CINEMA_PROFILES env var, "
+                             "(2) ~/.config/lrt-cinema/profiles/ (or "
+                             "%%APPDATA%%/lrt-cinema/profiles/ on Windows), "
+                             "(3) Adobe DNG Converter install paths "
                              "(/Library/Application Support/Adobe/CameraRaw/"
                              "CameraProfiles/ on macOS; %%ProgramData%%\\Adobe\\"
-                             "CameraRaw\\CameraProfiles\\ on Windows). Auto-detect "
-                             "is suppressed by --no-auto-dcp. When no DCP is "
-                             "supplied or detected, the renderer falls back to "
-                             "darktable's libraw-derived defaults — the output will "
-                             "diverge from LR's by the DCP-application gap (typically "
-                             "ΔE2000 mean 5-10 on real footage).")
+                             "CameraRaw\\CameraProfiles\\ on Windows). The first "
+                             "two roots hold lrt-cinema's `.npz` extracted profiles "
+                             "(populated via `tools/extract_dcp_library.py` or by "
+                             "cloning a sister `lrt-cinema-profiles` repo); the "
+                             "Adobe path is the fallback for users who still have "
+                             "the Adobe DCP install. Auto-detect is suppressed by "
+                             "--no-auto-dcp. When nothing is found, the renderer "
+                             "falls back to darktable's libraw-derived defaults — "
+                             "the output will diverge from LR's by the DCP-"
+                             "application gap (typically ΔE2000 mean 5-10).")
     render.add_argument("--no-auto-dcp", dest="auto_dcp",
                         action="store_false", default=True,
                         help="Suppress the auto-detect-DCP fallback when --dcp is not "
                              "supplied. Useful for reproducible 'no DCP' renders or "
-                             "when the Adobe-bundled DCP for a camera is known to "
-                             "produce a worse result than dt's libraw default.")
+                             "when the bundled DCP for a camera is known to produce "
+                             "a worse result than dt's libraw default.")
     render.add_argument("--no-dcp-tone-curve", dest="apply_dcp_tone_curve",
                         action="store_false", default=True,
                         help="When --dcp is supplied, suppress emission of the "
@@ -395,38 +398,50 @@ def _cmd_render(args: argparse.Namespace) -> int:
         return 2
 
     dcp_profile = None
-    dcp_path: Path | None = args.dcp
-    if dcp_path is None and args.auto_dcp and seq.source_frames:
+    if args.dcp is not None:
+        # Explicit --dcp path. Accepts either Adobe `.dcp` or lrt-cinema's
+        # extracted `.npz` format; dispatch by extension.
+        try:
+            if args.dcp.suffix.lower() == ".npz":
+                from lrt_cinema.dcp import load_profile
+                dcp_profile = load_profile(args.dcp)
+                source_kind = "extracted .npz"
+            else:
+                dcp_profile = parse_dcp(args.dcp)
+                source_kind = "Adobe .dcp"
+        except (FileNotFoundError, ValueError) as exc:
+            sys.stderr.write(f"error: --dcp: {exc}\n")
+            return 2
+        sys.stderr.write(f"info: loaded DCP ({source_kind}): {args.dcp}\n")
+    elif args.auto_dcp and seq.source_frames:
         first_raw = args.input / seq.source_frames[0]
         info = read_raw_make_model(first_raw)
-        if info is not None:
-            make, model = info
-            detected = auto_detect_dcp(first_raw)
-            if detected is not None:
-                sys.stderr.write(
-                    f"info: auto-detected DCP for {make} {model}: {detected}\n"
-                )
-                dcp_path = detected
-            else:
-                sys.stderr.write(
-                    f"info: no DCP found for {make} {model} under standard Adobe "
-                    f"install paths. Install Adobe DNG Converter for this camera, "
-                    f"pass --dcp <path>, or pass --no-auto-dcp to suppress this "
-                    f"message.\n"
-                )
-        else:
+        if info is None:
             sys.stderr.write(
                 f"info: {first_raw.name} is not a TIFF-shaped RAW (Canon CR3 or "
                 f"unknown format); auto-detect skipped. Pass --dcp <path> to use "
                 f"a DCP-aware render.\n"
             )
+        else:
+            make, model = info
+            result = auto_detect_profile(first_raw)
+            if result is not None:
+                dcp_profile, src_path = result
+                sys.stderr.write(
+                    f"info: auto-detected profile for {make} {model}: {src_path}\n"
+                )
+            else:
+                sys.stderr.write(
+                    f"info: no profile found for {make} {model}. Either:\n"
+                    f"  * run `tools/extract_dcp_library.py` against an Adobe DNG "
+                    f"Converter install to populate ~/.config/lrt-cinema/profiles/, or\n"
+                    f"  * clone a sister `lrt-cinema-profiles` repo and set "
+                    f"$LRT_CINEMA_PROFILES to its path, or\n"
+                    f"  * pass --dcp <path> explicitly, or\n"
+                    f"  * pass --no-auto-dcp to suppress this message.\n"
+                )
 
-    if dcp_path is not None:
-        try:
-            dcp_profile = parse_dcp(dcp_path)
-        except (FileNotFoundError, ValueError) as exc:
-            sys.stderr.write(f"error: --dcp: {exc}\n")
-            return 2
+    if dcp_profile is not None:
         sys.stderr.write(
             f"info: loaded DCP {dcp_profile.profile_name!r} "
             f"(baseline_exposure={dcp_profile.baseline_exposure:+.2f} EV, "
