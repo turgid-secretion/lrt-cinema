@@ -217,26 +217,46 @@ Until then it's an aspiration, not a claim.
 
 ## What's blocking this test today
 
-The ColorChecker ΔE test is mechanical to implement. Adding it to
-the project means:
+The ColorChecker ΔE test harness is implemented in
+[`tests/test_colorimetric.py`](../tests/test_colorimetric.py) with
+two legs:
 
-1. A checked-in reference RAW + ColorChecker shot (one per supported
-   camera model). The user supplies these; we cannot legally ship
-   sample RAWs for cameras we don't own.
-2. A `tests/test_colorimetric.py` that runs the full pipeline against
-   each reference RAW + identity XMP and computes ΔE2000 per patch.
-3. A dependency on `colour-science` (BSD-3) — license-compatible with
-   our Apache-2.0.
-4. A documented threshold in `pyproject.toml` test config (e.g. mean
-   ΔE < 2.0, max ΔE < 4.0). CI fails if regression exceeds threshold.
+1. **Self-test** (runs in CI on every commit) — synthesizes a
+   perfect 24-patch chart in linear Rec.2020, round-trips it through
+   the harness's Lab(D55) ↔ XYZ ↔ Rec.2020 conversion + ΔE2000 path,
+   and asserts the harness machinery (patch sampling, ΔE math,
+   reference loader) is wired correctly. A second self-test
+   cross-checks `colour-science`'s BT.2020 matrix against a hand-rolled
+   matrix from ITU-R BT.2020-2 §3.3 so a transposed / wrong matrix
+   anywhere in the harness wiring is detected without needing a real
+   chart shot.
 
-What it cannot do until the calibration items in [SCOPE.md](../SCOPE.md)
-ship (temperature multipliers, tone curve emit path, bundled
-`.style` files) is **pass**. Today's pipeline drops 9 of 12 develop
-ops between parse and emit and uses neutral white-balance multipliers
-regardless of source kelvin. The test would be a fast-failing CI
-gate that documents exactly how far the calibration work needs to
-go — which is precisely its value pre-calibration.
+2. **Real-chart threshold gate** — skipped unless a chart RAW +
+   identity LRT XMP are checked into
+   [`tests/fixtures/colorchecker/`](../tests/fixtures/colorchecker/)
+   (see that directory's `README.md` for drop-in instructions). When
+   present, it renders the chart through `lrt-cinema render --preset
+   cinema-linear`, auto-detects patches via the optional
+   `colour-checker-detection` dependency (`pip install -e
+   '.[detect]'`), and asserts mean ΔE2000 < 2.0 and max < 4.0 against
+   the 24-patch D55-adapted reference shipped at
+   `tests/fixtures/colorchecker/chart_reference.json`.
+
+The reference JSON is derived from `colour-science`'s
+`CCS_COLOURCHECKERS['ColorChecker24 - After November 2014']` (the
+post-2014 BabelColor revision), CAT02-adapted from the published D50
+values to a D55 working illuminant; full provenance lives in the
+JSON's `_provenance` block. We cannot legally ship sample RAWs for
+cameras we don't own — the user supplies the chart shot.
+
+What this harness cannot do until the calibration items in
+[SCOPE.md](../SCOPE.md) ship (temperature multipliers, tone curve emit
+path, bundled `.style` files) is **pass the real-chart leg**. Today's
+pipeline drops 9 of 12 develop ops between parse and emit and uses
+neutral white-balance multipliers regardless of source kelvin. The
+self-test passes today; the real-chart gate is the fast-failing CI
+signal that documents how far the calibration work in [v0.3](V03_PLAN.md)
+Track A needs to go — which is precisely its value pre-calibration.
 
 ## LRT interpolation passthrough model
 
