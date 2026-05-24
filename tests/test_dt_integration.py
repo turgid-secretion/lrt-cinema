@@ -261,6 +261,36 @@ def test_dt_cli_accepts_temperature_module_emission(tmp_path):
     _assert_module_loaded_ok(log, "temperature", 4)
 
 
+def test_dt_cli_temperature_actually_affects_pixels(tmp_path):
+    """Render at kelvin=3200 vs kelvin=7500 with the same DCP; pixels
+    must differ. Catches a R↔B field swap or wrong-multiplier-encoding
+    bug — both would survive the 'accepts' test (params still 'ok') but
+    produce wrong color. The 'accepts' test alone was flagged in audit
+    2.2."""
+    dcp = _make_test_dcp_with_curve_and_matrix()
+    xmp_cold = tmp_path / "k3200.xmp"
+    emit_darktable_xmp(
+        DevelopOps(exposure_ev=0.0, temperature_k=3200), xmp_cold, dcp_profile=dcp,
+    )
+    xmp_warm = tmp_path / "k7500.xmp"
+    emit_darktable_xmp(
+        DevelopOps(exposure_ev=0.0, temperature_k=7500), xmp_warm, dcp_profile=dcp,
+    )
+    out_cold = tmp_path / "cold.tif"
+    out_warm = tmp_path / "warm.tif"
+    proc_cold = _run_dt_cli(_RAW, xmp_cold, out_cold)
+    proc_warm = _run_dt_cli(_RAW, xmp_warm, out_warm)
+    assert proc_cold.returncode == 0, proc_cold.stderr[-500:]
+    assert proc_warm.returncode == 0, proc_warm.stderr[-500:]
+    b_cold = out_cold.read_bytes()[65536:65536 + 1_000_000]
+    b_warm = out_warm.read_bytes()[65536:65536 + 1_000_000]
+    assert b_cold != b_warm, (
+        "kelvin=3200 and kelvin=7500 renders produced byte-identical "
+        "pixel data — dt is silently ignoring our temperature multipliers "
+        "(R↔B field swap, wrong encoding, or default substitution)."
+    )
+
+
 def test_dt_cli_accepts_basecurve_module_emission(tmp_path):
     """dt-cli must report 'params ok' for our basecurve v6 emission.
 
@@ -284,6 +314,36 @@ def test_dt_cli_accepts_basecurve_module_emission(tmp_path):
     )
     log = proc.stdout + proc.stderr
     _assert_module_loaded_ok(log, "basecurve", 6)
+
+
+def test_dt_cli_basecurve_actually_affects_pixels(tmp_path):
+    """Render with vs without a DCP-driven ProfileToneCurve; pixels must
+    differ. The synthetic DCP carries a sqrt(x) curve (clearly non-
+    identity), so an off-by-one node-count offset in basecurve params
+    (each channel's nodes is 80 bytes; reading channel-1 from offset
+    520-80*2 vs 520-80*1 would point at zeros but still load 'ok') is
+    caught here. The 'accepts' test alone was flagged in audit 2.3."""
+    xmp_no = tmp_path / "no_basecurve.xmp"
+    emit_darktable_xmp(DevelopOps(exposure_ev=0.0), xmp_no, dcp_profile=None)
+    xmp_yes = tmp_path / "with_basecurve.xmp"
+    emit_darktable_xmp(
+        DevelopOps(exposure_ev=0.0),
+        xmp_yes,
+        dcp_profile=_make_test_dcp_with_curve_and_matrix(),
+    )
+    out_no = tmp_path / "no.tif"
+    out_yes = tmp_path / "yes.tif"
+    proc_no = _run_dt_cli(_RAW, xmp_no, out_no)
+    proc_yes = _run_dt_cli(_RAW, xmp_yes, out_yes)
+    assert proc_no.returncode == 0, proc_no.stderr[-500:]
+    assert proc_yes.returncode == 0, proc_yes.stderr[-500:]
+    b_no = out_no.read_bytes()[65536:65536 + 1_000_000]
+    b_yes = out_yes.read_bytes()[65536:65536 + 1_000_000]
+    assert b_no != b_yes, (
+        "no-DCP and with-DCP renders produced byte-identical pixel data — "
+        "dt is silently ignoring our basecurve params blob (wrong struct "
+        "layout, off-by-one node offsets, or default substitution)."
+    )
 
 
 def test_dt_cli_accepts_tonecurve_module_emission(tmp_path):
@@ -448,6 +508,68 @@ def test_dt_cli_accepts_lut3d_module_emission(tmp_path):
     # identical cubes across frames in a fixed-WB sequence.
     cubes = list(tmp_path.glob("lrt-cinema-cube-*.cube"))
     assert len(cubes) == 1, f"expected one content-hashed cube, got: {cubes}"
+
+
+def _make_test_dcp_with_hue_shifting_looktable() -> DCPProfile:
+    """DCP with a strong-hue-shift LookTable cube (every cell rotates 90°).
+
+    Used by the lut3d affects-pixels test to prove the cube actually loads
+    and changes pixels. The previous identity-cube test (audit 1.7) would
+    pixel-match even if dt silently failed to load the cube — this one
+    cannot, because identity-vs-90°-hue-rotation TIFFs cannot be byte-
+    identical on any non-grayscale RAW.
+    """
+    from lrt_cinema.dcp import HsvCube
+    # hue_shift = 90° (= 1.5 sixths in Adobe hexcone units), sat = 1.0, val = 1.0
+    shift_cell = np.array([1.5, 1.0, 1.0], dtype=np.float32)
+    look = HsvCube(
+        hue_divisions=6, sat_divisions=2, val_divisions=2,
+        srgb_gamma=False,
+        data_1=np.tile(shift_cell, (2, 6, 2, 1)),
+    )
+    return DCPProfile(
+        color_matrix_1=np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+        color_matrix_2=np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+        kelvin_1=2856.0, kelvin_2=6504.0,
+        baseline_exposure=0.0, baseline_exposure_offset=0.0,
+        look_table=look,
+    )
+
+
+def test_dt_cli_lut3d_actually_affects_pixels(tmp_path):
+    """Render with identity LookTable vs 90°-hue-shift LookTable; pixels
+    must differ. The 'accepts' test uses an identity cube — a complete
+    cube-load failure would pixel-match the expectation. With a non-
+    identity cube the silent-substitution failure mode is provable
+    (audit 4.3 + 3.3)."""
+    xmp_identity = tmp_path / "identity.xmp"
+    emit_darktable_xmp(
+        DevelopOps(exposure_ev=0.0),
+        xmp_identity,
+        dcp_profile=_make_test_dcp_with_looktable(),
+        dt_lut3d_def_path=tmp_path,
+    )
+    xmp_shifted = tmp_path / "shifted.xmp"
+    emit_darktable_xmp(
+        DevelopOps(exposure_ev=0.0),
+        xmp_shifted,
+        dcp_profile=_make_test_dcp_with_hue_shifting_looktable(),
+        dt_lut3d_def_path=tmp_path,
+    )
+    out_identity = tmp_path / "identity.tif"
+    out_shifted = tmp_path / "shifted.tif"
+    proc_id = _run_dt_cli_with_lut3d(_RAW, xmp_identity, out_identity, def_path=tmp_path)
+    proc_sh = _run_dt_cli_with_lut3d(_RAW, xmp_shifted, out_shifted, def_path=tmp_path)
+    assert proc_id.returncode == 0, proc_id.stderr[-500:]
+    assert proc_sh.returncode == 0, proc_sh.stderr[-500:]
+    b_id = out_identity.read_bytes()[65536:65536 + 1_000_000]
+    b_sh = out_shifted.read_bytes()[65536:65536 + 1_000_000]
+    assert b_id != b_sh, (
+        "identity-cube and 90°-hue-shift-cube renders produced byte-"
+        "identical pixel data — dt is silently failing to load our "
+        ".cube file (def_path misconfigured, lut3d module disabled, "
+        "or cube content not reaching the pipe)."
+    )
 
 
 def test_dt_cli_accepts_colorbalancergb_module_emission(tmp_path):
