@@ -93,9 +93,12 @@ def _build_synthetic_dcp(
     if forward_matrix_2 is not None:
         entries.append((50965, 10, 9, _srational_matrix(forward_matrix_2)))
 
-    # CalibrationIlluminant1/2 (SHORT)
-    entries.append((50931, 3, 1, struct.pack("<H", calibration_illuminant_1)))
-    entries.append((50932, 3, 1, struct.pack("<H", calibration_illuminant_2)))
+    # CalibrationIlluminant1/2 (SHORT). Canonical DNG 1.7.1 tag IDs are
+    # 50778 / 50779, NOT 50931/50932 (this fixture matched the prior
+    # incorrect parser constants; updated to canonical at the parser-tag fix
+    # commit).
+    entries.append((50778, 3, 1, struct.pack("<H", calibration_illuminant_1)))
+    entries.append((50779, 3, 1, struct.pack("<H", calibration_illuminant_2)))
 
     # BaselineExposure (SRATIONAL, count=1)
     entries.append((

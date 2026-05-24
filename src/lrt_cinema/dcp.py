@@ -77,8 +77,17 @@ _TAG_COLOR_MATRIX_2 = 50722
 _TAG_CAMERA_CALIBRATION_1 = 50723
 _TAG_CAMERA_CALIBRATION_2 = 50724
 _TAG_BASELINE_EXPOSURE = 50730
-_TAG_CALIBRATION_ILLUMINANT_1 = 50931
-_TAG_CALIBRATION_ILLUMINANT_2 = 50932
+# CalibrationIlluminant1/2 — canonical DNG 1.7.1 tag IDs (verified against
+# RawTherapee dcp.cc:856-857, LibRaw tiff.cpp:1427-1431, darktable
+# imageio_dng.c#L606 at SHA 9402c65275, and the real Nikon D750
+# Camera Standard.dcp on the dev machine). Prior code used 50931/50932 — wrong;
+# 50932 on the D750 DCP is an unrelated ASCII metadata string ("com.adobe").
+# The mismatch was harmless because Adobe DCPs leave the canonical tags at
+# 17 (Standard A) / 21 (D65) and the existing "both zero → A/D65 fallback" at
+# parse_dcp coincidentally produced the same kelvin pair (2856/6504); the
+# fix lets the parser actually read non-default vendor profiles correctly.
+_TAG_CALIBRATION_ILLUMINANT_1 = 50778
+_TAG_CALIBRATION_ILLUMINANT_2 = 50779
 _TAG_PROFILE_NAME = 50936
 _TAG_PROFILE_TONE_CURVE = 50940
 _TAG_FORWARD_MATRIX_1 = 50964
