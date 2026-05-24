@@ -22,11 +22,16 @@ import pytest
 
 from lrt_cinema.dcp import (
     DCPProfile,
+    _adobe_camera_label,
+    adobe_make_for_camera,
+    auto_detect_dcp,
+    find_dcp_for_camera,
     illuminant_code_to_kelvin,
     interpolate_color_matrix,
     kelvin_tint_to_dt_multipliers,
     kelvin_tint_to_xy,
     parse_dcp,
+    read_raw_make_model,
     uv_to_kelvin,
     xy_to_camera_neutral,
     xy_to_uv,
@@ -364,6 +369,126 @@ def test_real_adobe_dcp_parses():
     np.testing.assert_allclose(p.profile_tone_curve[-1], [1, 1], atol=1e-6)
     assert np.all(np.diff(p.profile_tone_curve[:, 0]) >= 0)
     assert np.all(np.diff(p.profile_tone_curve[:, 1]) >= 0)
+
+
+# ---------------------------------------------------------------------------
+# RAW Make/Model + DCP auto-detect tests
+# ---------------------------------------------------------------------------
+
+def _build_synthetic_nef(make: str, model: str) -> bytes:
+    """Build a minimal TIFF-shaped RAW header with IFD0 carrying Make+Model.
+
+    Mirrors `_build_synthetic_dcp` shape but uses standard TIFF magic 42 (the
+    DCP probe rejects this; the RAW probe accepts it). Enough for
+    `read_raw_make_model` — a real NEF has hundreds more IFD entries we do
+    not care about.
+    """
+    make_bytes = (make + "\x00").encode("ascii")
+    model_bytes = (model + "\x00").encode("ascii")
+    entries = [
+        (271, 2, len(make_bytes), make_bytes),   # Make
+        (272, 2, len(model_bytes), model_bytes), # Model
+    ]
+    n_entries = len(entries)
+    ifd_size = 2 + 12 * n_entries + 4
+    big_blob_offset = 8 + ifd_size
+
+    ifd_bytes = struct.pack("<H", n_entries)
+    big_blob = b""
+    cur_blob_off = big_blob_offset
+    for tag, ttype, count, payload in entries:
+        if len(payload) <= 4:
+            value_field = payload + b"\x00" * (4 - len(payload))
+        else:
+            value_field = struct.pack("<I", cur_blob_off)
+            big_blob += payload
+            cur_blob_off += len(payload)
+        ifd_bytes += struct.pack("<HHI4s", tag, ttype, count, value_field)
+    ifd_bytes += struct.pack("<I", 0)
+    header = b"II" + struct.pack("<H", 42) + struct.pack("<I", 8)  # standard TIFF
+    return header + ifd_bytes + big_blob
+
+
+def test_read_raw_make_model_from_synthetic_tiff(tmp_path):
+    path = tmp_path / "fake.NEF"
+    path.write_bytes(_build_synthetic_nef("NIKON CORPORATION", "NIKON D750"))
+    assert read_raw_make_model(path) == ("NIKON CORPORATION", "NIKON D750")
+
+
+def test_read_raw_make_model_rejects_dcp_magic(tmp_path):
+    # DCP files use magic 0x4352, not standard TIFF 42. The RAW probe
+    # must NOT accept them — they would never carry a Make/Model anyway,
+    # and accepting them would mask real "this is not a RAW" errors.
+    path = tmp_path / "fake.dcp"
+    path.write_bytes(b"II" + struct.pack("<H", 0x4352) + b"\x08\x00\x00\x00" + b"\x00" * 20)
+    assert read_raw_make_model(path) is None
+
+
+def test_read_raw_make_model_rejects_non_tiff(tmp_path):
+    path = tmp_path / "fake.CR3"
+    path.write_bytes(b"\x00\x00\x00\x18ftypcrx ")  # ISO BMFF (Canon CR3)
+    assert read_raw_make_model(path) is None
+
+
+def test_read_raw_make_model_handles_truncated_file(tmp_path):
+    path = tmp_path / "tiny.NEF"
+    path.write_bytes(b"II*\x00")  # 4 bytes — header truncated
+    assert read_raw_make_model(path) is None
+
+
+def test_adobe_make_for_camera_normalization():
+    assert adobe_make_for_camera("NIKON CORPORATION") == "Nikon"
+    assert adobe_make_for_camera("Canon") == "Canon"
+    assert adobe_make_for_camera("SONY") == "Sony"
+    assert adobe_make_for_camera("FUJIFILM") == "Fujifilm"
+    assert adobe_make_for_camera("RICOH IMAGING COMPANY, LTD.") == "PENTAX"
+    # Unknown make → title-case fallback.
+    assert adobe_make_for_camera("ACME PHOTOMATIC") == "Acme Photomatic"
+
+
+def test_adobe_camera_label_strips_make_prefix():
+    # EXIF: Make="NIKON CORPORATION", Model="NIKON D750"
+    # Adobe filename label: "Nikon D750" (strip "NIKON " from model, normalize make).
+    assert _adobe_camera_label("NIKON CORPORATION", "NIKON D750") == "Nikon D750"
+    # Canon: Make="Canon", Model="Canon EOS R5"
+    assert _adobe_camera_label("Canon", "Canon EOS R5") == "Canon EOS R5"
+    # Sony: Make="SONY", Model="ILCE-7M3" (no make prefix)
+    assert _adobe_camera_label("SONY", "ILCE-7M3") == "Sony ILCE-7M3"
+
+
+def test_find_dcp_for_camera_searches_extra_roots(tmp_path):
+    # Plant a Camera Standard DCP under tmp_path/<root>/Camera/<label>/...
+    # `adobe_make_for_camera` title-cases unknown vendors, so the planted
+    # path must match the normalized label (label-build is what `find` looks
+    # up — not the raw EXIF strings).
+    label = _adobe_camera_label("Acme", "X100")  # "Acme X100"
+    cam_dir = tmp_path / "extra_root" / "Camera" / label
+    cam_dir.mkdir(parents=True)
+    dcp_path = cam_dir / f"{label} Camera Standard.dcp"
+    dcp_path.write_bytes(b"dummy content")  # not a real DCP — find only matches existence
+    found = find_dcp_for_camera("Acme", "X100", extra_roots=[tmp_path / "extra_root"])
+    assert found == dcp_path
+
+
+def test_find_dcp_for_camera_returns_none_on_miss(tmp_path):
+    assert find_dcp_for_camera("UnknownVendor", "X", extra_roots=[tmp_path]) is None
+
+
+def test_auto_detect_dcp_end_to_end_with_synthetic(tmp_path):
+    nef = tmp_path / "fake.NEF"
+    nef.write_bytes(_build_synthetic_nef("ACMECAM", "Z1"))
+    # No DCP planted anywhere — returns None.
+    assert auto_detect_dcp(nef) is None
+
+
+@pytest.mark.skipif(
+    not _REAL_DCP.exists(),
+    reason="real Adobe DCP not installed at standard macOS path",
+)
+def test_find_dcp_for_camera_real_d750():
+    found = find_dcp_for_camera("NIKON CORPORATION", "NIKON D750")
+    assert found is not None
+    assert found.name == "Nikon D750 Camera Standard.dcp"
 
 
 @pytest.mark.skipif(
