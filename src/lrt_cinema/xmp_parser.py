@@ -22,6 +22,8 @@ calibration lands.
 
 from __future__ import annotations
 
+import math
+import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -97,9 +99,13 @@ def _parse_float(text: str | None, default: float = 0.0) -> float:
     if text is None:
         return default
     try:
-        return float(text.strip().lstrip("+"))
+        value = float(text.strip().lstrip("+"))
     except ValueError:
         return default
+    # Hostile or corrupted XMPs may carry NaN / Inf. Allowing those through
+    # propagates into struct.pack and dt renders the frame solid black with
+    # no diagnostic. Treat as a parse failure (use the default).
+    return value if math.isfinite(value) else default
 
 
 def _parse_int(text: str | None) -> int | None:
@@ -445,7 +451,14 @@ def parse_sequence(folder: Path, raw_extensions: tuple[str, ...] = (
             ops, is_kf, deflicker_delta, hg_ramps, rating, mask_offsets = (
                 parse_xmp_file(xmp)
             )
-        except (ET.ParseError, ValueError):
+        except (ET.ParseError, ValueError) as exc:
+            # Silent skip-on-corruption is a data-loss path: a half-written
+            # XMP (LRT crash, partial save) silently degrades the frame to
+            # defaults and the render produces a flat frame mid-sequence.
+            # Surface the skip so the user can investigate.
+            sys.stderr.write(
+                f"warning: skipping unreadable XMP {xmp.name}: {exc}\n"
+            )
             continue
 
         # Keyframe gating policy:
