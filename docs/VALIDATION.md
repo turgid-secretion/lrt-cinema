@@ -258,6 +258,71 @@ self-test passes today; the real-chart gate is the fast-failing CI
 signal that documents how far the calibration work in [v0.3](V03_PLAN.md)
 Track A needs to go — which is precisely its value pre-calibration.
 
+## Methodology — comparing two renders of the same scene
+
+The "ColorChecker ΔE2000" methodology above is for **absolute colorimetric
+correctness against a known reference target**. Different question from
+**"does our render match LRT's preview?"** — that's a two-render comparison
+on arbitrary scene content with no ground truth target.
+
+There is no recognized single-number metric for "do these two renders of
+the same scene look the same." Mean L\*a\*b\* is **NOT** the right yardstick —
+it collapses all spatial information into one scalar, is dragged by
+outliers, and conflates uniform shifts with localized defects (e.g. mean
+hides a highlight rolloff difference as long as shadows compensate).
+
+The recognized methodology stack for two-render comparison:
+
+| Technique | What it answers | Limitation |
+|---|---|---|
+| **Per-pixel ΔE2000 distribution** (percentiles + bucket histogram) | What fraction of pixels are off, by how much | Doesn't say WHERE |
+| **Spatial ΔE heatmap** | Where in the image the divergence concentrates | Visual only |
+| **Affine-fit decomposition** (per-channel gain + offset that minimizes residual ΔE) | "Is the gap a single grading transform, or structural?" | Linear model only |
+| **Per-channel L\*a\*b\* percentile distribution** (P5/P50/P95 per channel) | Tonal/chromatic localization (shadows vs highlights, warm vs cool cast) | Aggregates spatial info |
+| **Vectorscope + waveform plots** | Industry-standard for colorist visual review | Visual only |
+| **SSIM / DSSIM** | Perceptual structural similarity (gradient/edge preservation) | Not Lab-aware |
+| **Colorist visual review on calibrated monitor** | Final-deliverable grade-fitness | Subjective, not automatable |
+
+The first four are implemented in [`tools/diagnose_vs_lrt_preview.py`](../tools/diagnose_vs_lrt_preview.py)
+and are the project's primary colorimetric-divergence diagnostic for
+the "vs LRT preview" question. Run:
+
+```sh
+python3 tools/diagnose_vs_lrt_preview.py path/to/ours.tif path/to/preview.jpg [output_dir]
+```
+
+### Affine-fit interpretation
+
+The decomposition tells you what *class* of fix would close the gap:
+
+- **Post-fit ΔE < 3.0**: gap is **broadcast-acceptable after a single grade**. A simple per-channel gain+offset transforms our render to within "acceptable broadcast cinema" of the target. Means the divergence is essentially a one-knob color correction the user (or a future per-camera baseline) can apply.
+- **Post-fit ≪ Pre-fit but ≥ 3.0**: gap is **mostly a grading transform with a small structural residual**. Per-channel grade closes most of it; the residual is non-linear (tone curve shape, HueSatMap, etc.).
+- **Post-fit ≈ Pre-fit**: gap is **structural**. No simple grade closes it. Different camera matrix, non-linear tone curve, hue rotation.
+
+If the per-channel gain ratios diverge by >5% (e.g. green-gain ≠ R-gain), that's a white-balance or camera-matrix divergence flag — not just an exposure offset.
+
+### Empirical finding 2026-05-23 — lrt-cinema vs LRT 7.5.3 preview
+
+Test frame: DSC_4053 (neutral keyframe, EV=0 per user's LRT XMP). After Visual Preview re-render in LRT.
+
+**Pre-fit (raw vs LRT preview):**
+- ΔE2000 mean 7.11, median 5.17, P95 17.97
+- 51.5% of pixels at ΔE ≥ 5 (visible defect)
+- L\* gap concentrated in highlights: ΔP95 = −20.2 (ours much darker in highlights, shadows match)
+- b\* gap concentrated in highlights: ΔP95 = −16.3 (ours much less yellow in highlights)
+
+**Affine fit:**
+- Best per-channel gain R/G/B = 2.077 / 2.276 / 2.017
+- Best per-channel offset = small (−0.03 each)
+- **Post-fit mean ΔE drops to 2.48** (broadcast-acceptable)
+
+**Diagnosis:** The gap is mostly a **per-channel gain (≈ +1 EV) with subtle green skew** plus a small structural residual (~2.5 ΔE). Translation in cinematography terms:
+- LR/LRT applies its DCP profile's BaselineExposure (~+0.5–1.0 EV bias)
+- LR/LRT applies its DCP color matrix (≈ 10% green-channel gain vs dt's libraw-derived matrix)
+- Highlight rolloff + warm-shaped HueSatMap account for the ~2.5 ΔE residual
+
+**Gap-closing path:** the affine fit shows the bulk is fixable via DCP-aware processing (chip #2 — kelvin→multipliers research already has the foundational work). Without DCP, a per-camera `--exposure-bias` + manual WB tweak gets within broadcast-acceptable; full DCP processing closes the rest.
+
 ## LRT interpolation passthrough model
 
 `lrt-cinema` is a faithful executor of LRTimelapse intent for darktable. There are two LRT workflow modes the parser must handle, and the same code path serves both:
