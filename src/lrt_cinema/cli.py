@@ -17,13 +17,8 @@ from lrt_cinema.interpolation import (
 from lrt_cinema.ir import InterpolationMode
 from lrt_cinema.presets import PRESETS, get_preset
 from lrt_cinema.runner import DarktableCliNotFound, render_sequence
+from lrt_cinema.xmp_emitter import LR_SHARPNESS_DEFAULT
 from lrt_cinema.xmp_parser import _is_identity_tone_curve, parse_sequence
-
-# LR/LRT writes Sharpness=25 as the out-of-camera default into every XMP
-# regardless of whether the user touched sharpening. Counting it as "intent"
-# in the dropped-emit warning is a false positive — the user's sequence is
-# entirely default-sharpness on every keyframe by definition.
-_LR_SHARPNESS_DEFAULT = 25.0
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -176,7 +171,7 @@ def _counts_as_intent(field: str, value) -> bool:
     `_is_identity_tone_curve` helper.
     """
     if field == "sharpness":
-        return value not in (0.0, _LR_SHARPNESS_DEFAULT)
+        return value not in (0.0, LR_SHARPNESS_DEFAULT)
     return value != 0.0
 
 
