@@ -117,6 +117,16 @@ def _build_parser() -> argparse.ArgumentParser:
                              "the LR-look midtone lift is not applied. "
                              "BaselineExposure and (when explicit kelvin is set) "
                              "temperature multipliers from the DCP still emit.")
+    render.add_argument("--no-dcp-hsv-cubes", dest="apply_dcp_hsv_cubes",
+                        action="store_false", default=True,
+                        help="Suppress emission of the DCP's HueSatMap and/or "
+                             "LookTable cubes into dt's lut3d module. The cubes "
+                             "encode Adobe's per-hue-sat-val color shaping; "
+                             "skipping them produces a 'cleaner' truly-linear "
+                             "render at the cost of a larger ΔE2000 vs LR's "
+                             "preview (typical +1.5-2.5 ΔE on real footage). "
+                             "BaselineExposureOffset still rolls into the "
+                             "exposure module's bias when the cubes are off.")
     render.add_argument("--from-frame", type=int, default=0,
                         help="First frame index to render (inclusive).")
     render.add_argument("--to-frame", type=int, default=None,
@@ -481,6 +491,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
             custom_style=args.style,
             dcp_profile=dcp_profile,
             apply_dcp_tone_curve=args.apply_dcp_tone_curve,
+            apply_dcp_hsv_cubes=args.apply_dcp_hsv_cubes,
             dry_run=args.dry_run,
         )
     except DarktableCliNotFound as exc:
