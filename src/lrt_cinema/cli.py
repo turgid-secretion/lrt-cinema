@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import struct
 import sys
 from pathlib import Path
 
@@ -337,6 +338,17 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
 def _cmd_render(args: argparse.Namespace) -> int:
     preset = get_preset(args.preset)
 
+    # Refuse --input == --output: the per-frame TIFFs (output_dir / stem.tif)
+    # would clobber pre-existing source siblings if any (e.g. a prior dt
+    # export). The LRT XMP sidecars themselves use a different suffix
+    # (.dt.xmp vs .xmp) and survive, but a same-dir render is still wrong.
+    if args.output.resolve() == args.input.resolve():
+        sys.stderr.write(
+            "error: --output must differ from --input (would overwrite "
+            "pre-existing TIFFs in the source directory).\n"
+        )
+        return 2
+
     try:
         seq = parse_sequence(args.input)
     except (FileNotFoundError, NotADirectoryError) as exc:
@@ -372,8 +384,8 @@ def _cmd_render(args: argparse.Namespace) -> int:
             else:
                 dcp_profile = parse_dcp(args.dcp)
                 source_kind = "Adobe .dcp"
-        except (FileNotFoundError, ValueError) as exc:
-            sys.stderr.write(f"error: --dcp: {exc}\n")
+        except (FileNotFoundError, ValueError, struct.error) as exc:
+            sys.stderr.write(f"error: --dcp: malformed or unreadable: {exc}\n")
             return 2
         sys.stderr.write(f"info: loaded DCP ({source_kind}): {args.dcp}\n")
     elif args.auto_dcp and seq.source_frames:
