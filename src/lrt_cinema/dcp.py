@@ -54,11 +54,19 @@ References
 from __future__ import annotations
 
 import struct
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO
 
 import numpy as np
+
+# ---------------------------------------------------------------------------
+# TIFF IFD0 tags used by the RAW-side EXIF probe (TIFF 6.0)
+# ---------------------------------------------------------------------------
+
+_TAG_MAKE = 271
+_TAG_MODEL = 272
 
 # ---------------------------------------------------------------------------
 # DCP IFD tags (DNG 1.7.1)
@@ -555,3 +563,205 @@ def kelvin_tint_to_dt_multipliers(
     g_mul = 1.0
     b_mul = green / neutral[2] if abs(neutral[2]) > 1e-9 else 1.0
     return float(r_mul), float(g_mul), float(b_mul), float(g_mul)
+
+
+# ---------------------------------------------------------------------------
+# RAW EXIF Make/Model probe — drives the auto-detect path
+# ---------------------------------------------------------------------------
+#
+# All RAW formats this project targets except Canon CR3 (ISO BMFF container) are
+# TIFF-shaped (NEF, DNG, ARW, RW2, RAF, ORF, FFF). The TIFF header rules at
+# IFD0 are stable across vendors; Make/Model live at the canonical tag IDs
+# 271/272 (TIFF 6.0 §8). We use the same struct-based IFD walk we already do
+# for DCPs in `parse_dcp` rather than pulling in a heavier dep (exifread,
+# rawpy, exiftool).
+
+def read_raw_make_model(raw_path: Path) -> tuple[str, str] | None:
+    """Extract (make, model) ASCII strings from a TIFF-shaped RAW's IFD0.
+
+    Returns None when:
+      - file is not TIFF-shaped (e.g. Canon CR3 is QuickTime/ISO BMFF; in
+        practice the caller falls back to `--dcp` for those formats)
+      - file is unreadable or truncated
+      - Make/Model tags are absent
+
+    Make/Model are read as raw ASCII strings; Adobe's DCP filename
+    convention is a separate normalization step (`adobe_make_for_camera`).
+    """
+    raw_path = Path(raw_path)
+    try:
+        with open(raw_path, "rb") as f:
+            header = f.read(8)
+            if len(header) < 8:
+                return None
+            if header[:2] == b"II":
+                bo = "<"
+            elif header[:2] == b"MM":
+                bo = ">"
+            else:
+                return None
+            magic = struct.unpack(f"{bo}H", header[2:4])[0]
+            # Standard TIFF magic 42 (NEF/DNG/ARW/RW2/RAF/ORF/FFF). DCP's 0x4352
+            # is intentionally NOT accepted here — DCPs are not RAW images.
+            if magic != 42:
+                return None
+            ifd0_offset = struct.unpack(f"{bo}I", header[4:8])[0]
+            f.seek(ifd0_offset)
+            n_entries_data = f.read(2)
+            if len(n_entries_data) < 2:
+                return None
+            n_entries = struct.unpack(f"{bo}H", n_entries_data)[0]
+
+            make: str | None = None
+            model: str | None = None
+            for _ in range(n_entries):
+                entry = f.read(12)
+                if len(entry) < 12:
+                    return None
+                tag, tag_type, count = struct.unpack(f"{bo}HHI", entry[:8])
+                if tag not in (_TAG_MAKE, _TAG_MODEL) or tag_type != _TYPE_ASCII:
+                    continue
+                value_or_offset = entry[8:12]
+                data = _read_value(f, tag_type, count, value_or_offset, bo)
+                decoded = _decode_ascii(data).strip()
+                if tag == _TAG_MAKE:
+                    make = decoded
+                elif tag == _TAG_MODEL:
+                    model = decoded
+                if make is not None and model is not None:
+                    break
+            if make is None or model is None:
+                return None
+            return make, model
+    except (OSError, struct.error):
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Adobe DCP install paths + camera Make/Model → DCP filename
+# ---------------------------------------------------------------------------
+#
+# Per Adobe DNG Converter convention (also LR Classic's bundled set), DCPs
+# install at one of:
+#   <root>/Adobe Standard/<Make> <Model> Adobe Standard.dcp
+#   <root>/Camera/<Make> <Model>/<Make> <Model> Camera <variant>.dcp
+# Real LRT XMP carries `crs:CameraProfile="Camera Standard"` by default, so
+# our auto-detect prefers the Camera Standard variant over the Adobe Standard
+# fallback — that matches what LR rendered the LRT preview with.
+
+# EXIF Make → Adobe's DCP-filename Make. Adobe normalizes vendor strings
+# from EXIF caps + corporate-suffix forms ("NIKON CORPORATION") to the
+# friendly form ("Nikon"). PENTAX is uppercase per Adobe's own filenames.
+_ADOBE_MAKE_NORMALIZE = {
+    "NIKON CORPORATION": "Nikon",
+    "NIKON": "Nikon",
+    "CANON": "Canon",
+    "SONY": "Sony",
+    "FUJIFILM": "Fujifilm",
+    "PANASONIC": "Panasonic",
+    "OLYMPUS CORPORATION": "Olympus",
+    "OLYMPUS IMAGING CORP.": "Olympus",
+    "OM DIGITAL SOLUTIONS": "OM Digital Solutions",
+    "RICOH IMAGING COMPANY, LTD.": "PENTAX",
+    "PENTAX CORPORATION": "PENTAX",
+    "PENTAX": "PENTAX",
+    "LEICA CAMERA AG": "Leica",
+    "SAMSUNG": "Samsung",
+    "HASSELBLAD": "Hasselblad",
+    "PHASE ONE": "Phase One",
+    "APPLE": "Apple",
+}
+
+
+def adobe_make_for_camera(make: str) -> str:
+    """Map an EXIF Make value to Adobe's DCP-filename Make convention."""
+    return _ADOBE_MAKE_NORMALIZE.get(make.strip().upper(), make.strip().title())
+
+
+def _adobe_camera_label(make: str, model: str) -> str:
+    """Build the `<Make> <Model>` label Adobe uses in DCP filenames.
+
+    Adobe strips a leading Make from Model when present. The strip is
+    against the NORMALIZED Make (the first word, uppercased) so a NEF
+    whose EXIF Make is "NIKON CORPORATION" and Model "NIKON D750" still
+    yields label "Nikon D750" (Model's "NIKON" prefix matches the
+    "NIKON" core of "NIKON CORPORATION").
+    """
+    norm_make = adobe_make_for_camera(make)
+    m = model.strip()
+    # Strip the first-word prefix of Make from Model — handles both
+    # "NIKON CORPORATION" + "NIKON D750" and "Canon" + "Canon EOS R5".
+    make_head = make.strip().split()[0].upper() if make.strip() else ""
+    if make_head and m.upper().startswith(make_head):
+        m = m[len(make_head):].strip()
+    return f"{norm_make} {m}".strip()
+
+
+def _adobe_dcp_search_roots() -> list[Path]:
+    """DCP install roots present on this system, in lookup order.
+
+    Adobe DNG Converter is the canonical install path. LR Classic ships a
+    duplicate set under its .app bundle on macOS; we include it as a
+    fallback for users who installed LR but not the standalone converter.
+    Linux has no canonical Adobe install location.
+    """
+    roots: list[Path] = []
+    if sys.platform == "darwin":
+        roots.append(Path("/Library/Application Support/Adobe/CameraRaw/CameraProfiles"))
+        lr_bundle = Path(
+            "/Applications/Adobe Lightroom Classic/"
+            "Adobe Lightroom Classic.app/Contents/Resources/CameraProfiles"
+        )
+        roots.append(lr_bundle)
+    elif sys.platform == "win32":
+        import os
+        program_data = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData"))
+        roots.append(program_data / "Adobe" / "CameraRaw" / "CameraProfiles")
+    return [r for r in roots if r.is_dir()]
+
+
+def find_dcp_for_camera(
+    make: str,
+    model: str,
+    extra_roots: list[Path] | None = None,
+) -> Path | None:
+    """Locate a DCP for (`make`, `model`) under standard Adobe install paths.
+
+    Lookup order (first hit wins):
+      1. `Camera/<label>/<label> Camera Standard.dcp`
+         — matches LR's default `crs:CameraProfile="Camera Standard"`
+      2. `Camera/<label>/<label> Adobe Standard.dcp`
+         — some camera subfolders use the Adobe-Standard naming
+      3. `Adobe Standard/<label> Adobe Standard.dcp`
+         — Adobe's universal fallback, present for every supported body
+
+    Returns None when no DCP is found across all roots and naming
+    variants. The caller is expected to log a clear warning and fall
+    back to the no-DCP code path.
+    """
+    label = _adobe_camera_label(make, model)
+    roots = _adobe_dcp_search_roots()
+    if extra_roots:
+        roots.extend(r for r in extra_roots if r.is_dir())
+    for root in roots:
+        for candidate in (
+            root / "Camera" / label / f"{label} Camera Standard.dcp",
+            root / "Camera" / label / f"{label} Adobe Standard.dcp",
+            root / "Adobe Standard" / f"{label} Adobe Standard.dcp",
+        ):
+            if candidate.is_file():
+                return candidate
+    return None
+
+
+def auto_detect_dcp(raw_path: Path) -> Path | None:
+    """End-to-end: probe a RAW's Make/Model and return a matching DCP path.
+
+    Returns None when the RAW's Make/Model cannot be read (non-TIFF
+    format, truncated file) or when no matching DCP is installed.
+    """
+    info = read_raw_make_model(raw_path)
+    if info is None:
+        return None
+    make, model = info
+    return find_dcp_for_camera(make, model)
