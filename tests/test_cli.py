@@ -124,11 +124,22 @@ def test_inspect_reports_keyframes_and_drops(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "Source RAW frames: 3" in out
     assert "Keyframes detected: 2" in out
-    # Both fixtures carry lrt:keyframe and several dropped fields.
     assert "xmp:Rating or lrt:keyframe): 2 of 2" in out
-    assert "contrast" in out
-    assert "DROPPED at emit" in out
-    assert "temperature_k" in out
+
+    emit_section = out.split("Emit warnings")[1].split("What WILL")[0]
+    # Real drops: highlights / shadows / whites unconditionally; tint and
+    # temperature_k drop here because no DCP is loaded (CR3 stub fixture).
+    for truly_dropped in ("highlights", "shadows", "whites", "tint", "temperature_k"):
+        assert truly_dropped in emit_section, (
+            f"{truly_dropped!r} should be flagged dropped in:\n{emit_section}"
+        )
+    # v0.4 routes these through emitted dt modules — they must NOT be flagged
+    # dropped (the prior stale list caused this exact false positive).
+    for emitted in ("contrast", "saturation", "vibrance", "sharpness", "blacks"):
+        assert emitted not in emit_section, (
+            f"{emitted!r} is emitted in v0.4 and must not appear as DROPPED:\n"
+            f"{emit_section}"
+        )
 
 
 def test_inspect_show_fields_dumps_per_keyframe(tmp_path, capsys):
