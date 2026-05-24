@@ -82,6 +82,18 @@ Bumped from 6 to 7 in dt 5.x when `compensate_hilite_pres` gboolean was added
 to the params struct. dt's legacy_params migration would handle v6→v7 on read,
 but emitting the canonical current modversion is preferred."""
 
+COLORBALANCERGB_MODVERSION = "5"
+"""dt colorbalancergb module current modversion (src/iop/colorbalancergb.c#L52
+at dt SHA 9402c65275). v5 added the `saturation_formula` enum field
+(JzAzBz vs DTUCS). The params struct (`dt_iop_colorbalancergb_params_t` at
+src/iop/colorbalancergb.c#L60-L106) is 32 floats + 1 int = 132 bytes —
+significantly larger than the simple modules. We only set
+saturation_global / vibrance / contrast from LR; every other field stays
+at its C-declared $DEFAULT value. dt's lightroom.c does NOT route LR's
+Saturation/Vibrance/Contrast2012 to colorbalancergb (or to any module —
+it drops them entirely); the project's mapping is project-specific and
+documented as "best effort, not pixel-match-LR" in SCOPE.md."""
+
 SHARPEN_MODVERSION = "1"
 """dt sharpen module modversion (src/iop/sharpen.c#L39 at dt SHA 9402c65275).
 Three floats: radius, amount, threshold. dt's USM (unsharp mask). LR's
@@ -266,6 +278,77 @@ def _encode_exposure_params(exposure_ev: float, black: float = 0.0) -> str:
         -4.0,          # deflicker_target_level
         0,             # compensate_exposure_bias = FALSE (default)
         1,             # compensate_hilite_pres = TRUE (default per v7)
+    )
+    return payload.hex()
+
+
+def _encode_colorbalancergb_params(
+    saturation_global: float = 0.0,
+    vibrance: float = 0.0,
+    contrast: float = 0.0,
+) -> str:
+    """Encode darktable colorbalancergb v5 params (132 bytes) as HEX ASCII.
+
+    Struct layout from src/iop/colorbalancergb.c#L60-L106 at dt SHA
+    9402c65275 (DT_MODULE_INTROSPECTION(5, dt_iop_colorbalancergb_params_t)).
+    All field defaults match the C `$DEFAULT:` annotations; only the three
+    fields driven from LR's master sliders are caller-controllable today.
+
+    Field order (32 × float + 1 × int = 132 bytes, no padding — every
+    field is 4-byte aligned):
+
+        v1: shadows_{Y,C,H} mid_{Y,C,H} hi_{Y,C,H} global_{Y,C,H}
+            shadows_weight white_fulcrum highlights_weight
+            chroma_{shadows,highlights,global,midtones}
+            saturation_{global,highlights,midtones,shadows}
+            hue_angle                                          (25 floats)
+        v2: brilliance_{global,highlights,midtones,shadows}    (4 floats)
+        v3: mask_grey_fulcrum                                  (1 float)
+        v4: vibrance grey_fulcrum contrast                     (3 floats)
+        v5: saturation_formula (enum int = DT_COLORBALANCE_SATURATION_DTUCS)
+
+    Mapping conventions:
+      LR Saturation [-100..+100] → saturation_global [-1..+1] (÷100)
+      LR Vibrance   [-100..+100] → vibrance         [-1..+1] (÷100)
+      LR Contrast2012 [-100..+100] → contrast       [-1..+1] (÷100)
+
+    The mapping is approximate, not pixel-match-LR — dt colorbalancergb's
+    contrast operates on a midtone-pivoted curve with its own
+    grey_fulcrum, while LR's PV2012 Contrast2012 is a closed-source
+    parametric S-curve. Defaults align (LR 0 → dt 0) so neutral keyframes
+    are no-ops.
+    """
+    payload = struct.pack(
+        "<32fi",
+        # shadows_Y, shadows_C, shadows_H
+        0.0, 0.0, 0.0,
+        # midtones_Y, midtones_C, midtones_H
+        0.0, 0.0, 0.0,
+        # highlights_Y, highlights_C, highlights_H
+        0.0, 0.0, 0.0,
+        # global_Y, global_C, global_H
+        0.0, 0.0, 0.0,
+        # shadows_weight, white_fulcrum, highlights_weight
+        1.0, 0.0, 1.0,
+        # chroma_shadows, chroma_highlights, chroma_global, chroma_midtones
+        0.0, 0.0, 0.0, 0.0,
+        # saturation_global (LR-driven), saturation_highlights/midtones/shadows
+        float(saturation_global), 0.0, 0.0, 0.0,
+        # hue_angle
+        0.0,
+        # brilliance_global/highlights/midtones/shadows
+        0.0, 0.0, 0.0, 0.0,
+        # mask_grey_fulcrum (default 0.1845 = MIDDLE_GREY)
+        0.1845,
+        # vibrance (LR-driven), grey_fulcrum, contrast (LR-driven)
+        float(vibrance), 0.1845, float(contrast),
+        # saturation_formula = DT_COLORBALANCE_SATURATION_DTUCS = 1
+        1,
+    )
+    assert len(payload) == 132, (
+        f"colorbalancergb params struct size mismatch: got {len(payload)}, "
+        f"expected 132. dt's reader will silently substitute defaults — "
+        f"see ADVERSARIAL_AUDIT_2026-05-23 HIGH-1."
     )
     return payload.hex()
 
@@ -721,6 +804,29 @@ def emit_darktable_xmp(
             seq, num=num, operation="basecurve", enabled=True,
             modversion=BASECURVE_MODVERSION,
             params_b64=_encode_basecurve_params(dcp_curve),
+        )
+        num += 1
+
+    # colorbalancergb — emit when any of LR's master Saturation / Vibrance /
+    # Contrast2012 carry non-default intent. LR's PV2012 contrast lives in
+    # closed-source acr.dll and has no published dt mapping; we route it
+    # through colorbalancergb.contrast as the closest available "global
+    # midtone-pivoted contrast" knob, with the documented caveat in SCOPE.md
+    # that the result is not pixel-match LR. dt's own LR-import drops all
+    # three; this is project-specific best-effort.
+    if (
+        ops.saturation != 0.0
+        or ops.vibrance != 0.0
+        or ops.contrast != 0.0
+    ):
+        _make_history_entry(
+            seq, num=num, operation="colorbalancergb", enabled=True,
+            modversion=COLORBALANCERGB_MODVERSION,
+            params_b64=_encode_colorbalancergb_params(
+                saturation_global=float(ops.saturation) / 100.0,
+                vibrance=float(ops.vibrance) / 100.0,
+                contrast=float(ops.contrast) / 100.0,
+            ),
         )
         num += 1
 
