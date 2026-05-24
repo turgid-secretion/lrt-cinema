@@ -10,6 +10,7 @@ from lrt_cinema import __version__
 from lrt_cinema.interpolation import (
     apply_deflicker,
     apply_holy_grail_ramps,
+    apply_lrt_mask_offsets,
     materialize_all_frames,
 )
 from lrt_cinema.ir import InterpolationMode
@@ -65,6 +66,13 @@ def _build_parser() -> argparse.ArgumentParser:
                         default="apply-lrt-offsets",
                         help="Deflicker mode. 'apply-lrt-offsets' uses the per-frame "
                              "deltas LRT wrote into the XMPs (no measurement pass).")
+    render.add_argument("--lrt-mask-offsets",
+                        choices=("none", "hg", "deflicker", "global", "all"),
+                        default="all",
+                        help="Apply real-LRT mask-correction per-frame exposure deltas. "
+                             "'all' = HG + Deflicker + Global (default). 'none' = ignore. "
+                             "'hg' / 'deflicker' / 'global' = single source. See "
+                             "docs/reference/lrtimelapse/XMP_SCHEMA.md for schema.")
     render.add_argument("--from-frame", type=int, default=0,
                         help="First frame index to render (inclusive).")
     render.add_argument("--to-frame", type=int, default=None,
@@ -174,12 +182,34 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
             "   see docs/VALIDATION.md and SCOPE.md calibration items.)\n"
         )
 
-    out.write(f"\nDeflicker offsets: {len(seq.deflicker_offsets)}\n")
+    out.write(f"\nDeflicker offsets (synthetic schema): {len(seq.deflicker_offsets)}\n")
     if seq.deflicker_offsets:
         evs = [d.exposure_delta_ev for d in seq.deflicker_offsets]
         out.write(
             f"  range: {min(evs):+.3f} EV to {max(evs):+.3f} EV "
             f"(mean abs: {sum(abs(e) for e in evs) / len(evs):.3f} EV)\n"
+        )
+
+    # Real-LRT mask-correction per-frame deltas (HG/Deflicker/Global).
+    # Audit HIGH-2 (2026-05-23) added this section.
+    out.write(f"\nLRT mask-correction offsets (real LRT schema): {len(seq.lrt_mask_offsets)}\n")
+    if seq.lrt_mask_offsets:
+        by_kind: dict[str, list[float]] = {}
+        for off in seq.lrt_mask_offsets:
+            by_kind.setdefault(off.kind, []).append(off.exposure_delta_ev)
+        for kind in ("hg", "deflicker", "global"):
+            entries = by_kind.get(kind, [])
+            if entries:
+                out.write(
+                    f"  {kind:9s}: {len(entries)} frame(s)  "
+                    f"range {min(entries):+.3f} to {max(entries):+.3f} EV  "
+                    f"(mean abs: {sum(abs(e) for e in entries) / len(entries):.3f} EV)\n"
+                )
+    else:
+        out.write(
+            "  (none. If your LRT sequence has run Visual Deflicker or Holy\n"
+            "   Grail Wizard, non-zero per-frame deltas should appear here.\n"
+            "   Zero-valued mask corrections are filtered at parse time.)\n"
         )
 
     if seq.keyframes:
@@ -267,12 +297,17 @@ def _cmd_render(args: argparse.Namespace) -> int:
     seq.interpolation_mode = InterpolationMode(args.interpolation)
 
     per_frame = materialize_all_frames(seq)
-    # Pipeline ordering: Holy Grail ramps are the base exposure intent
-    # (overlay on top of keyframe-interpolated values), deflicker is a
-    # per-frame correction applied on top of that intent. Apply ramps
-    # first, deflicker second.
+    # Pipeline ordering: keyframe-interpolated values are the base; then
+    # overlay Holy Grail ramps (synthetic schema), then real-LRT
+    # mask-correction per-frame deltas (HG / Deflicker / Global), then
+    # synthetic-schema deflicker offsets. All four sources add
+    # exposure_ev linearly.
     if args.holy_grail == "apply-lrt-ramps":
         per_frame = apply_holy_grail_ramps(per_frame, seq)
+    if args.lrt_mask_offsets != "none":
+        kinds = ("hg", "deflicker", "global") if args.lrt_mask_offsets == "all" \
+            else (args.lrt_mask_offsets,)
+        per_frame = apply_lrt_mask_offsets(per_frame, seq, kinds=kinds)
     if args.deflicker == "apply-lrt-offsets":
         per_frame = apply_deflicker(per_frame, seq)
 

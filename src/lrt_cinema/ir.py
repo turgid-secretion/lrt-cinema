@@ -184,6 +184,32 @@ class DeflickerOffset:
 
 
 @dataclass
+class LRTMaskOffset:
+    """A per-frame exposure delta from real LRT's mask-correction system.
+
+    Real LRT 7.5.3 emits Holy Grail, Visual Deflicker, and Global per-frame
+    deltas as named entries inside `crs:MaskGroupBasedCorrections` rather
+    than as top-level `lrt:*` attributes (see
+    docs/reference/lrtimelapse/XMP_SCHEMA.md and the ADVERSARIAL_AUDIT
+    2026-05-23 HIGH-2 finding). Each correction carries:
+
+      `crs:CorrectionName` — one of:
+          "#LRT internal use (HG)"         → kind="hg"
+          "#LRT internal use (Deflicker)"  → kind="deflicker"
+          "#LRT internal use (Global)"     → kind="global"
+      `crs:LocalExposure2012` — additive EV delta applied to that frame's
+          base exposure.
+
+    Parser stores only NON-ZERO values (zero is the default for an
+    initialized-but-unused correction).
+    """
+
+    frame_index: int
+    kind: str  # "hg" | "deflicker" | "global"
+    exposure_delta_ev: float
+
+
+@dataclass
 class LRTSequence:
     """The complete intent extracted from an LRT-managed XMP sidecar set.
 
@@ -196,6 +222,9 @@ class LRTSequence:
     keyframes: list[Keyframe] = field(default_factory=list)
     deflicker_offsets: list[DeflickerOffset] = field(default_factory=list)
     holy_grail_ramps: list[HolyGrailRamp] = field(default_factory=list)
+    # Real-LRT per-frame mask-correction deltas (HG / Deflicker / Global).
+    # Schema observed in LRT 7.5.3 sequence XMPs; see LRTMaskOffset.
+    lrt_mask_offsets: list[LRTMaskOffset] = field(default_factory=list)
     interpolation_mode: InterpolationMode = InterpolationMode.linear
 
     def frame_count(self) -> int:

@@ -129,7 +129,11 @@ def render_frame(
         argv += ["--icc-type", icc_type, "--icc-intent", "RELATIVE_COLORIMETRIC"]
 
     if style_path is not None:
-        argv += ["--style", str(style_path), "--style-overwrite"]
+        # No --style-overwrite — that would wipe the per-frame XMP history we
+        # just emitted (see docs/reference/darktable/STYLES.md). Default
+        # --style behavior appends, with per-frame sidecar entries taking
+        # precedence at same op priority — exactly what we want.
+        argv += ["--style", str(style_path)]
 
     # Format-plugin conf (the bit-depth control). Must go LAST after --core.
     # All --conf KEY=VAL pairs after a single --core are accepted.

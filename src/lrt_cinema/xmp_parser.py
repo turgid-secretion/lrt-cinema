@@ -32,9 +32,19 @@ from lrt_cinema.ir import (
     DevelopOps,
     HolyGrailRamp,
     Keyframe,
+    LRTMaskOffset,
     LRTSequence,
     TonePoint,
 )
+
+# Real LRT 7.5.3 mask-correction CorrectionName → IR kind mapping.
+# Source: docs/reference/lrtimelapse/XMP_SCHEMA.md and observed XMP at
+# the user's Pro 7.5.3 sequence. Audit HIGH-2 (2026-05-23).
+_LRT_MASK_CORRECTION_NAMES = {
+    "#LRT internal use (HG)": "hg",
+    "#LRT internal use (Deflicker)": "deflicker",
+    "#LRT internal use (Global)": "global",
+}
 
 NS = {
     "x": "adobe:ns:meta/",
@@ -240,10 +250,74 @@ def _parse_holy_grail_ramps(desc: ET.Element) -> list[HolyGrailRamp]:
     return ramps
 
 
+def _parse_lrt_mask_offsets(desc: ET.Element) -> list[tuple[str, float]]:
+    """Extract LRT mask-correction per-frame exposure deltas from one
+    rdf:Description.
+
+    Real LRT 7.5.3 schema (verified empirically + cross-referenced against
+    docs/reference/lrtimelapse/XMP_SCHEMA.md):
+
+        <crs:MaskGroupBasedCorrections>
+          <rdf:Seq>
+            <rdf:li>
+              <rdf:Description
+                crs:CorrectionName="#LRT internal use (HG)"
+                crs:LocalExposure2012="0.123"
+                crs:What="Correction" ...>
+                <crs:CorrectionMasks>...</crs:CorrectionMasks>
+              </rdf:Description>
+            </rdf:li>
+            ... (Deflicker, Global, plus user-set masks named
+                 "LRT Mask 1" etc. which we ignore)
+          </rdf:Seq>
+        </crs:MaskGroupBasedCorrections>
+
+    Returns list of (kind, exposure_delta_ev) tuples for non-zero LRT
+    internal-use corrections only. Zero values are filtered — they
+    represent initialized-but-unused corrections (e.g., user hasn't
+    run Visual Deflicker yet).
+
+    See ADVERSARIAL_AUDIT_2026-05-23 HIGH-2 for project context.
+    """
+    container = desc.find(_q("crs", "MaskGroupBasedCorrections"))
+    if container is None:
+        return []
+    seq = container.find(_q("rdf", "Seq"))
+    if seq is None:
+        return []
+    results: list[tuple[str, float]] = []
+    for li in seq.findall(_q("rdf", "li")):
+        inner = li.find(_q("rdf", "Description"))
+        if inner is None:
+            continue
+        name = inner.get(_q("crs", "CorrectionName"))
+        if name is None or name not in _LRT_MASK_CORRECTION_NAMES:
+            continue
+        kind = _LRT_MASK_CORRECTION_NAMES[name]
+        ev_str = inner.get(_q("crs", "LocalExposure2012"))
+        if ev_str is None:
+            continue
+        try:
+            ev = float(ev_str)
+        except ValueError:
+            continue
+        if ev == 0.0:
+            continue  # filter initialized-but-unused corrections
+        results.append((kind, ev))
+    return results
+
+
 def parse_xmp_file(
     path: Path,
-) -> tuple[DevelopOps, bool, float | None, list[HolyGrailRamp], int | None]:
-    """Parse one XMP file → (DevelopOps, is_keyframe, deflicker_delta, hg_ramps, rating).
+) -> tuple[
+    DevelopOps,
+    bool,
+    float | None,
+    list[HolyGrailRamp],
+    int | None,
+    list[tuple[str, float]],
+]:
+    """Parse one XMP file → (DevelopOps, is_keyframe, deflicker_delta, hg_ramps, rating, mask_offsets).
 
     XMP allows multiple `rdf:Description` nodes; we merge them so intent
     split across nodes is not silently dropped. The is_keyframe flag is
@@ -253,12 +327,16 @@ def parse_xmp_file(
     `lrt:keyframe` attribute or, in `parse_sequence`, the
     `_has_meaningful_ops` heuristic. deflicker_delta is taken from the
     first Description that supplies one (synthetic schema only — real
-    LRT uses mask corrections, a calibration item). hg_ramps is the
-    concatenation of every Description's `<lrt:HolyGrailRamps>` block
-    in document order (synthetic schema only). rating is the maximum
-    xmp:Rating value seen across all Descriptions, or None if absent —
-    exposed so callers can distinguish "explicitly non-keyframe"
-    (rating==0) from "no rating present" (rating==None).
+    LRT uses mask corrections, returned as mask_offsets). hg_ramps is
+    the concatenation of every Description's `<lrt:HolyGrailRamps>`
+    block in document order (synthetic schema only). rating is the
+    maximum xmp:Rating value seen across all Descriptions, or None if
+    absent. mask_offsets is the concatenation of every Description's
+    `crs:MaskGroupBasedCorrections` entries that match real LRT's
+    internal-use correction names ("#LRT internal use (HG/Deflicker/
+    Global)"), returned as `(kind, exposure_delta_ev)` tuples — only
+    non-zero values are returned. See ADVERSARIAL_AUDIT_2026-05-23
+    HIGH-2.
 
     Uses defusedxml to harden against XXE / billion-laughs attacks on
     untrusted XMP input.
@@ -279,6 +357,7 @@ def parse_xmp_file(
     rating_seen: int | None = None
     deflicker_delta: float | None = None
     hg_ramps: list[HolyGrailRamp] = []
+    mask_offsets: list[tuple[str, float]] = []
 
     for desc in descriptions:
         ops = _merge_ops(ops, _parse_description(desc))
@@ -312,6 +391,7 @@ def parse_xmp_file(
                     deflicker_delta = None
 
         hg_ramps.extend(_parse_holy_grail_ramps(desc))
+        mask_offsets.extend(_parse_lrt_mask_offsets(desc))
 
     # Rating, when present, is authoritative: rating>=1 = keyframe,
     # rating==0 = explicitly NOT a keyframe (overrides _has_meaningful_ops
@@ -320,7 +400,7 @@ def parse_xmp_file(
     if rating_seen is not None:
         is_keyframe = rating_seen >= 1
 
-    return ops, is_keyframe, deflicker_delta, hg_ramps, rating_seen
+    return ops, is_keyframe, deflicker_delta, hg_ramps, rating_seen, mask_offsets
 
 
 def parse_sequence(folder: Path, raw_extensions: tuple[str, ...] = (
@@ -353,7 +433,9 @@ def parse_sequence(folder: Path, raw_extensions: tuple[str, ...] = (
         if not xmp.exists():
             continue
         try:
-            ops, is_kf, deflicker_delta, hg_ramps, rating = parse_xmp_file(xmp)
+            ops, is_kf, deflicker_delta, hg_ramps, rating, mask_offsets = (
+                parse_xmp_file(xmp)
+            )
         except (ET.ParseError, ValueError):
             continue
 
@@ -389,6 +471,15 @@ def parse_sequence(folder: Path, raw_extensions: tuple[str, ...] = (
         # any, ignore later ones. SCHEMA TBR — see LRT_NS_HINTS.
         if hg_ramps and not seq.holy_grail_ramps:
             seq.holy_grail_ramps = hg_ramps
+
+        # Real-LRT mask-correction per-frame deltas (HG/Deflicker/Global).
+        # Each XMP carries at most one of each kind; we flatten across all
+        # frames into seq.lrt_mask_offsets tagged with frame_index + kind.
+        # See ADVERSARIAL_AUDIT_2026-05-23 HIGH-2.
+        for kind, ev in mask_offsets:
+            seq.lrt_mask_offsets.append(LRTMaskOffset(
+                frame_index=idx, kind=kind, exposure_delta_ev=ev,
+            ))
 
     return seq
 

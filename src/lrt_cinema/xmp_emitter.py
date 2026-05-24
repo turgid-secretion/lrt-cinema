@@ -86,8 +86,18 @@ TEMPERATURE_MODVERSION = "3"
 # the temperature module pre-calibration so this constant is unused. When the
 # kelvin→multipliers calibration ships, bump to "4" and add the preset int.
 
-BLENDOP_VERSION = "11"
-EMPTY_BLENDOP_PARAMS = "00" * 64
+# Blendop attrs (`darktable:blendop_version`, `darktable:blendop_params`)
+# are intentionally NOT emitted. Per docs/research/ADVERSARIAL_AUDIT_2026-05-23.md
+# HIGH-1, our prior values (`blendop_version="11"` + 64-byte zero blob) were
+# rejected by dt 5.5's reader ("blendop v. 11: version WRONG params WRONG"
+# in -d params log) and silently substituted with dt's default blendop
+# (mask_mode=DEVELOP_MASK_DISABLED, opacity=100, blend=NORMAL2 → output
+# passthrough). Empirically validated: omitting blendop attrs entirely takes
+# the SAME dt code path with NO version-WRONG warning. Per-module blendop
+# attrs are optional in the dt XMP spec — when absent, dt initializes from
+# module->default_blendop_params, which is what we want for an "unblended"
+# render. Re-introduce only when we need non-default blending semantics
+# (e.g. masked exposure for a specific look).
 
 
 def _encode_exposure_params(exposure_ev: float) -> str:
@@ -159,8 +169,7 @@ def _make_history_entry(
     li.set(f"{{{DT_NS}}}params", params_b64)
     li.set(f"{{{DT_NS}}}multi_name", "")
     li.set(f"{{{DT_NS}}}multi_priority", "0")
-    li.set(f"{{{DT_NS}}}blendop_version", BLENDOP_VERSION)
-    li.set(f"{{{DT_NS}}}blendop_params", EMPTY_BLENDOP_PARAMS)
+    # blendop_* intentionally omitted — see module-level comment.
 
 
 def emit_darktable_xmp(ops: DevelopOps, output_path: Path) -> None:

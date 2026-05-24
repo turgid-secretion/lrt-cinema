@@ -111,6 +111,40 @@ def apply_deflicker(
     return per_frame_ops
 
 
+def apply_lrt_mask_offsets(
+    per_frame_ops: list[DevelopOps], seq: LRTSequence,
+    kinds: tuple[str, ...] = ("hg", "deflicker", "global"),
+) -> list[DevelopOps]:
+    """Apply real-LRT mask-correction per-frame exposure deltas in place.
+
+    Real LRT 7.5.3 emits Holy Grail / Visual Deflicker / Global per-frame
+    EV deltas inside `crs:MaskGroupBasedCorrections`. Parser extracts
+    those as `LRTMaskOffset(frame_index, kind, exposure_delta_ev)` and
+    stores them on `seq.lrt_mask_offsets`. This function sums all
+    requested kinds per frame and adds to that frame's `exposure_ev`.
+
+    `kinds` selects which sources to apply; default is all three. Pass
+    `("deflicker",)` to apply only Deflicker corrections, etc. Matches
+    the CLI's per-source toggle semantics.
+
+    Mutates `per_frame_ops` in place and returns it. See
+    ADVERSARIAL_AUDIT_2026-05-23 HIGH-2 for context.
+    """
+    kinds_set = set(kinds)
+    sum_by_frame: dict[int, float] = {}
+    for off in seq.lrt_mask_offsets:
+        if off.kind not in kinds_set:
+            continue
+        sum_by_frame[off.frame_index] = (
+            sum_by_frame.get(off.frame_index, 0.0) + off.exposure_delta_ev
+        )
+    for i, ops in enumerate(per_frame_ops):
+        delta = sum_by_frame.get(i, 0.0)
+        if delta != 0.0:
+            per_frame_ops[i] = replace(ops, exposure_ev=ops.exposure_ev + delta)
+    return per_frame_ops
+
+
 def apply_holy_grail_ramps(
     per_frame_ops: list[DevelopOps], seq: LRTSequence,
 ) -> list[DevelopOps]:
@@ -315,6 +349,7 @@ def _smooth_blend(
 __all__ = [
     "apply_deflicker",
     "apply_holy_grail_ramps",
+    "apply_lrt_mask_offsets",
     "interpolate",
     "materialize_all_frames",
 ]

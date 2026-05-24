@@ -10,7 +10,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def test_parse_keyframe_a_fields():
-    ops, is_kf, deflicker, _ramps, _rating = parse_xmp_file(FIXTURES / "synthetic_keyframe_a.xmp")
+    ops, is_kf, deflicker, _ramps, _rating, _mask = parse_xmp_file(FIXTURES / "synthetic_keyframe_a.xmp")
     assert is_kf is True
     assert deflicker is None
     assert ops.exposure_ev == 0.5
@@ -27,7 +27,7 @@ def test_parse_keyframe_a_fields():
 
 
 def test_parse_keyframe_b_with_deflicker():
-    ops, is_kf, deflicker, _ramps, _rating = parse_xmp_file(FIXTURES / "synthetic_keyframe_b.xmp")
+    ops, is_kf, deflicker, _ramps, _rating, _mask = parse_xmp_file(FIXTURES / "synthetic_keyframe_b.xmp")
     assert is_kf is True
     assert deflicker == pytest.approx(0.12)
     assert ops.exposure_ev == 2.5
@@ -35,7 +35,7 @@ def test_parse_keyframe_b_with_deflicker():
 
 
 def test_parse_tone_curve_from_seq():
-    ops, _, _, _, _ = parse_xmp_file(FIXTURES / "synthetic_with_tone_curve.xmp")
+    ops, _, _, _, _, _ = parse_xmp_file(FIXTURES / "synthetic_with_tone_curve.xmp")
     assert len(ops.tone_curve) == 5
     assert ops.tone_curve[0].x == 0.0
     assert ops.tone_curve[0].y == 0.0
@@ -46,7 +46,7 @@ def test_parse_tone_curve_from_seq():
 
 
 def test_parse_multi_description_merges_intent():
-    ops, is_kf, deflicker, _ramps, _rating = parse_xmp_file(
+    ops, is_kf, deflicker, _ramps, _rating, _mask = parse_xmp_file(
         FIXTURES / "synthetic_multi_description.xmp"
     )
     assert is_kf is True
@@ -70,14 +70,50 @@ def test_parse_kelvin_as_float_text():
         f.write(xmp)
         path = Path(f.name)
     try:
-        ops, _, _, _, _ = parse_xmp_file(path)
+        ops, _, _, _, _, _ = parse_xmp_file(path)
         assert ops.temperature_k == 5500
     finally:
         path.unlink()
 
 
+def test_parse_real_lrt_mask_offsets():
+    # ADVERSARIAL_AUDIT_2026-05-23 HIGH-2: real LRT 7.5.3 writes HG /
+    # Deflicker / Global per-frame deltas inside crs:MaskGroupBasedCorrections,
+    # not as top-level lrt:* attributes. Parser must walk that container,
+    # match #LRT internal use ({HG,Deflicker,Global}) names, extract
+    # crs:LocalExposure2012, and FILTER ZEROS (initialized-but-unused).
+    _ops, _is_kf, _delta, _ramps, _rating, mask_offsets = parse_xmp_file(
+        FIXTURES / "synthetic_real_lrt_mask_offsets.xmp",
+    )
+    # Fixture has 4 mask entries: HG=0.25 + Deflicker=-0.075 + Global=0.0 +
+    # user "LRT Mask 1"=0.5. Expect HG + Deflicker only (Global is 0.0
+    # → filtered; user mask isn't a recognized internal-use name).
+    kinds = sorted(k for k, _ in mask_offsets)
+    assert kinds == ["deflicker", "hg"]
+    by_kind = dict(mask_offsets)
+    assert by_kind["hg"] == pytest.approx(0.25)
+    assert by_kind["deflicker"] == pytest.approx(-0.075)
+
+
+def test_parse_sequence_collects_lrt_mask_offsets(tmp_path):
+    # Verify parse_sequence ingests mask offsets into seq.lrt_mask_offsets
+    # with the right frame_index + kind + delta.
+    raw = tmp_path / "DSC_5059.NEF"
+    raw.write_bytes(b"raw-stub")
+    (tmp_path / "DSC_5059.NEF.xmp").write_text(
+        (FIXTURES / "synthetic_real_lrt_mask_offsets.xmp").read_text(),
+    )
+    seq = parse_sequence(tmp_path)
+    assert len(seq.lrt_mask_offsets) == 2
+    by_kind = {o.kind: o for o in seq.lrt_mask_offsets}
+    assert by_kind["hg"].frame_index == 0
+    assert by_kind["hg"].exposure_delta_ev == pytest.approx(0.25)
+    assert by_kind["deflicker"].frame_index == 0
+    assert by_kind["deflicker"].exposure_delta_ev == pytest.approx(-0.075)
+
+
 def test_parse_real_lrt_fixture_uses_xmp_rating():
-    ops, is_kf, deflicker, _ramps, rating = parse_xmp_file(
+    ops, is_kf, deflicker, _ramps, rating, _mask = parse_xmp_file(
         FIXTURES / "synthetic_real_lrt_keyframe.xmp",
     )
     assert rating == 4
