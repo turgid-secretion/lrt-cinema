@@ -4,6 +4,7 @@ import pytest
 
 from lrt_cinema.interpolation import (
     apply_deflicker,
+    apply_lrt_mask_offsets,
     interpolate,
     materialize_all_frames,
 )
@@ -12,6 +13,7 @@ from lrt_cinema.ir import (
     DevelopOps,
     InterpolationMode,
     Keyframe,
+    LRTMaskOffset,
     LRTSequence,
     TonePoint,
 )
@@ -202,3 +204,43 @@ def test_apply_deflicker_adds_per_frame_delta():
     assert deflickered[1].exposure_ev == pytest.approx(1.1)
     assert deflickered[2].exposure_ev == pytest.approx(0.95)
     assert deflickered[3].exposure_ev == 1.0
+
+
+def test_apply_lrt_mask_offsets_sums_kinds_per_frame():
+    # ADVERSARIAL_AUDIT_2026-05-23 HIGH-2: real-LRT mask corrections
+    # (HG/Deflicker/Global) sum additively per frame onto exposure_ev.
+    seq = _seq(4, [
+        Keyframe(frame_index=0, ops=DevelopOps(exposure_ev=1.0)),
+        Keyframe(frame_index=3, ops=DevelopOps(exposure_ev=1.0)),
+    ])
+    seq.lrt_mask_offsets = [
+        LRTMaskOffset(frame_index=1, kind="hg",        exposure_delta_ev=0.30),
+        LRTMaskOffset(frame_index=1, kind="deflicker", exposure_delta_ev=-0.05),
+        LRTMaskOffset(frame_index=1, kind="global",    exposure_delta_ev=0.10),
+        LRTMaskOffset(frame_index=2, kind="deflicker", exposure_delta_ev=0.20),
+    ]
+    frames = materialize_all_frames(seq)
+    applied = apply_lrt_mask_offsets(frames, seq)
+    # Frame 1: sum of all three kinds = 0.30 - 0.05 + 0.10 = 0.35
+    assert applied[1].exposure_ev == pytest.approx(1.35)
+    # Frame 2: only deflicker
+    assert applied[2].exposure_ev == pytest.approx(1.20)
+    # Frames with no offsets untouched
+    assert applied[0].exposure_ev == 1.0
+    assert applied[3].exposure_ev == 1.0
+
+
+def test_apply_lrt_mask_offsets_kinds_filter():
+    # Only the requested kinds apply.
+    seq = _seq(2, [Keyframe(frame_index=0, ops=DevelopOps(exposure_ev=0.0))])
+    seq.lrt_mask_offsets = [
+        LRTMaskOffset(frame_index=0, kind="hg",        exposure_delta_ev=1.0),
+        LRTMaskOffset(frame_index=0, kind="deflicker", exposure_delta_ev=2.0),
+        LRTMaskOffset(frame_index=0, kind="global",    exposure_delta_ev=4.0),
+    ]
+    frames = materialize_all_frames(seq)
+    only_hg = apply_lrt_mask_offsets(frames[:], seq, kinds=("hg",))
+    assert only_hg[0].exposure_ev == pytest.approx(1.0)
+    frames2 = materialize_all_frames(seq)
+    only_dfk = apply_lrt_mask_offsets(frames2, seq, kinds=("deflicker",))
+    assert only_dfk[0].exposure_ev == pytest.approx(2.0)

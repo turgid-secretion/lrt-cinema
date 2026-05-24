@@ -60,6 +60,25 @@ def test_emitter_includes_exposure_operation(tmp_path):
     assert "exposure" in operations
 
 
+def test_emitter_does_not_emit_blendop_attrs(tmp_path):
+    # ADVERSARIAL_AUDIT_2026-05-23 HIGH-1: emitter's prior
+    # blendop_version="11" + 64-byte zero blendop_params was rejected by dt
+    # 5.5's reader (logged "blendop v. 11: version WRONG params WRONG") and
+    # silently substituted with module->default_blendop_params. We now omit
+    # blendop_* attrs entirely, which takes the same dt code path with no
+    # version-WRONG warning. Guard against regression.
+    out = tmp_path / "frame.xmp"
+    emit_darktable_xmp(DevelopOps(exposure_ev=1.0), out)
+    root = _parse(out)
+    for li in root.iter(f"{{{RDF_NS}}}li"):
+        assert li.get(f"{{{DT_NS}}}blendop_version") is None, (
+            "blendop_version must not be emitted — see audit HIGH-1"
+        )
+        assert li.get(f"{{{DT_NS}}}blendop_params") is None, (
+            "blendop_params must not be emitted — see audit HIGH-1"
+        )
+
+
 def test_emitter_does_not_emit_temperature_module_pre_calibration(tmp_path):
     # Pre-calibration we deliberately do NOT emit the temperature module
     # even when temperature_k is set, because neutral 1.0 multipliers
