@@ -57,11 +57,17 @@ def _build_parser() -> argparse.ArgumentParser:
                         default="linear",
                         help="Keyframe interpolation mode. 'smooth' uses uniform "
                              "Catmull-Rom with mirror-extrapolated phantom tangents "
-                             "(degenerates to linear for 2-keyframe sequences).")
+                             "(degenerates to linear for 2-keyframe sequences). "
+                             "NOT validated to match LRT's spline shape — for "
+                             "LRT-fidelity, prefer 'linear' or run Auto Transition "
+                             "in LRT first (we then exact-match LRT's per-frame values).")
     render.add_argument("--holy-grail", choices=("none", "apply-lrt-ramps"),
                         default="apply-lrt-ramps",
-                        help="Holy Grail exposure-ramp mode. 'apply-lrt-ramps' overlays "
-                             "the per-segment ramp deltas LRT wrote into the XMPs.")
+                        help="Synthetic-fixture Holy Grail ramp mode. 'apply-lrt-ramps' "
+                             "overlays per-segment ramp deltas from the synthetic "
+                             "<lrt:HolyGrailRamps> schema (used by tests). Real LRT "
+                             "uses mask-correction per-frame deltas — see "
+                             "--lrt-mask-offsets.")
     render.add_argument("--deflicker", choices=("none", "apply-lrt-offsets"),
                         default="apply-lrt-offsets",
                         help="Deflicker mode. 'apply-lrt-offsets' uses the per-frame "
@@ -109,6 +115,37 @@ _DROPPED_AT_EMIT_FIELDS = (
     "contrast", "highlights", "shadows", "whites", "blacks",
     "saturation", "vibrance", "sharpness",
 )
+
+
+def _emit_dropped_field_warnings(seq, stream) -> None:
+    """Audit MEDIUM-6: render-time stderr warnings for parsed-but-dropped fields.
+
+    Same data the inspect command surfaces, in compact one-line form,
+    so users who skip `inspect` still see what their LRT keyframes
+    intended but our pipeline doesn't propagate yet.
+    """
+    if not seq.keyframes:
+        return
+    kf_count = len(seq.keyframes)
+    dropped: list[str] = []
+    for name in _DROPPED_AT_EMIT_FIELDS:
+        count = sum(1 for kf in seq.keyframes if getattr(kf.ops, name) != 0.0)
+        if count:
+            dropped.append(f"{name} ({count}/{kf_count})")
+    if any(kf.ops.tone_curve for kf in seq.keyframes):
+        tc_count = sum(1 for kf in seq.keyframes if kf.ops.tone_curve)
+        dropped.append(f"tone_curve ({tc_count}/{kf_count})")
+    if any(kf.ops.tint is not None for kf in seq.keyframes):
+        t_count = sum(1 for kf in seq.keyframes if kf.ops.tint is not None)
+        dropped.append(f"tint ({t_count}/{kf_count})")
+    if any(kf.ops.temperature_k is not None for kf in seq.keyframes):
+        k_count = sum(1 for kf in seq.keyframes if kf.ops.temperature_k is not None)
+        dropped.append(f"temperature_k ({k_count}/{kf_count})")
+    if dropped:
+        stream.write(
+            f"warning: dropped at emit (calibration items, see SCOPE.md): "
+            f"{', '.join(dropped)}\n"
+        )
 
 
 def _cmd_inspect(args: argparse.Namespace) -> int:
@@ -277,6 +314,12 @@ def _cmd_render(args: argparse.Namespace) -> int:
     except (FileNotFoundError, NotADirectoryError) as exc:
         sys.stderr.write(f"error: {exc}\n")
         return 2
+
+    # Audit MEDIUM-6: warn at render-time about parsed fields that don't
+    # reach the rendered output. inspect already prints this; render
+    # was silent before, causing surprise data loss for users who set
+    # WB / contrast / tone-curve / etc. in LRT and didn't run inspect.
+    _emit_dropped_field_warnings(seq, sys.stderr)
 
     if seq.frame_count() == 0:
         sys.stderr.write(f"error: no RAW frames found under {args.input}\n")

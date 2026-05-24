@@ -1,9 +1,9 @@
 # Darktable XMP sidecar — schema reference
 
-Authoritative source: [`src/common/exif.cc`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/common/exif.cc),
+Authoritative source: [`src/common/exif.cc`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/common/exif.cc),
 sub-section "XMP write" (around L5090-L5210) and "XMP read" (around
 L4040-L4570). All citations to commit
-`635c0c55b64331481dffe30f937ba3fe72f83857`.
+`9402c65275bebebc4649c6dc91d3798d4bd63a0f`.
 
 ## The xpacket wrapper
 
@@ -41,13 +41,13 @@ wrong on the upper bound and right on the lower direction by
 accident. The source-of-truth:
 
 - The constant darktable WRITES is `DT_XMP_EXIF_VERSION = 5`,
-  defined at [`exif.cc#L81`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/common/exif.cc#L81)
-  and used by both write paths at [`exif.cc#L5097`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/common/exif.cc#L5097)
-  and [`exif.cc#L5248`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/common/exif.cc#L5248).
+  defined at [`exif.cc#L81`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/common/exif.cc#L81)
+  and used by both write paths at [`exif.cc#L5097`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/common/exif.cc#L5097)
+  and [`exif.cc#L5248`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/common/exif.cc#L5248).
   dt master writes the integer **5**, not 1.
 - The READER accepts values 0, 1, 2, 3, 4, and 5. Only values ≥ 6
   trigger the error `XMP schema version N in '<file>' not supported`
-  at [`exif.cc#L4223-L4231`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/common/exif.cc#L4223-L4231):
+  at [`exif.cc#L4223-L4231`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/common/exif.cc#L4223-L4231):
 
   ```c
   if(xmp_version < 2)         _read_history_v1(...);   // rdf:Bag, ancient
@@ -57,7 +57,7 @@ accident. The source-of-truth:
 
   Setting `xmp_version="1"` therefore works on dt 5.5 master but routes
   the parser through the legacy `_read_history_v1` path
-  ([`exif.cc#L3433-L3543`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/common/exif.cc#L3433-L3543))
+  ([`exif.cc#L3433-L3543`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/common/exif.cc#L3433-L3543))
   which expects the pre-3.0 `rdf:Bag` history layout. lrt-cinema
   emits a modern `rdf:Seq`, so the "1" claim is a misdiagnosis: dt
   reads the rdf:Seq fine because Exiv2 handles both container types,
@@ -76,16 +76,16 @@ The "schema version" gates two things per the read path:
   optional `Xmp.darktable.iop_order_list`.
 - `xmp_version >= 5`: assume highlights module is always present in
   history (skip a v4-and-older legacy fix-up; see
-  [`exif.cc#L4250-L4280`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/common/exif.cc#L4250-L4280)).
+  [`exif.cc#L4250-L4280`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/common/exif.cc#L4250-L4280)).
 
 ## The required `rdf:Description` attributes
 
 dt looks for the namespace `xmlns:darktable="http://darktable.sf.net/"`
 to flag a file as dt-authored. If absent, dt treats the XMP as
 foreign and routes through `lightroom.c` (see `LR_IMPORT.md`).
-Detection at [`exif.cc#L4071-L4074`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/common/exif.cc#L4071-L4074).
+Detection at [`exif.cc#L4071-L4074`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/common/exif.cc#L4071-L4074).
 
-Required attributes (set by dt's writer at [`exif.cc#L5191-L5202`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/common/exif.cc#L5191-L5202)):
+Required attributes (set by dt's writer at [`exif.cc#L5191-L5202`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/common/exif.cc#L5191-L5202)):
 
 - `darktable:xmp_version` (see above)
 - `darktable:raw_params` (int packed dt_image_raw_parameters_t)
@@ -102,7 +102,7 @@ Required attributes (set by dt's writer at [`exif.cc#L5191-L5202`](https://githu
 The history is stored under `Xmp.darktable.history` as an `rdf:Seq`
 of `rdf:li` entries. Each entry carries attributes (NOT child
 elements) in the `darktable:` namespace. Per-entry layout, read by
-`_read_history_v2` at [`exif.cc#L3545-L3700`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/common/exif.cc#L3545-L3700):
+`_read_history_v2` at [`exif.cc#L3545-L3700`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/common/exif.cc#L3545-L3700):
 
 | Attribute | Type | Semantics |
 |---|---|---|
@@ -151,12 +151,12 @@ with v1 (`xmp_version < 3`) and v3 (`xmp_version >= 3`) layouts. v3
 adds per-version mask migration and stores source clip points in a
 denser format. lrt-cinema does not emit masks; this section is for
 parser parity if we ever need to round-trip an LRT mask-based
-deflicker through dt's masks. See [`exif.cc#L4174-L4182`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/common/exif.cc#L4174-L4182)
+deflicker through dt's masks. See [`exif.cc#L4174-L4182`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/common/exif.cc#L4174-L4182)
 for the dispatch.
 
 ## Other relevant XMP keys dt writes
 
-From the writer at [`exif.cc#L5146-L5203`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/common/exif.cc#L5146-L5203):
+From the writer at [`exif.cc#L5146-L5203`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/common/exif.cc#L5146-L5203):
 
 - `Xmp.exif.DateTimeOriginal` (dt's view of date-taken, may differ
   from EXIF if user set it)

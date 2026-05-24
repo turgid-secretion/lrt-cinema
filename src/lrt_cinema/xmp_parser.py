@@ -174,6 +174,15 @@ def _merge_ops(base: DevelopOps, override: DevelopOps) -> DevelopOps:
     nodes (exiftool round-trips often do this — different namespaces in
     separate Descriptions). We merge them rather than letting the first
     one win, which would otherwise silently drop intent.
+
+    Audit MEDIUM-5 (2026-05-23): known limitation — this treats `0.0` as
+    "no intent" for scalar float fields, so a later Description that
+    explicitly sets a field BACK to 0.0 cannot override a non-zero earlier
+    value. Real LRT writes one Description per frame XMP, so this is
+    multi-Description-roundtrip-only and has not been observed in
+    production. The principled fix is a per-field "explicitly-set"
+    bitmask on DevelopOps; deferred until a real LRT or LR round-trip
+    surfaces it as a problem.
     """
     from dataclasses import replace
     merged = replace(base)

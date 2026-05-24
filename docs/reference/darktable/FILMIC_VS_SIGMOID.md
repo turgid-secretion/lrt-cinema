@@ -3,7 +3,7 @@
 Darktable's three current scene-to-display tone-mapping modules,
 their attributions, when they're auto-applied, and the design
 trade-offs as the modules' authors describe them. Source citations to
-commit `635c0c55b64331481dffe30f937ba3fe72f83857`.
+commit `9402c65275bebebc4649c6dc91d3798d4bd63a0f`.
 
 ## The three modules
 
@@ -14,14 +14,14 @@ commit `635c0c55b64331481dffe30f937ba3fe72f83857`.
 - Author: **Aurelien Pierre**.
 - Introduced: dt 3.0 (December 2019) as `filmic`; renamed `filmicrgb`
   in dt 3.2 (June 2020) for the RGB-space rewrite.
-- Source: [`src/iop/filmicrgb.c`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/filmicrgb.c)
-- Current modversion: 6 ([`filmicrgb.c#L66`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/filmicrgb.c#L66))
+- Source: [`src/iop/filmicrgb.c`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/filmicrgb.c)
+- Current modversion: 6 ([`filmicrgb.c#L66`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/filmicrgb.c#L66))
 - Design: filmic curve (S-curve based on a scaled logistic) with
   user-settable black-relative-exposure, white-relative-exposure,
   middle-grey, dynamic-range latitude, and per-region (shadows /
   highlights) contrast hardness. 29 parameters in the struct.
 - Auto-apply: only under workflow `scene-referred (filmic)`
-  ([`filmicrgb.c#L3179-L3199`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/filmicrgb.c#L3179-L3199)).
+  ([`filmicrgb.c#L3179-L3199`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/filmicrgb.c#L3179-L3199)).
 
 ### sigmoid
 
@@ -31,13 +31,13 @@ commit `635c0c55b64331481dffe30f937ba3fe72f83857`.
   on 2021-01-12.
 - Introduced in dt: 4.4 (released 2023-06-21; verified via
   `gh api repos/darktable-org/darktable/releases`).
-- Source: [`src/iop/sigmoid.c`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/sigmoid.c)
-- Current modversion: 3 ([`sigmoid.c#L34`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/sigmoid.c#L34))
+- Source: [`src/iop/sigmoid.c`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/sigmoid.c)
+- Current modversion: 3 ([`sigmoid.c#L34`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/sigmoid.c#L34))
 - Design: a "modified generalized log-logistic curve" with only two
   primary user-facing controls (contrast and skew), plus per-primary
   inset / rotation for color rendition shaping. 14 parameters.
 - Auto-apply: only under workflow `scene-referred (sigmoid)`
-  ([`sigmoid.c#L227-L246`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/sigmoid.c#L227-L246)).
+  ([`sigmoid.c#L227-L246`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/sigmoid.c#L227-L246)).
 - Original dev quote, from jandren's first post in the thread above:
   > "tone mapping / look transform / scene to display conversion ...
   > based on a sigmoid function instead of a cubic spline like the
@@ -55,7 +55,7 @@ commit `635c0c55b64331481dffe30f937ba3fe72f83857`.
   ("a new tone mapper based on Blender's AgX display transform was
   added, offering more extensive controls than Sigmoid with explicit
   exposure white/black points similar to Filmic RGB").
-- Source: [`src/iop/agx.c`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/agx.c)
+- Source: [`src/iop/agx.c`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/agx.c)
 - Auto-apply: only under workflow `scene-referred (AgX)`.
 
 ## The default in dt 5.5 master
@@ -183,7 +183,7 @@ calibrated and emitted.
 - For `stills-finished`, pick exactly one display transform and
   emit a calibrated history entry for it. `sigmoid` with the
   "smooth" or "neutral gray" preset is the lowest-effort baseline;
-  the preset params are in [`sigmoid.c#L227-L300`](https://github.com/darktable-org/darktable/blob/635c0c55b64331481dffe30f937ba3fe72f83857/src/iop/sigmoid.c#L227-L300).
+  the preset params are in [`sigmoid.c#L227-L300`](https://github.com/darktable-org/darktable/blob/9402c65275bebebc4649c6dc91d3798d4bd63a0f/src/iop/sigmoid.c#L227-L300).
 - LR-tone-match is **not** achievable with any single dt display
   transform. That's a Track A2 calibration problem (PV2012 math),
   not a tone-mapper-selection problem.
