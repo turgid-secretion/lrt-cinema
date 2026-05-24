@@ -10,7 +10,6 @@ from lrt_cinema import __version__
 from lrt_cinema.dcp import auto_detect_profile, parse_dcp, read_raw_make_model
 from lrt_cinema.interpolation import (
     apply_deflicker,
-    apply_holy_grail_ramps,
     apply_lrt_mask_offsets,
     materialize_all_frames,
 )
@@ -62,13 +61,6 @@ def _build_parser() -> argparse.ArgumentParser:
                              "NOT validated to match LRT's spline shape — for "
                              "LRT-fidelity, prefer 'linear' or run Auto Transition "
                              "in LRT first (we then exact-match LRT's per-frame values).")
-    render.add_argument("--holy-grail", choices=("none", "apply-lrt-ramps"),
-                        default="apply-lrt-ramps",
-                        help="Synthetic-fixture Holy Grail ramp mode. 'apply-lrt-ramps' "
-                             "overlays per-segment ramp deltas from the synthetic "
-                             "<lrt:HolyGrailRamps> schema (used by tests). Real LRT "
-                             "uses mask-correction per-frame deltas — see "
-                             "--lrt-mask-offsets.")
     render.add_argument("--deflicker", choices=("none", "apply-lrt-offsets"),
                         default="apply-lrt-offsets",
                         help="Deflicker mode. 'apply-lrt-offsets' uses the per-frame "
@@ -273,20 +265,6 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
                 f"curve_pts={len(ops.tone_curve)}\n"
             )
 
-    out.write(f"\nHoly Grail ramps: {len(seq.holy_grail_ramps)}\n")
-    for r in seq.holy_grail_ramps:
-        out.write(
-            f"  [{r.start_frame}..{r.end_frame}] "
-            f"{r.start_exposure_ev:+.2f} EV → {r.end_exposure_ev:+.2f} EV "
-            f"smoothness={r.smoothness}\n"
-        )
-    if not seq.holy_grail_ramps:
-        out.write(
-            "  (none found. If you used LRT's Holy Grail workflow, the schema\n"
-            "   may differ from our current guess of <lrt:HolyGrailRamps> —\n"
-            "   see docs/VALIDATION.md and SCOPE.md calibration items.)\n"
-        )
-
     out.write(f"\nDeflicker offsets (synthetic schema): {len(seq.deflicker_offsets)}\n")
     if seq.deflicker_offsets:
         evs = [d.exposure_delta_ev for d in seq.deflicker_offsets]
@@ -482,12 +460,9 @@ def _cmd_render(args: argparse.Namespace) -> int:
 
     per_frame = materialize_all_frames(seq)
     # Pipeline ordering: keyframe-interpolated values are the base; then
-    # overlay Holy Grail ramps (synthetic schema), then real-LRT
-    # mask-correction per-frame deltas (HG / Deflicker / Global), then
-    # synthetic-schema deflicker offsets. All four sources add
-    # exposure_ev linearly.
-    if args.holy_grail == "apply-lrt-ramps":
-        per_frame = apply_holy_grail_ramps(per_frame, seq)
+    # overlay real-LRT mask-correction per-frame deltas (HG / Deflicker /
+    # Global); then synthetic-schema deflicker offsets. Both overlay
+    # sources add exposure_ev linearly.
     if args.lrt_mask_offsets != "none":
         kinds = ("hg", "deflicker", "global") if args.lrt_mask_offsets == "all" \
             else (args.lrt_mask_offsets,)

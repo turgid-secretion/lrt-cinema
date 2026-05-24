@@ -144,31 +144,6 @@ class Keyframe:
 
 
 @dataclass
-class HolyGrailRamp:
-    """One segment of a Holy Grail exposure ramp.
-
-    LRT's Holy Grail workflow records day-to-night exposure transitions
-    as one or more contiguous ramp segments. Each segment defines the
-    *exposure delta* (in EV) that should be added to the keyframe-base
-    exposure over the frame window [`start_frame`, `end_frame`] inclusive.
-
-    `smoothness` controls the easing inside the segment:
-        0.0 — pure linear interpolation between start and end EV.
-        1.0 — full smoothstep ease-in / ease-out.
-        intermediate — linear blend between the two.
-
-    See `lrt_cinema.interpolation.apply_holy_grail_ramps` for the math
-    and the multi-segment overlap policy.
-    """
-
-    start_frame: int
-    end_frame: int
-    start_exposure_ev: float
-    end_exposure_ev: float
-    smoothness: float = 1.0
-
-
-@dataclass
 class DeflickerOffset:
     """Per-frame exposure delta written by an LRT deflicker pass.
 
@@ -221,7 +196,6 @@ class LRTSequence:
     source_frames: list[str] = field(default_factory=list)
     keyframes: list[Keyframe] = field(default_factory=list)
     deflicker_offsets: list[DeflickerOffset] = field(default_factory=list)
-    holy_grail_ramps: list[HolyGrailRamp] = field(default_factory=list)
     # Real-LRT per-frame mask-correction deltas (HG / Deflicker / Global).
     # Schema observed in LRT 7.5.3 sequence XMPs; see LRTMaskOffset.
     lrt_mask_offsets: list[LRTMaskOffset] = field(default_factory=list)

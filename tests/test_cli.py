@@ -156,20 +156,6 @@ def test_inspect_show_fields_dumps_per_keyframe(tmp_path, capsys):
     assert "k=5500" in out
 
 
-def test_inspect_reports_holy_grail_ramps(tmp_path, capsys):
-    src = tmp_path / "input"
-    src.mkdir()
-    (src / "frame_0001.CR3").write_bytes(b"raw-stub")
-    shutil.copy(FIXTURES / "synthetic_holy_grail.xmp", src / "frame_0001.CR3.xmp")
-
-    rc = main(["inspect", "--input", str(src)])
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert "Holy Grail ramps: 2" in out
-    assert "[0..200]" in out
-    assert "[200..400]" in out
-
-
 def test_inspect_rejects_missing_folder(capsys):
     rc = main(["inspect", "--input", "/nonexistent/path/lrt"])
     assert rc == 2
