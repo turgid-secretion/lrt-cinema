@@ -35,7 +35,6 @@ Dependencies: numpy, tifffile, Pillow, colour-science, scipy.
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -163,7 +162,8 @@ def _affine_fit(ours_linear_srgb: np.ndarray, target_linear_srgb: np.ndarray,
     tgt_lab = colour.XYZ_to_Lab(tgt_xyz, illuminant=D65)
 
     def obj(params):
-        gain = params[:3]; offset = params[3:]
+        gain = params[:3]
+        offset = params[3:]
         tx = np.clip(ours_s * gain + offset, 0, 1)
         tx_xyz = colour.RGB_to_XYZ(tx, "sRGB", apply_cctf_decoding=False)
         tx_lab = colour.XYZ_to_Lab(tx_xyz, illuminant=D65)
@@ -243,9 +243,11 @@ def main(argv: list[str]) -> int:
     lrt_preview = Path(argv[2])
     outdir = Path(argv[3]) if len(argv) == 4 else Path("./diagnostic_output")
     if not our_tif.is_file():
-        print(f"error: {our_tif} not found", file=sys.stderr); return 2
+        print(f"error: {our_tif} not found", file=sys.stderr)
+        return 2
     if not lrt_preview.is_file():
-        print(f"error: {lrt_preview} not found", file=sys.stderr); return 2
+        print(f"error: {lrt_preview} not found", file=sys.stderr)
+        return 2
     outdir.mkdir(parents=True, exist_ok=True)
 
     preview_arr = _load_lrt_preview(lrt_preview)
@@ -256,7 +258,7 @@ def main(argv: list[str]) -> int:
     preview_lab = _to_lab_d65_from_srgb_uint8(preview_arr)
     de = colour.delta_E(ours_lab, preview_lab, method="CIE 2000")
 
-    print(f"Comparing:")
+    print("Comparing:")
     print(f"  ours    {our_tif} ({ours_arr.shape[0]}x{ours_arr.shape[1]}, 16-bit linear Rec.2020)")
     print(f"  target  {lrt_preview} ({preview_arr.shape[0]}x{preview_arr.shape[1]}, 8-bit sRGB)")
     print()
@@ -284,9 +286,9 @@ def main(argv: list[str]) -> int:
     ).astype(np.uint8)
     Image.fromarray(ours_srgb).save(outdir / "ours_srgb.jpg", quality=92)
     print(f"Outputs saved to {outdir}/:")
-    print(f"  target.jpg     LRT preview reference")
-    print(f"  ours_srgb.jpg  our render decoded to sRGB for visual comparison")
-    print(f"  de_heatmap.jpg ΔE2000 heatmap (blue=match, red=divergence; saturated at ΔE=30)")
+    print("  target.jpg     LRT preview reference")
+    print("  ours_srgb.jpg  our render decoded to sRGB for visual comparison")
+    print("  de_heatmap.jpg ΔE2000 heatmap (blue=match, red=divergence; saturated at ΔE=30)")
     return 0
 
 
