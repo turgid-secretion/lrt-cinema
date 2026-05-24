@@ -229,3 +229,38 @@ def test_parse_sequence_walks_folder(tmp_path):
     assert seq.keyframe_indices() == [0, 2]
     assert seq.deflicker_offsets[0].frame_index == 2
     assert seq.deflicker_offsets[0].exposure_delta_ev == pytest.approx(0.12)
+
+
+def test_parse_float_rejects_nan_and_inf():
+    """Hostile/corrupted XMPs may carry NaN/Inf. These must not propagate
+    into struct.pack — they render frames solid black with no diagnostic."""
+    from lrt_cinema.xmp_parser import _parse_float
+
+    assert _parse_float("NaN") == 0.0
+    assert _parse_float("nan") == 0.0
+    assert _parse_float("inf") == 0.0
+    assert _parse_float("-inf") == 0.0
+    assert _parse_float("Infinity") == 0.0
+    assert _parse_float("NaN", default=-1.0) == -1.0
+    assert _parse_float("+1.5") == 1.5
+    assert _parse_float("-0.5") == -0.5
+
+
+def test_parse_sequence_warns_on_corrupted_xmp(tmp_path, capsys):
+    """A corrupted XMP must NOT silently degrade the frame to defaults
+    (would produce a flat frame mid-graded-sequence with no diagnostic).
+    Surface the skip so the user can investigate."""
+    (tmp_path / "frame_0001.CR3").write_bytes(b"raw-stub")
+    (tmp_path / "frame_0002.CR3").write_bytes(b"raw-stub")
+    (tmp_path / "frame_0001.CR3.xmp").write_text(
+        (FIXTURES / "synthetic_keyframe_a.xmp").read_text()
+    )
+    (tmp_path / "frame_0002.CR3.xmp").write_bytes(
+        b"<this is not valid xml: half-written file"
+    )
+
+    seq = parse_sequence(tmp_path)
+    err = capsys.readouterr().err
+    assert "warning: skipping unreadable XMP frame_0002.CR3.xmp" in err
+    # The valid frame still loads.
+    assert len(seq.keyframes) == 1
