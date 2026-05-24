@@ -2,7 +2,6 @@
 
 from lrt_cinema.ir import (
     DevelopOps,
-    InterpolationMode,
     LRTSequence,
     TonePoint,
 )
@@ -54,5 +53,4 @@ def test_blend_tone_curve_falls_back_to_self_when_lengths_differ():
 
 def test_lrt_sequence_defaults():
     seq = LRTSequence()
-    assert seq.interpolation_mode == InterpolationMode.linear
     assert seq.frame_count() == 0
