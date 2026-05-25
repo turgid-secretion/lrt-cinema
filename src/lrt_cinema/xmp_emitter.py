@@ -39,8 +39,16 @@ import struct
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from lrt_cinema.dcp import DCPProfile, kelvin_tint_to_dt_multipliers
+from lrt_cinema.dcp import (
+    DCPProfile,
+    interpolate_hsv_cube,
+    kelvin_tint_to_dt_multipliers,
+)
 from lrt_cinema.ir import DevelopOps, TonePoint
+from lrt_cinema.lut3d_baker import (
+    RECOMMENDED_CUBE_SIZE,
+    bake_dcp_cubes_to_resolve_cube,
+)
 
 DT_NS = "http://darktable.sf.net/"
 X_NS = "adobe:ns:meta/"
@@ -81,6 +89,59 @@ EXPOSURE_MODVERSION = "7"
 Bumped from 6 to 7 in dt 5.x when `compensate_hilite_pres` gboolean was added
 to the params struct. dt's legacy_params migration would handle v6→v7 on read,
 but emitting the canonical current modversion is preferred."""
+
+LUT3D_MODVERSION = "3"
+"""dt lut3d module current modversion (src/iop/lut3d.c#L45 at SHA 9402c65275).
+v3 has been the canonical layout since dt 4.6; legacy_params at L161-225
+upgrades v1/v2 on read. params struct is 12940 bytes (mostly the 512-byte
+filepath buffer + 12288-byte c_clut zero-pad + 128-byte lutname zero-pad).
+We emit `nb_keypoints=0` so dt's `_calculate_clut` at L1175-1196 follows
+the file-on-disk path and the c_clut buffer is ignored."""
+
+# Cube-emission constants matching dt's enum definitions
+# (src/iop/lut3d.c#L52-L67 at SHA 9402c65275).
+_LUT3D_COLORSPACE_LIN_PROPHOTO = 5
+"""DT_IOP_LIN_PROPHOTO. Tells dt the cube's domain is linear ProPhoto RGB
+(D50); dt's `process` at src/iop/lut3d.c#L1085-L1110 then converts
+working-space → ProPhoto → applies cube → ProPhoto → working-space
+automatically via `dt_ioppr_transform_image_colorspace_rgb`. Lets the
+baker stay decoupled from lrt-cinema's working-space choice."""
+
+_LUT3D_INTERPOLATION_TETRAHEDRAL = 0
+"""DT_IOP_TETRAHEDRAL. dt's own default + the smoothest interpolation for
+numerically-baked cubes. Trilinear (=1) and pyramid (=2) are alternatives
+not preferred here."""
+
+_LUT3D_MAX_PATHNAME = 512
+"""src/iop/lut3d.c#L40 DT_IOP_LUT3D_MAX_PATHNAME."""
+
+_LUT3D_MAX_LUTNAME = 128
+"""src/iop/lut3d.c#L42 DT_IOP_LUT3D_MAX_LUTNAME."""
+
+_LUT3D_MAX_KEYPOINTS = 2048
+"""src/iop/lut3d.c#L41 DT_IOP_LUT3D_MAX_KEYPOINTS."""
+
+COLORBALANCERGB_MODVERSION = "5"
+"""dt colorbalancergb module current modversion (src/iop/colorbalancergb.c#L52
+at dt SHA 9402c65275). v5 added the `saturation_formula` enum field
+(JzAzBz vs DTUCS). The params struct (`dt_iop_colorbalancergb_params_t` at
+src/iop/colorbalancergb.c#L60-L106) is 32 floats + 1 int = 132 bytes —
+significantly larger than the simple modules. We only set
+saturation_global / vibrance / contrast from LR; every other field stays
+at its C-declared $DEFAULT value. dt's lightroom.c does NOT route LR's
+Saturation/Vibrance/Contrast2012 to colorbalancergb (or to any module —
+it drops them entirely); the project's mapping is project-specific and
+documented as "best effort, not pixel-match-LR" in SCOPE.md."""
+
+SHARPEN_MODVERSION = "1"
+"""dt sharpen module modversion (src/iop/sharpen.c#L39 at dt SHA 9402c65275).
+Three floats: radius, amount, threshold. dt's USM (unsharp mask). LR's
+Sharpness slider (0..150, default 25) maps to dt sharpen.amount via a
+linear scale picked so the defaults line up (LR 25 ↔ dt amount 0.5) and
+LR's maxed-out 150 lands at dt amount 3.0 (clamped to dt's max 2.0). The
+LR sub-knobs SharpenRadius / SharpenDetail / SharpenEdgeMasking are NOT
+parsed by lrt-cinema today — we map only the master amount, matching
+darktable's own lightroom.c which also drops the sub-knobs."""
 
 TEMPERATURE_MODVERSION = "4"
 """dt temperature module current modversion (src/iop/temperature.c#L46 in dt
@@ -144,6 +205,13 @@ _TONECURVE_PRESERVE_AVERAGE = 3
 # preset value — it only matters for GUI display.
 _TEMPERATURE_PRESET_USER = 2
 
+# LR's out-of-camera default for Sharpness. Real LRT 7.5.3 writes this on
+# every keyframe XMP regardless of user touch (validated against the user's
+# production sequence DSC_*.xmp), so it cannot carry creative intent and
+# emit-gating must treat it as "no intent." Public name (no leading
+# underscore) so cli.py can import it for the dropped-warning consistency.
+LR_SHARPNESS_DEFAULT = 25.0
+
 # Blendop attrs (`darktable:blendop_version`, `darktable:blendop_params`)
 # are intentionally NOT emitted. Per docs/research/ADVERSARIAL_AUDIT_2026-05-23.md
 # HIGH-1, our prior values (`blendop_version="11"` + 64-byte zero blob) were
@@ -158,7 +226,59 @@ _TEMPERATURE_PRESET_USER = 2
 # (e.g. masked exposure for a specific look).
 
 
-def _encode_exposure_params(exposure_ev: float) -> str:
+# PV2012 Blacks2012 → dt exposure.black 5-point LUT.
+#
+# Verbatim from darktable's own LR-import mapping at
+# src/develop/lightroom.c#L279-L285 (SHA 9402c65275). LR Blacks2012 is in
+# 0..100 "Adobe perceptual units"; dt exposure.black is in linear-RGB
+# displacement units. The LUT is dt's calibrated answer to "what dt black
+# offset approximates LR Blacks2012=v". Values between breakpoints linearly
+# interpolate. dt drops nothing else from PV2012 — this is the one slider
+# they shipped a measured mapping for.
+_LR2DT_BLACKS_TABLE: tuple[tuple[float, float], ...] = (
+    (-100.0,  0.020),
+    ( -50.0,  0.005),
+    (   0.0,  0.000),
+    (  50.0, -0.005),
+    ( 100.0, -0.010),
+)
+
+
+def lr_blacks_to_dt_black(value: float) -> float:
+    """Map an LR Blacks2012 value (-100..+100) to a dt exposure.black float.
+
+    Linear interpolation between the 5 breakpoints in `_LR2DT_BLACKS_TABLE`.
+    Out-of-range inputs clamp to the nearest endpoint (LR's slider clamps
+    at the GUI; the parser allows over-range numerics so this guards).
+    """
+    if value <= _LR2DT_BLACKS_TABLE[0][0]:
+        return _LR2DT_BLACKS_TABLE[0][1]
+    if value >= _LR2DT_BLACKS_TABLE[-1][0]:
+        return _LR2DT_BLACKS_TABLE[-1][1]
+    for i in range(len(_LR2DT_BLACKS_TABLE) - 1):
+        lr_lo, dt_lo = _LR2DT_BLACKS_TABLE[i]
+        lr_hi, dt_hi = _LR2DT_BLACKS_TABLE[i + 1]
+        if lr_lo <= value <= lr_hi:
+            if lr_hi == lr_lo:
+                return dt_lo
+            t = (value - lr_lo) / (lr_hi - lr_lo)
+            return dt_lo + t * (dt_hi - dt_lo)
+    return 0.0  # unreachable — endpoints clamped above
+
+
+def lr_sharpness_to_dt_amount(value: float) -> float:
+    """Map LR Sharpness (0..150) to dt sharpen.amount (clamped to 0..2.0).
+
+    Linear scale picked so defaults line up: LR 25 (LR's out-of-camera
+    default) → dt amount 0.5 (dt's own default per src/iop/sharpen.c#L46
+    at SHA 9402c65275). LR 100 → dt 2.0 (dt's max). Above LR 100 we clamp
+    rather than overdrive — values that high are unusual in production
+    timelapse XMP and dt's max amount of 2.0 is already an aggressive USM.
+    """
+    return max(0.0, min(2.0, float(value) / 50.0))
+
+
+def _encode_exposure_params(exposure_ev: float, black: float = 0.0) -> str:
     """Encode darktable exposure module params (modversion 7) as HEX ASCII.
 
     Struct layout from src/iop/exposure.c#L66-75 at dt master SHA
@@ -174,6 +294,10 @@ def _encode_exposure_params(exposure_ev: float) -> str:
 
     Total: 7 fields * 4 bytes = 28 bytes (no struct padding; all 4-aligned).
 
+    The `black` field carries the lr2dt-mapped Blacks2012 displacement
+    (see `lr_blacks_to_dt_black`), matching darktable's own LR-import
+    behavior at src/develop/lightroom.c#L279-L285.
+
     ENCODING: hexadecimal ASCII (lowercase 0-9a-f), not base64. dt's XMP
     reader at src/common/exif.cc#L3252-3270 runs
     `strspn(input, "0123456789abcdef")` and rejects anything that fails.
@@ -187,13 +311,173 @@ def _encode_exposure_params(exposure_ev: float) -> str:
     payload = struct.pack(
         "<iffffii",
         0,             # mode = manual
-        0.0,           # black
+        float(black),
         float(exposure_ev),
         50.0,          # deflicker_percentile
         -4.0,          # deflicker_target_level
         0,             # compensate_exposure_bias = FALSE (default)
         1,             # compensate_hilite_pres = TRUE (default per v7)
     )
+    return payload.hex()
+
+
+def _encode_lut3d_params(
+    filepath_relative: str,
+    colorspace: int = _LUT3D_COLORSPACE_LIN_PROPHOTO,
+    interpolation: int = _LUT3D_INTERPOLATION_TETRAHEDRAL,
+) -> str:
+    """Encode darktable lut3d v3 params (12940 bytes) as HEX ASCII.
+
+    Struct layout from src/iop/lut3d.c#L69-L77 at dt SHA 9402c65275
+    (DT_MODULE_INTROSPECTION(3, dt_iop_lut3d_params_t)):
+
+        char filepath[512];     // null-terminated; resolved against the
+                                // plugins/darkroom/lut3d/def_path config
+                                // key — runner must set this to the
+                                // directory holding the emitted .cube
+        int colorspace;         // dt_iop_lut3d_colorspace_t enum
+                                //   (LIN_PROPHOTO=5 here)
+        int interpolation;      // dt_iop_lut3d_interpolation_t enum
+                                //   (TETRAHEDRAL=0 here)
+        int nb_keypoints;       // 0 → fall back to file-on-disk; the
+                                // in-blob c_clut is then ignored
+        char c_clut[12288];     // GMIC-compressed inline cube; unused
+                                // when nb_keypoints=0
+        char lutname[128];      // for nested lut names; empty here
+
+    Total: 512 + 4 + 4 + 4 + 12288 + 128 = 12940 bytes (24-bit-aligned;
+    no struct padding because all char arrays + 4-byte enums sit on
+    natural alignment).
+    """
+    fp = filepath_relative.encode("utf-8")
+    if len(fp) >= _LUT3D_MAX_PATHNAME:
+        raise ValueError(
+            f"lut3d filepath > {_LUT3D_MAX_PATHNAME - 1} bytes "
+            f"(must leave room for null terminator): {filepath_relative!r}"
+        )
+    filepath_buf = fp + b"\x00" * (_LUT3D_MAX_PATHNAME - len(fp))
+    c_clut_buf = b"\x00" * (_LUT3D_MAX_KEYPOINTS * 2 * 3)
+    lutname_buf = b"\x00" * _LUT3D_MAX_LUTNAME
+    payload = (
+        filepath_buf
+        + struct.pack("<iii", int(colorspace), int(interpolation), 0)
+        + c_clut_buf
+        + lutname_buf
+    )
+    if len(payload) != 12940:
+        # Was assert (disabled with python -O). dt's silent-substitution
+        # path is exactly what the audit was designed to close; a guard
+        # that vanishes in optimized builds defeats the purpose.
+        raise ValueError(
+            f"lut3d params struct size mismatch: got {len(payload)}, expected 12940. "
+            f"dt's reader will silently substitute defaults — see ADVERSARIAL_AUDIT."
+        )
+    return payload.hex()
+
+
+def _encode_colorbalancergb_params(
+    saturation_global: float = 0.0,
+    vibrance: float = 0.0,
+    contrast: float = 0.0,
+) -> str:
+    """Encode darktable colorbalancergb v5 params (132 bytes) as HEX ASCII.
+
+    Struct layout from src/iop/colorbalancergb.c#L60-L106 at dt SHA
+    9402c65275 (DT_MODULE_INTROSPECTION(5, dt_iop_colorbalancergb_params_t)).
+    All field defaults match the C `$DEFAULT:` annotations; only the three
+    fields driven from LR's master sliders are caller-controllable today.
+
+    Field order (32 × float + 1 × int = 132 bytes, no padding — every
+    field is 4-byte aligned):
+
+        v1: shadows_{Y,C,H} mid_{Y,C,H} hi_{Y,C,H} global_{Y,C,H}
+            shadows_weight white_fulcrum highlights_weight
+            chroma_{shadows,highlights,global,midtones}
+            saturation_{global,highlights,midtones,shadows}
+            hue_angle                                          (25 floats)
+        v2: brilliance_{global,highlights,midtones,shadows}    (4 floats)
+        v3: mask_grey_fulcrum                                  (1 float)
+        v4: vibrance grey_fulcrum contrast                     (3 floats)
+        v5: saturation_formula (enum int = DT_COLORBALANCE_SATURATION_DTUCS)
+
+    Mapping conventions:
+      LR Saturation [-100..+100] → saturation_global [-1..+1] (÷100)
+      LR Vibrance   [-100..+100] → vibrance         [-1..+1] (÷100)
+      LR Contrast2012 [-100..+100] → contrast       [-1..+1] (÷100)
+
+    The mapping is approximate, not pixel-match-LR — dt colorbalancergb's
+    contrast operates on a midtone-pivoted curve with its own
+    grey_fulcrum, while LR's PV2012 Contrast2012 is a closed-source
+    parametric S-curve. Defaults align (LR 0 → dt 0) so neutral keyframes
+    are no-ops.
+    """
+    payload = struct.pack(
+        "<32fi",
+        # shadows_Y, shadows_C, shadows_H
+        0.0, 0.0, 0.0,
+        # midtones_Y, midtones_C, midtones_H
+        0.0, 0.0, 0.0,
+        # highlights_Y, highlights_C, highlights_H
+        0.0, 0.0, 0.0,
+        # global_Y, global_C, global_H
+        0.0, 0.0, 0.0,
+        # shadows_weight, white_fulcrum, highlights_weight
+        1.0, 0.0, 1.0,
+        # chroma_shadows, chroma_highlights, chroma_global, chroma_midtones
+        0.0, 0.0, 0.0, 0.0,
+        # saturation_global (LR-driven), saturation_highlights/midtones/shadows
+        float(saturation_global), 0.0, 0.0, 0.0,
+        # hue_angle
+        0.0,
+        # brilliance_global/highlights/midtones/shadows
+        0.0, 0.0, 0.0, 0.0,
+        # mask_grey_fulcrum (default 0.1845 = MIDDLE_GREY)
+        0.1845,
+        # vibrance (LR-driven), grey_fulcrum, contrast (LR-driven)
+        float(vibrance), 0.1845, float(contrast),
+        # saturation_formula = DT_COLORBALANCE_SATURATION_DTUCS = 1
+        1,
+    )
+    if len(payload) != 132:
+        raise ValueError(
+            f"colorbalancergb params struct size mismatch: got {len(payload)}, "
+            f"expected 132. dt's reader will silently substitute defaults — "
+            f"see ADVERSARIAL_AUDIT_2026-05-23 HIGH-1."
+        )
+    return payload.hex()
+
+
+def _encode_sharpen_params(
+    amount: float,
+    radius: float = 2.0,
+    threshold: float = 0.5,
+) -> str:
+    """Encode darktable sharpen module params (modversion 1) as HEX ASCII.
+
+    Struct layout from src/iop/sharpen.c#L43-L48 at dt SHA 9402c65275
+    (DT_MODULE_INTROSPECTION(1, dt_iop_sharpen_params_t)):
+
+        float radius;    // $DEFAULT: 2.0  ($MAX: 99.0)
+        float amount;    // $DEFAULT: 0.5  ($MAX:  2.0)
+        float threshold; // $DEFAULT: 0.5  ($MAX:100.0)
+
+    Total: 12 bytes. Module operates in Lab colorspace
+    (src/iop/sharpen.c#L83-L88 default_colorspace=IOP_CS_LAB) — sharpen
+    runs post-display-transform regardless of the cinema-linear preset.
+    That's consistent with LR's own pipeline position for the Sharpness
+    slider; the cinema-linear preset's "truly linear" promise is about
+    the OUTPUT color encoding, not the absence of any non-linear ops.
+    """
+    payload = struct.pack(
+        "<fff",
+        float(radius),
+        float(amount),
+        float(threshold),
+    )
+    if len(payload) != 12:
+        raise ValueError(
+            f"sharpen params struct size mismatch: got {len(payload)}, expected 12"
+        )
     return payload.hex()
 
 
@@ -369,11 +653,12 @@ def _encode_tonecurve_params(curve: list[TonePoint]) -> str:
     # the L curve lifts luminance. dt's init() default.
     payload += struct.pack("<i", _TONECURVE_PRESERVE_AVERAGE)
 
-    assert len(payload) == 520, (
-        f"tonecurve params struct size mismatch: got {len(payload)}, "
-        f"expected 520. dt's reader will silently substitute defaults — "
-        f"see ADVERSARIAL_AUDIT_2026-05-23."
-    )
+    if len(payload) != 520:
+        raise ValueError(
+            f"tonecurve params struct size mismatch: got {len(payload)}, "
+            f"expected 520. dt's reader will silently substitute defaults — "
+            f"see ADVERSARIAL_AUDIT_2026-05-23."
+        )
     return payload.hex()
 
 
@@ -459,11 +744,12 @@ def _encode_basecurve_params(
     # tone-curve application. See _BASECURVE_PRESERVE_MAX docstring.
     payload += struct.pack("<i", preserve_colors)
 
-    assert len(payload) == 520, (
-        f"basecurve params struct size mismatch: got {len(payload)}, "
-        f"expected 520. dt's reader will silently substitute defaults — "
-        f"see ADVERSARIAL_AUDIT_2026-05-23."
-    )
+    if len(payload) != 520:
+        raise ValueError(
+            f"basecurve params struct size mismatch: got {len(payload)}, "
+            f"expected 520. dt's reader will silently substitute defaults — "
+            f"see ADVERSARIAL_AUDIT_2026-05-23."
+        )
     return payload.hex()
 
 
@@ -491,6 +777,9 @@ def emit_darktable_xmp(
     output_path: Path,
     dcp_profile: DCPProfile | None = None,
     apply_dcp_tone_curve: bool = True,
+    apply_dcp_hsv_cubes: bool = True,
+    cube_size: int = RECOMMENDED_CUBE_SIZE,
+    dt_lut3d_def_path: Path | None = None,
 ) -> None:
     """Emit a darktable XMP sidecar for `ops` to `output_path`.
 
@@ -542,16 +831,36 @@ def emit_darktable_xmp(
     # Exposure picks up DCP baseline bias if a profile is supplied. LR
     # applies BaselineExposure + BaselineExposureOffset additively on
     # top of the user's Exposure2012 — same convention here.
+    #
+    # When DCP HSV cubes (HueSatMap / LookTable) will emit, the
+    # BaselineExposureOffset is baked into the cube's V scaling between
+    # HSM and LookTable (matching Adobe's pipeline order: HSM →
+    # BaselineExposureOffset → LookTable). Adding it through the exposure
+    # module too would apply it twice. Detect that case here and pre-skip.
+    cube_will_emit = (
+        apply_dcp_hsv_cubes
+        and dcp_profile is not None
+        and (dcp_profile.hue_sat_map is not None
+             or dcp_profile.look_table is not None)
+    )
     effective_exposure_ev = ops.exposure_ev
     if dcp_profile is not None:
         effective_exposure_ev += dcp_profile.baseline_exposure
-        effective_exposure_ev += dcp_profile.baseline_exposure_offset
+        if not cube_will_emit:
+            effective_exposure_ev += dcp_profile.baseline_exposure_offset
+
+    # PV2012 Blacks2012 piggybacks on dt's exposure.black field via dt's
+    # own lr2dt mapping (src/develop/lightroom.c#L279-L285). Verbatim port
+    # — dt is the source of truth for "what dt black approximates LR
+    # Blacks2012". When ops.blacks is 0 (LR default), this resolves to
+    # black=0.0 and is a no-op.
+    effective_black = lr_blacks_to_dt_black(ops.blacks)
 
     num = 0
     _make_history_entry(
         seq, num=num, operation="exposure", enabled=True,
         modversion=EXPOSURE_MODVERSION,
-        params_b64=_encode_exposure_params(effective_exposure_ev),
+        params_b64=_encode_exposure_params(effective_exposure_ev, black=effective_black),
     )
     num += 1
 
@@ -571,6 +880,69 @@ def emit_darktable_xmp(
             seq, num=num, operation="temperature", enabled=True,
             modversion=TEMPERATURE_MODVERSION,
             params_b64=_encode_temperature_params(r_mul, g1_mul, b_mul, g2_mul),
+        )
+        num += 1
+
+    # DCP HSV cubes (HueSatMap + LookTable) — emit BEFORE basecurve to
+    # match Adobe's pipeline order (HSM/LookTable position 36.0 in dt V50
+    # vs basecurve at 44.0 per src/common/iop_order.c#L500 SHA 9402c65275).
+    # When both HSM and LookTable are present in the DCP, both bake into
+    # the same Resolve .cube file with the BaselineExposureOffset baked
+    # into the V scaling between them — Adobe's exact pipeline-position
+    # semantics. For Nikon D750's Camera Standard.dcp (no HSM, only
+    # LookTable), this collapses to a single-cube bake; the baker handles
+    # either-or-both cleanly.
+    if cube_will_emit:
+        if dt_lut3d_def_path is None:
+            raise ValueError(
+                "DCP HSV cube emission requires dt_lut3d_def_path; the .cube "
+                "file is written to that directory and dt's `plugins/darkroom/"
+                "lut3d/def_path` config must point at it. Set "
+                "dt_lut3d_def_path=output_path.parent or pass "
+                "apply_dcp_hsv_cubes=False to skip cube emission."
+            )
+        cube_filename = output_path.with_suffix(".cube").name
+        cube_full_path = Path(dt_lut3d_def_path) / cube_filename
+
+        # Target kelvin for the per-cell mired blend of the HSM cube. For
+        # the Nikon D750 LookTable code path (no HSM, no per-illuminant
+        # variant) this branch never triggers the blend; for cameras with
+        # an HSM, we use the explicit user kelvin when set, otherwise
+        # default to 5500 K (mid-daylight, the conventional fallback used
+        # by dt's libraw-derived as-shot before the DCP refines it).
+        # An AsShotNeutral path that recovers the true as-shot kelvin from
+        # MakerNote/AsShotNeutral is the v0.4.x follow-up that closes the
+        # remaining wb-divergence; until then the 5500 K default is a
+        # reasonable choice that matches LR's default-WB behavior on
+        # daylight-temperature scenes (the user's test sequence).
+        target_k = (
+            float(ops.temperature_k) if ops.temperature_k is not None else 5500.0
+        )
+        hsm_blended = None
+        if dcp_profile.hue_sat_map is not None:
+            hsm_blended = interpolate_hsv_cube(
+                dcp_profile.hue_sat_map,
+                kelvin=target_k,
+                kelvin_1=dcp_profile.kelvin_1,
+                kelvin_2=dcp_profile.kelvin_2,
+            )
+        look_blended = (
+            dcp_profile.look_table.data_1
+            if dcp_profile.look_table is not None else None
+        )
+        bake_dcp_cubes_to_resolve_cube(
+            out_path=cube_full_path,
+            cube_size=cube_size,
+            hsm_blended=hsm_blended,
+            hsm_meta=dcp_profile.hue_sat_map,
+            look_blended=look_blended,
+            look_meta=dcp_profile.look_table,
+            baseline_exposure_offset_ev=dcp_profile.baseline_exposure_offset,
+        )
+        _make_history_entry(
+            seq, num=num, operation="lut3d", enabled=True,
+            modversion=LUT3D_MODVERSION,
+            params_b64=_encode_lut3d_params(filepath_relative=cube_filename),
         )
         num += 1
 
@@ -608,6 +980,45 @@ def emit_darktable_xmp(
             seq, num=num, operation="basecurve", enabled=True,
             modversion=BASECURVE_MODVERSION,
             params_b64=_encode_basecurve_params(dcp_curve),
+        )
+        num += 1
+
+    # colorbalancergb — emit when any of LR's master Saturation / Vibrance /
+    # Contrast2012 carry non-default intent. LR's PV2012 contrast lives in
+    # closed-source acr.dll and has no published dt mapping; we route it
+    # through colorbalancergb.contrast as the closest available "global
+    # midtone-pivoted contrast" knob, with the documented caveat in SCOPE.md
+    # that the result is not pixel-match LR. dt's own LR-import drops all
+    # three; this is project-specific best-effort.
+    if (
+        ops.saturation != 0.0
+        or ops.vibrance != 0.0
+        or ops.contrast != 0.0
+    ):
+        _make_history_entry(
+            seq, num=num, operation="colorbalancergb", enabled=True,
+            modversion=COLORBALANCERGB_MODVERSION,
+            params_b64=_encode_colorbalancergb_params(
+                saturation_global=float(ops.saturation) / 100.0,
+                vibrance=float(ops.vibrance) / 100.0,
+                contrast=float(ops.contrast) / 100.0,
+            ),
+        )
+        num += 1
+
+    # Sharpen — emit only when ops.sharpness carries authored intent.
+    # Skip the LR out-of-camera default (Sharpness=25, which the dropped-
+    # warning helper also ignores) AND the explicit-zero case (LR's "no
+    # sharpening"); both should leave dt's pipeline unsharpened. Real
+    # creative intent on this slider is rare in production timelapse XMP,
+    # so the per-frame cost of the emit gate is acceptable.
+    if ops.sharpness not in (0.0, LR_SHARPNESS_DEFAULT):
+        _make_history_entry(
+            seq, num=num, operation="sharpen", enabled=True,
+            modversion=SHARPEN_MODVERSION,
+            params_b64=_encode_sharpen_params(
+                amount=lr_sharpness_to_dt_amount(ops.sharpness),
+            ),
         )
         num += 1
 

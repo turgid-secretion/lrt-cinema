@@ -4,10 +4,17 @@ import struct
 import xml.etree.ElementTree as ET
 
 import numpy as np
+import pytest
 
 from lrt_cinema.dcp import DCPProfile
 from lrt_cinema.ir import DevelopOps, TonePoint
-from lrt_cinema.xmp_emitter import DT_NS, RDF_NS, emit_darktable_xmp
+from lrt_cinema.xmp_emitter import (
+    DT_NS,
+    RDF_NS,
+    emit_darktable_xmp,
+    lr_blacks_to_dt_black,
+    lr_sharpness_to_dt_amount,
+)
 
 
 def _parse(path):
@@ -356,3 +363,159 @@ def test_exposure_params_roundtrip(tmp_path):
             break
     else:
         raise AssertionError("exposure entry missing")
+
+
+# ---------------------------------------------------------------------------
+# PV2012 → dt mapping helpers (Blacks2012 + Sharpness)
+# ---------------------------------------------------------------------------
+
+def test_lr_blacks_to_dt_black_breakpoints_match_dt_lightroom_c():
+    # Verbatim from darktable's src/develop/lightroom.c#L279-L285 at SHA
+    # 9402c65275. Any drift from these exact values means we've diverged
+    # from dt's own LR-import behavior, which is the bug we explicitly
+    # don't want. Float comparison uses a tight tolerance — endpoints
+    # match exactly, interior interpolation accumulates the usual IEEE
+    # noise.
+    assert lr_blacks_to_dt_black(-100.0) == pytest.approx(0.020, abs=1e-9)
+    assert lr_blacks_to_dt_black( -50.0) == pytest.approx(0.005, abs=1e-9)
+    assert lr_blacks_to_dt_black(   0.0) == pytest.approx(0.000, abs=1e-9)
+    assert lr_blacks_to_dt_black(  50.0) == pytest.approx(-0.005, abs=1e-9)
+    assert lr_blacks_to_dt_black( 100.0) == pytest.approx(-0.010, abs=1e-9)
+
+
+def test_lr_blacks_to_dt_black_interpolates_between_breakpoints():
+    # Midpoints linearly interpolate.
+    assert lr_blacks_to_dt_black(-75.0) == pytest.approx(0.0125, abs=1e-9)
+    assert lr_blacks_to_dt_black( 25.0) == pytest.approx(-0.0025, abs=1e-9)
+
+
+def test_lr_blacks_to_dt_black_clamps_out_of_range():
+    assert lr_blacks_to_dt_black(-9999.0) == pytest.approx(0.020, abs=1e-9)
+    assert lr_blacks_to_dt_black( 9999.0) == pytest.approx(-0.010, abs=1e-9)
+
+
+def test_lr_sharpness_to_dt_amount_defaults_align():
+    # LR default 25 → dt default 0.5 (both modules' own out-of-box values).
+    assert lr_sharpness_to_dt_amount(25.0) == 0.5
+    assert lr_sharpness_to_dt_amount( 0.0) == 0.0
+    assert lr_sharpness_to_dt_amount(100.0) == 2.0
+    # Above LR 100 clamps to dt max 2.0 (avoids overdriving dt's USM).
+    assert lr_sharpness_to_dt_amount(150.0) == 2.0
+
+
+def test_emitter_uses_lr2dt_blacks_mapping(tmp_path):
+    # Blacks2012=-100 → dt exposure.black=+0.020 reaches the params blob.
+    out = tmp_path / "frame.xmp"
+    emit_darktable_xmp(DevelopOps(exposure_ev=0.0, blacks=-100.0), out)
+    root = _parse(out)
+    for li in root.iter(f"{{{RDF_NS}}}li"):
+        if li.get(f"{{{DT_NS}}}operation") == "exposure":
+            params_hex = li.get(f"{{{DT_NS}}}params")
+            decoded = bytes.fromhex(params_hex)
+            _mode, black, *_ = struct.unpack("<iffffii", decoded)
+            assert black == pytest.approx(0.020, abs=1e-6)
+            break
+    else:
+        raise AssertionError("exposure entry missing")
+
+
+def test_emitter_omits_sharpen_for_lr_default(tmp_path):
+    # LR Sharpness=25 is the out-of-camera default — emit gate must skip,
+    # otherwise every neutral keyframe in a real LRT sequence gets a
+    # spurious sharpen module added to the history. Also skips
+    # Sharpness=0 (LR's explicit "no sharpening").
+    for s in (0.0, 25.0):
+        out = tmp_path / f"sharp_{s}.xmp"
+        emit_darktable_xmp(DevelopOps(exposure_ev=0.0, sharpness=s), out)
+        root = _parse(out)
+        ops_present = [
+            li.get(f"{{{DT_NS}}}operation")
+            for li in root.iter(f"{{{RDF_NS}}}li")
+        ]
+        assert "sharpen" not in ops_present, (
+            f"sharpen should not emit for LR default Sharpness={s}, got history "
+            f"{ops_present}"
+        )
+
+
+def test_emitter_omits_colorbalancergb_for_neutral_keyframe(tmp_path):
+    # Saturation=Vibrance=Contrast=0 (LR defaults / neutral) → no emit.
+    out = tmp_path / "neutral.xmp"
+    emit_darktable_xmp(DevelopOps(exposure_ev=0.0), out)
+    root = _parse(out)
+    ops = [li.get(f"{{{DT_NS}}}operation") for li in root.iter(f"{{{RDF_NS}}}li")]
+    assert "colorbalancergb" not in ops, (
+        f"colorbalancergb should not emit for neutral keyframe, got {ops}"
+    )
+
+
+def test_emitter_emits_colorbalancergb_for_any_authored_sat_vib_contrast(tmp_path):
+    # Any one of saturation/vibrance/contrast non-zero triggers emit.
+    for fld, val in (("saturation", 50.0), ("vibrance", -30.0), ("contrast", 25.0)):
+        out = tmp_path / f"{fld}.xmp"
+        emit_darktable_xmp(DevelopOps(exposure_ev=0.0, **{fld: val}), out)
+        root = _parse(out)
+        ops = [li.get(f"{{{DT_NS}}}operation") for li in root.iter(f"{{{RDF_NS}}}li")]
+        assert "colorbalancergb" in ops, (
+            f"colorbalancergb should emit when {fld}={val}, got history {ops}"
+        )
+
+
+def test_emitter_colorbalancergb_params_struct_size(tmp_path):
+    # Struct must be exactly 132 bytes (32 floats × 4 + 1 int × 4) per
+    # src/iop/colorbalancergb.c#L60-L106 v5. Wrong size → dt silently
+    # substitutes defaults (HIGH-1 class).
+    out = tmp_path / "cbrgb.xmp"
+    emit_darktable_xmp(DevelopOps(exposure_ev=0.0, saturation=50.0), out)
+    root = _parse(out)
+    for li in root.iter(f"{{{RDF_NS}}}li"):
+        if li.get(f"{{{DT_NS}}}operation") == "colorbalancergb":
+            params_hex = li.get(f"{{{DT_NS}}}params")
+            decoded = bytes.fromhex(params_hex)
+            assert len(decoded) == 132, f"expected 132-byte v5 struct, got {len(decoded)}"
+            # Field-by-field indices into the 32-float sequence (per the
+            # C struct order in src/iop/colorbalancergb.c#L60-L106):
+            #   0..11  shadows/midtones/highlights/global × {Y, C, H}
+            #   12..14 shadows_weight, white_fulcrum, highlights_weight
+            #   15..18 chroma_{shadows,highlights,global,midtones}
+            #   19..22 saturation_{global,highlights,midtones,shadows}
+            #   23     hue_angle
+            #   24..27 brilliance_{global,highlights,midtones,shadows}
+            #   28     mask_grey_fulcrum (default 0.1845)
+            #   29..31 vibrance, grey_fulcrum (default 0.1845), contrast
+            # Trailing int: saturation_formula
+            unpacked = struct.unpack("<32fi", decoded)
+            assert unpacked[19] == pytest.approx(0.5, abs=1e-6), (
+                f"saturation_global ({unpacked[19]}) should be LR 50 / 100 = 0.5"
+            )
+            assert unpacked[29] == pytest.approx(0.0, abs=1e-6), (
+                f"vibrance should be 0 (LR vibrance unset), got {unpacked[29]}"
+            )
+            assert unpacked[31] == pytest.approx(0.0, abs=1e-6), (
+                f"contrast should be 0 (LR contrast unset), got {unpacked[31]}"
+            )
+            # Default grey_fulcrum + mask_grey_fulcrum.
+            assert unpacked[28] == pytest.approx(0.1845, abs=1e-4)
+            assert unpacked[30] == pytest.approx(0.1845, abs=1e-4)
+            # saturation_formula = DT_COLORBALANCE_SATURATION_DTUCS = 1
+            assert unpacked[32] == 1
+            return
+    raise AssertionError("colorbalancergb entry missing")
+
+
+def test_emitter_emits_sharpen_for_non_default_sharpness(tmp_path):
+    # Sharpness=50 is user-set creative intent → emit.
+    out = tmp_path / "sharp_50.xmp"
+    emit_darktable_xmp(DevelopOps(exposure_ev=0.0, sharpness=50.0), out)
+    root = _parse(out)
+    sharpen_entries = [
+        li for li in root.iter(f"{{{RDF_NS}}}li")
+        if li.get(f"{{{DT_NS}}}operation") == "sharpen"
+    ]
+    assert len(sharpen_entries) == 1
+    params_hex = sharpen_entries[0].get(f"{{{DT_NS}}}params")
+    assert all(c in "0123456789abcdef" for c in params_hex)
+    radius, amount, threshold = struct.unpack("<fff", bytes.fromhex(params_hex))
+    assert radius == pytest.approx(2.0, abs=1e-6)
+    assert amount == pytest.approx(1.0, abs=1e-6)  # LR 50 → dt 1.0
+    assert threshold == pytest.approx(0.5, abs=1e-6)

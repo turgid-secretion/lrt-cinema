@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from lrt_cinema import __version__
-from lrt_cinema.dcp import parse_dcp
+from lrt_cinema.dcp import auto_detect_profile, parse_dcp, read_raw_make_model
 from lrt_cinema.interpolation import (
     apply_deflicker,
     apply_holy_grail_ramps,
@@ -17,7 +17,8 @@ from lrt_cinema.interpolation import (
 from lrt_cinema.ir import InterpolationMode
 from lrt_cinema.presets import PRESETS, get_preset
 from lrt_cinema.runner import DarktableCliNotFound, render_sequence
-from lrt_cinema.xmp_parser import parse_sequence
+from lrt_cinema.xmp_emitter import LR_SHARPNESS_DEFAULT
+from lrt_cinema.xmp_parser import _is_identity_tone_curve, parse_sequence
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -81,19 +82,34 @@ def _build_parser() -> argparse.ArgumentParser:
                              "'hg' / 'deflicker' / 'global' = single source. See "
                              "docs/reference/lrtimelapse/XMP_SCHEMA.md for schema.")
     render.add_argument("--dcp", type=Path, default=None,
-                        help="Path to an Adobe DNG Camera Profile (DCP) file. When "
-                             "supplied, the emitter uses the DCP's bundled tone curve "
-                             "and BaselineExposure to close the gap against LR's "
-                             "render. If the LRT XMP carries an explicit kelvin "
-                             "override, the DCP's color matrices are also used to "
-                             "derive the temperature module's RGGB multipliers. "
-                             "Adobe DNG Converter installs DCPs at "
-                             "/Library/Application Support/Adobe/CameraRaw/"
-                             "CameraProfiles/Camera/<Make>/<Camera Standard>.dcp "
-                             "on macOS. Without --dcp, the renderer falls back to "
-                             "darktable's libraw-derived defaults — the output will "
-                             "diverge from LR's by the DCP-application gap (typically "
-                             "ΔE2000 mean 5-10 on real footage).")
+                        help="Explicit path to a DCP profile. Accepts either Adobe "
+                             "DNG Converter `.dcp` files or lrt-cinema's `.npz` "
+                             "extracted profile format (per "
+                             "`tools/extract_dcp.py`). Without --dcp the renderer "
+                             "AUTO-DETECTS by reading the source RAW's EXIF "
+                             "Make/Model and searching, in order: "
+                             "(1) $LRT_CINEMA_PROFILES env var, "
+                             "(2) ~/.config/lrt-cinema/profiles/ (or "
+                             "%%APPDATA%%/lrt-cinema/profiles/ on Windows), "
+                             "(3) Adobe DNG Converter install paths "
+                             "(/Library/Application Support/Adobe/CameraRaw/"
+                             "CameraProfiles/ on macOS; %%ProgramData%%\\Adobe\\"
+                             "CameraRaw\\CameraProfiles\\ on Windows). The first "
+                             "two roots hold lrt-cinema's `.npz` extracted profiles "
+                             "(populated via `tools/extract_dcp_library.py` or by "
+                             "cloning a sister `lrt-cinema-profiles` repo); the "
+                             "Adobe path is the fallback for users who still have "
+                             "the Adobe DCP install. Auto-detect is suppressed by "
+                             "--no-auto-dcp. When nothing is found, the renderer "
+                             "falls back to darktable's libraw-derived defaults — "
+                             "the output will diverge from LR's by the DCP-"
+                             "application gap (typically ΔE2000 mean 5-10).")
+    render.add_argument("--no-auto-dcp", dest="auto_dcp",
+                        action="store_false", default=True,
+                        help="Suppress the auto-detect-DCP fallback when --dcp is not "
+                             "supplied. Useful for reproducible 'no DCP' renders or "
+                             "when the bundled DCP for a camera is known to produce "
+                             "a worse result than dt's libraw default.")
     render.add_argument("--no-dcp-tone-curve", dest="apply_dcp_tone_curve",
                         action="store_false", default=True,
                         help="When --dcp is supplied, suppress emission of the "
@@ -104,6 +120,16 @@ def _build_parser() -> argparse.ArgumentParser:
                              "the LR-look midtone lift is not applied. "
                              "BaselineExposure and (when explicit kelvin is set) "
                              "temperature multipliers from the DCP still emit.")
+    render.add_argument("--no-dcp-hsv-cubes", dest="apply_dcp_hsv_cubes",
+                        action="store_false", default=True,
+                        help="Suppress emission of the DCP's HueSatMap and/or "
+                             "LookTable cubes into dt's lut3d module. The cubes "
+                             "encode Adobe's per-hue-sat-val color shaping; "
+                             "skipping them produces a 'cleaner' truly-linear "
+                             "render at the cost of a larger ΔE2000 vs LR's "
+                             "preview (typical +1.5-2.5 ΔE on real footage). "
+                             "BaselineExposureOffset still rolls into the "
+                             "exposure module's bias when the cubes are off.")
     render.add_argument("--from-frame", type=int, default=0,
                         help="First frame index to render (inclusive).")
     render.add_argument("--to-frame", type=int, default=None,
@@ -142,23 +168,51 @@ _DROPPED_AT_EMIT_FIELDS = (
 )
 
 
+def _counts_as_intent(field: str, value) -> bool:
+    """True if `value` for `field` represents user intent (vs an LR default).
+
+    LR/LRT writes a small set of non-zero default values into every XMP
+    regardless of whether the user touched the corresponding slider.
+    Counting those as "intent" in the dropped-emit warning gives the
+    misleading impression the renderer is dropping authored work when
+    the keyframes are actually creatively neutral. Excluded defaults:
+
+      * sharpness = 25       — LR's out-of-camera sharpness default
+                               (validated against LRT Pro 7.5.3 output)
+
+    Tone-curve identity is handled by the caller via the parser's
+    `_is_identity_tone_curve` helper.
+    """
+    if field == "sharpness":
+        return value not in (0.0, LR_SHARPNESS_DEFAULT)
+    return value != 0.0
+
+
 def _emit_dropped_field_warnings(seq, stream) -> None:
     """Audit MEDIUM-6: render-time stderr warnings for parsed-but-dropped fields.
 
     Same data the inspect command surfaces, in compact one-line form,
     so users who skip `inspect` still see what their LRT keyframes
-    intended but our pipeline doesn't propagate yet.
+    intended but our pipeline doesn't propagate yet. Excludes LR-default
+    values via `_counts_as_intent` so a sequence with no creative intent
+    produces no warning (was a false positive on neutral LRT sequences).
     """
     if not seq.keyframes:
         return
     kf_count = len(seq.keyframes)
     dropped: list[str] = []
     for name in _DROPPED_AT_EMIT_FIELDS:
-        count = sum(1 for kf in seq.keyframes if getattr(kf.ops, name) != 0.0)
+        count = sum(
+            1 for kf in seq.keyframes
+            if _counts_as_intent(name, getattr(kf.ops, name))
+        )
         if count:
             dropped.append(f"{name} ({count}/{kf_count})")
-    if any(kf.ops.tone_curve for kf in seq.keyframes):
-        tc_count = sum(1 for kf in seq.keyframes if kf.ops.tone_curve)
+    tc_count = sum(
+        1 for kf in seq.keyframes
+        if kf.ops.tone_curve and not _is_identity_tone_curve(kf.ops.tone_curve)
+    )
+    if tc_count:
         dropped.append(f"tone_curve ({tc_count}/{kf_count})")
     if any(kf.ops.tint is not None for kf in seq.keyframes):
         t_count = sum(1 for kf in seq.keyframes if kf.ops.tint is not None)
@@ -280,7 +334,7 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
         for name in _DROPPED_AT_EMIT_FIELDS:
             count = sum(
                 1 for kf in seq.keyframes
-                if getattr(kf.ops, name) != 0.0
+                if _counts_as_intent(name, getattr(kf.ops, name))
             )
             if count:
                 out.write(
@@ -288,7 +342,10 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
                     f"DROPPED at emit (calibration item, see SCOPE.md)\n"
                 )
                 any_warning = True
-        tone_curve_count = sum(1 for kf in seq.keyframes if kf.ops.tone_curve)
+        tone_curve_count = sum(
+            1 for kf in seq.keyframes
+            if kf.ops.tone_curve and not _is_identity_tone_curve(kf.ops.tone_curve)
+        )
         if tone_curve_count:
             out.write(
                 f"  - tone_curve: set on {tone_curve_count} of {kf_count} keyframes — "
@@ -334,13 +391,57 @@ def _cmd_render(args: argparse.Namespace) -> int:
 
     preset = get_preset(args.preset)
 
+    try:
+        seq = parse_sequence(args.input)
+    except (FileNotFoundError, NotADirectoryError) as exc:
+        sys.stderr.write(f"error: {exc}\n")
+        return 2
+
     dcp_profile = None
     if args.dcp is not None:
+        # Explicit --dcp path. Accepts either Adobe `.dcp` or lrt-cinema's
+        # extracted `.npz` format; dispatch by extension.
         try:
-            dcp_profile = parse_dcp(args.dcp)
+            if args.dcp.suffix.lower() == ".npz":
+                from lrt_cinema.dcp import load_profile
+                dcp_profile = load_profile(args.dcp)
+                source_kind = "extracted .npz"
+            else:
+                dcp_profile = parse_dcp(args.dcp)
+                source_kind = "Adobe .dcp"
         except (FileNotFoundError, ValueError) as exc:
             sys.stderr.write(f"error: --dcp: {exc}\n")
             return 2
+        sys.stderr.write(f"info: loaded DCP ({source_kind}): {args.dcp}\n")
+    elif args.auto_dcp and seq.source_frames:
+        first_raw = args.input / seq.source_frames[0]
+        info = read_raw_make_model(first_raw)
+        if info is None:
+            sys.stderr.write(
+                f"info: {first_raw.name} is not a TIFF-shaped RAW (Canon CR3 or "
+                f"unknown format); auto-detect skipped. Pass --dcp <path> to use "
+                f"a DCP-aware render.\n"
+            )
+        else:
+            make, model = info
+            result = auto_detect_profile(first_raw)
+            if result is not None:
+                dcp_profile, src_path = result
+                sys.stderr.write(
+                    f"info: auto-detected profile for {make} {model}: {src_path}\n"
+                )
+            else:
+                sys.stderr.write(
+                    f"info: no profile found for {make} {model}. Either:\n"
+                    f"  * run `tools/extract_dcp_library.py` against an Adobe DNG "
+                    f"Converter install to populate ~/.config/lrt-cinema/profiles/, or\n"
+                    f"  * clone a sister `lrt-cinema-profiles` repo and set "
+                    f"$LRT_CINEMA_PROFILES to its path, or\n"
+                    f"  * pass --dcp <path> explicitly, or\n"
+                    f"  * pass --no-auto-dcp to suppress this message.\n"
+                )
+
+    if dcp_profile is not None:
         sys.stderr.write(
             f"info: loaded DCP {dcp_profile.profile_name!r} "
             f"(baseline_exposure={dcp_profile.baseline_exposure:+.2f} EV, "
@@ -350,15 +451,9 @@ def _cmd_render(args: argparse.Namespace) -> int:
         )
     else:
         sys.stderr.write(
-            "warning: no --dcp supplied; render will diverge from LR's by the "
-            "DCP-application gap. See `lrt-cinema render --help`.\n"
+            "warning: no DCP supplied or detected; render will diverge from LR's "
+            "by the DCP-application gap. See `lrt-cinema render --help`.\n"
         )
-
-    try:
-        seq = parse_sequence(args.input)
-    except (FileNotFoundError, NotADirectoryError) as exc:
-        sys.stderr.write(f"error: {exc}\n")
-        return 2
 
     # Audit MEDIUM-6: warn at render-time about parsed fields that don't
     # reach the rendered output. inspect already prints this; render
@@ -411,6 +506,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
             custom_style=args.style,
             dcp_profile=dcp_profile,
             apply_dcp_tone_curve=args.apply_dcp_tone_curve,
+            apply_dcp_hsv_cubes=args.apply_dcp_hsv_cubes,
             dry_run=args.dry_run,
         )
     except DarktableCliNotFound as exc:

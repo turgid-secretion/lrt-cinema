@@ -164,3 +164,52 @@ def test_inspect_rejects_missing_folder(capsys):
     assert rc == 2
     err = capsys.readouterr().err
     assert "Not a directory" in err or "No such" in err
+
+
+def _make_neutral_lrt_xmp(rating: int = 4) -> bytes:
+    """Synthesize a real-LRT-shaped XMP with all values at LR defaults.
+
+    The user's actual LRT keyframes look exactly like this: every crs:* at
+    its out-of-camera default, including identity ToneCurvePV2012 and
+    sharpness=25. Used to verify the dropped-warning false-positive fix.
+    """
+    return (
+        b'<?xpacket begin="\xef\xbb\xbf" id="W5M0MpCehiHzreSzNTczkc9d"?>\n'
+        b'<x:xmpmeta xmlns:x="adobe:ns:meta/">\n'
+        b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">\n'
+        b'<rdf:Description rdf:about=""\n'
+        b'  xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"\n'
+        b'  xmlns:xmp="http://ns.adobe.com/xap/1.0/"\n'
+        b'  crs:Exposure2012="0.0" crs:Contrast2012="0" crs:Highlights2012="0"\n'
+        b'  crs:Shadows2012="0" crs:Whites2012="0" crs:Blacks2012="0"\n'
+        b'  crs:Saturation="0" crs:Vibrance="0" crs:Sharpness="25"\n'
+        b'  crs:WhiteBalance="As Shot"\n'
+        b'  xmp:Rating="' + str(rating).encode() + b'">\n'
+        b'  <crs:ToneCurvePV2012>\n'
+        b'    <rdf:Seq><rdf:li>0, 0</rdf:li><rdf:li>255, 255</rdf:li></rdf:Seq>\n'
+        b'  </crs:ToneCurvePV2012>\n'
+        b'</rdf:Description>\n'
+        b'</rdf:RDF>\n'
+        b'</x:xmpmeta>\n'
+        b'<?xpacket end="w"?>\n'
+    )
+
+
+def test_inspect_neutral_lrt_keyframe_no_false_dropped_warnings(tmp_path, capsys):
+    """A neutral LRT keyframe (LR defaults: identity curve, sharpness=25)
+    must NOT trigger any DROPPED-at-emit warning. Regression for the
+    overcount in the dropped-field warning that fired on every neutral
+    LRT sequence."""
+    src = tmp_path / "input"
+    src.mkdir()
+    (src / "frame_0001.NEF").write_bytes(b"raw-stub")
+    (src / "frame_0001.NEF.xmp").write_bytes(_make_neutral_lrt_xmp())
+
+    rc = main(["inspect", "--input", str(src)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    # The "Emit warnings" section must report no drops on a neutral keyframe.
+    assert "Emit warnings" in out
+    assert "DROPPED at emit" not in out, (
+        f"neutral LRT keyframe falsely flagged dropped fields:\n{out}"
+    )

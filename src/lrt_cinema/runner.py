@@ -64,6 +64,7 @@ def render_frame(
     custom_style: Path | None = None,
     dcp_profile: DCPProfile | None = None,
     apply_dcp_tone_curve: bool = True,
+    apply_dcp_hsv_cubes: bool = True,
     dry_run: bool = False,
     timeout_s: float | None = DEFAULT_PER_FRAME_TIMEOUT_S,
 ) -> FrameResult:
@@ -82,10 +83,22 @@ def render_frame(
 
     output_path = output_dir / f"{source_path.stem}{preset.output_extension}"
     xmp_path = output_dir / f"{source_path.stem}{source_path.suffix}.dt.xmp"
+    # Cube-emission policy: when a DCP carries HSV cubes (HueSatMap or
+    # LookTable) and apply_dcp_hsv_cubes is True, the emitter writes a
+    # .cube file next to the XMP and the dt-cli invocation below points
+    # dt's lut3d module at that directory via the def_path config key.
+    cube_will_emit = (
+        apply_dcp_hsv_cubes
+        and dcp_profile is not None
+        and (dcp_profile.hue_sat_map is not None
+             or dcp_profile.look_table is not None)
+    )
     emit_darktable_xmp(
         ops, xmp_path,
         dcp_profile=dcp_profile,
         apply_dcp_tone_curve=apply_dcp_tone_curve,
+        apply_dcp_hsv_cubes=apply_dcp_hsv_cubes,
+        dt_lut3d_def_path=output_dir if cube_will_emit else None,
     )
 
     style_path: Path | None = None
@@ -156,6 +169,15 @@ def render_frame(
             f"plugins/imageio/format/exr/bpp={preset.bpp}",
             "plugins/imageio/format/exr/compression=2",  # 2=PIZ
         ]
+    # DCP HSV-cube emission writes a `.cube` file alongside the XMP and
+    # references it from the lut3d module's params. dt resolves the
+    # filepath against the `plugins/darkroom/lut3d/def_path` config; we
+    # point it at the per-frame output directory. Per the lut3d cube-
+    # filepath resolution at src/iop/lut3d.c#L1178-L1196 SHA 9402c65275,
+    # the absolute-vs-relative semantics make def_path the cleanest
+    # injection point — dt prepends it to the (relative) cube basename.
+    if cube_will_emit:
+        core_conf.append(f"plugins/darkroom/lut3d/def_path={output_dir}")
     if core_conf:
         argv += ["--core"]
         for kv in core_conf:
@@ -220,6 +242,7 @@ def render_sequence(
     custom_style: Path | None = None,
     dcp_profile: DCPProfile | None = None,
     apply_dcp_tone_curve: bool = True,
+    apply_dcp_hsv_cubes: bool = True,
     dry_run: bool = False,
     timeout_s: float | None = DEFAULT_PER_FRAME_TIMEOUT_S,
 ) -> list[FrameResult]:
@@ -239,6 +262,7 @@ def render_sequence(
             custom_style=custom_style,
             dcp_profile=dcp_profile,
             apply_dcp_tone_curve=apply_dcp_tone_curve,
+            apply_dcp_hsv_cubes=apply_dcp_hsv_cubes,
             dry_run=dry_run,
             timeout_s=timeout_s,
         )
