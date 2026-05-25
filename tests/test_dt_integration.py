@@ -718,3 +718,94 @@ def test_dt_cli_ev_value_actually_reaches_pixels(tmp_path):
         "Likely cause: emitter params encoding rejected by dt's reader "
         "(see ADVERSARIAL_AUDIT_2026-05-23 HIGH-1 / base64 bug class)."
     )
+
+
+def test_dt_cli_accepts_channelmixerrgb_module_emission(tmp_path):
+    """dt-cli must report 'params ok' for our channelmixerrgb v3 emission
+    on a non-identity matrix.
+
+    Validates dt_iop_channelmixer_rgb_params_t struct layout — 160 bytes
+    at modversion 3 (src/iop/channelmixerrgb.c at SHA 9402c65275). Largest
+    fixed-size params blob after colorbalancergb; wrong size hits silent
+    substitution (base64-bug class)."""
+    import numpy as np
+    xmp = tmp_path / f"{_RAW.stem}{_RAW.suffix}.xmp"
+    # Non-identity mixer: tints R channel toward G. Non-identity → emitter
+    # actually emits (gate at xmp_emitter.py).
+    calibration = np.array(
+        [[0.9, 0.1, 0.0],
+         [0.0, 1.0, 0.0],
+         [0.0, 0.0, 1.0]],
+        dtype=np.float32,
+    )
+    emit_darktable_xmp(
+        DevelopOps(exposure_ev=0.0),
+        xmp,
+        calibration_matrix=calibration,
+    )
+    out_tif = tmp_path / "out.tif"
+    proc = _run_dt_cli(_RAW, xmp, out_tif)
+    assert proc.returncode == 0, (
+        f"darktable-cli failed: {proc.stderr[-500:] or proc.stdout[-500:]}"
+    )
+    log = proc.stdout + proc.stderr
+    _assert_module_loaded_ok(log, "channelmixerrgb", 3)
+
+
+def test_dt_cli_channelmixerrgb_identity_matrix_is_not_emitted(tmp_path):
+    """Identity calibration matrix must NOT emit a channelmixerrgb entry —
+    the emitter gates on `not np.allclose(matrix, eye(3))`. Avoids cluttering
+    the user's dt history with no-op entries when calibration is the
+    'no correction needed' identity."""
+    import numpy as np
+    xmp = tmp_path / f"{_RAW.stem}{_RAW.suffix}.xmp"
+    emit_darktable_xmp(
+        DevelopOps(exposure_ev=0.0),
+        xmp,
+        calibration_matrix=np.eye(3, dtype=np.float32),
+    )
+    out_tif = tmp_path / "out.tif"
+    proc = _run_dt_cli(_RAW, xmp, out_tif)
+    assert proc.returncode == 0, proc.stderr[-500:]
+    # No channelmixerrgb-load message in dt log.
+    log = proc.stdout + proc.stderr
+    assert "loaded module channelmixerrgb" not in log, (
+        f"identity matrix should not emit; dt loaded channelmixerrgb anyway. "
+        f"log tail: {log[-1500:]}"
+    )
+
+
+def test_dt_cli_channelmixerrgb_actually_affects_pixels(tmp_path):
+    """Render with identity calibration vs strong-skew matrix; pixels
+    must differ. Catches silent-substitution (dt accepts params but
+    discards them) and confirms the mixer is actually applied."""
+    import numpy as np
+    # No calibration_matrix → no channelmixerrgb emission → baseline.
+    xmp_none = tmp_path / "none.xmp"
+    emit_darktable_xmp(DevelopOps(exposure_ev=0.0), xmp_none)
+    # Strong skew: rotate channels (B→R, R→G, G→B). Visually dramatic;
+    # output cannot be byte-identical to baseline on any non-grayscale RAW.
+    skew = np.array(
+        [[0.0, 0.0, 1.0],
+         [1.0, 0.0, 0.0],
+         [0.0, 1.0, 0.0]],
+        dtype=np.float32,
+    )
+    xmp_skew = tmp_path / "skew.xmp"
+    emit_darktable_xmp(
+        DevelopOps(exposure_ev=0.0), xmp_skew, calibration_matrix=skew,
+    )
+    out_none = tmp_path / "none.tif"
+    out_skew = tmp_path / "skew.tif"
+    proc_none = _run_dt_cli(_RAW, xmp_none, out_none)
+    proc_skew = _run_dt_cli(_RAW, xmp_skew, out_skew)
+    assert proc_none.returncode == 0, proc_none.stderr[-500:]
+    assert proc_skew.returncode == 0, proc_skew.stderr[-500:]
+    b_none = out_none.read_bytes()[65536:65536 + 1_000_000]
+    b_skew = out_skew.read_bytes()[65536:65536 + 1_000_000]
+    assert b_none != b_skew, (
+        "no-calibration and channel-rotation renders produced byte-"
+        "identical pixel data — dt is silently ignoring our channelmixerrgb "
+        "params blob (wrong struct layout, wrong enum values, or default "
+        "substitution)."
+    )

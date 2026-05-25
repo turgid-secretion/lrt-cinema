@@ -430,30 +430,28 @@ def _cmd_render(args: argparse.Namespace) -> int:
             "by the DCP-application gap. See `lrt-cinema render --help`.\n"
         )
 
-    # Algorithmic-engine calibration auto-detect (Phase 2a infrastructure).
-    # The per-camera channelmixer correction matrix that closes the
-    # algorithmic-vs-DCP color rendition gap lives at
-    # ~/.config/lrt-cinema/calibration/<label>.npz (XDG default) or under
-    # $LRT_CINEMA_CALIBRATION. Auto-detect runs ONLY under --engine
-    # algorithmic — under --engine dcp the DCP already handles per-camera
-    # color science; applying a calibration on top would double-correct.
+    # Algorithmic-engine calibration auto-detect (Phase 2a infrastructure
+    # + Phase 2b emission wiring). The per-camera channelmixer correction
+    # matrix that closes the algorithmic-vs-DCP color rendition gap lives
+    # at ~/.config/lrt-cinema/calibration/<label>.npz (XDG default) or
+    # under $LRT_CINEMA_CALIBRATION.
     #
-    # Phase 2a (this commit) ships storage + lookup. Phase 2b wires the
-    # emission as channelmixerrgb v3. Until then a detected calibration
-    # is logged but not applied; the user gets a clear message rather
-    # than silent ignoring.
+    # Auto-detect runs ONLY under --engine algorithmic — under --engine dcp
+    # the DCP already handles per-camera color science; applying a
+    # calibration on top would double-correct.
+    calibration_matrix = None
     if args.engine == "algorithmic" and seq.source_frames:
         from lrt_cinema.calibration import auto_detect_calibration
         first_raw = args.input / seq.source_frames[0]
         cal_result = auto_detect_calibration(first_raw)
         if cal_result is not None:
             cal, cal_src = cal_result
+            calibration_matrix = cal.matrix
             sys.stderr.write(
                 f"info: auto-detected calibration for {cal.camera_label} "
                 f"(tier={cal.tier}, source={cal.source}): {cal_src}\n"
-                f"warning: calibration found but channelmixerrgb emission "
-                f"is not yet wired (Phase 2b). The matrix is NOT applied "
-                f"to this render.\n"
+                f"info: emitting channelmixerrgb v3 correction matrix on the "
+                f"algorithmic-engine path.\n"
             )
 
     # Audit MEDIUM-6: warn at render-time about parsed fields that don't
@@ -503,6 +501,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
             dcp_profile=dcp_profile,
             apply_dcp_tone_curve=args.apply_dcp_tone_curve,
             apply_dcp_hsv_cubes=args.apply_dcp_hsv_cubes,
+            calibration_matrix=calibration_matrix,
             dry_run=args.dry_run,
         )
     except DarktableCliNotFound as exc:

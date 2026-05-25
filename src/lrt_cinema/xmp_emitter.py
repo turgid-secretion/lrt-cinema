@@ -40,6 +40,8 @@ import struct
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import numpy as np
+
 from lrt_cinema.dcp import (
     DCPProfile,
     interpolate_hsv_cube,
@@ -162,6 +164,31 @@ applying camera-baseline tone curves — the use case Adobe DCPs were
 built for. Empirically reaches a lower post-fit ΔE residual than the
 generic tonecurve module against the LRT preview reference: basecurve
 2.25 vs tonecurve 3.19 on DSC_4053 (Nikon D750 + Camera Standard.dcp)."""
+
+CHANNELMIXERRGB_MODVERSION = "3"
+"""dt channelmixerrgb module current modversion (src/iop/channelmixerrgb.c
+DT_MODULE_INTROSPECTION(3, ...) at SHA 9402c65275). v3 is the canonical
+layout since dt 3.6 (Apr 2021); legacy_params upgrades v1/v2 on read,
+swapping saturation[0] ↔ saturation[2] for the consistent visual.
+
+Used by lrt-cinema's algorithmic engine to apply a per-camera channelmixer
+correction matrix (the Phase 2 calibration deliverable). Configured for
+"pure matrix transform, no chromatic adaptation, no side effects":
+  illuminant = DT_ILLUMINANT_PIPE (no illuminant correction)
+  adaptation = DT_ADAPTATION_RGB (skip CAT, matrix-only)
+  saturation / lightness / grey = zeros (no side effects)
+  normalize_* = False
+The 3×3 mixer fills the first 3 entries of red[4] / green[4] / blue[4];
+the 4th entry (luminance mixer) stays at 0."""
+
+# channelmixerrgb v3 enum integer values (verified against
+# src/common/illuminants.h + src/common/chromatic_adaptation.h at
+# SHA 9402c65275).
+_CHANNELMIXERRGB_ILLUMINANT_PIPE = 0
+_CHANNELMIXERRGB_ILLUMINANT_FLUO_F1 = 0  # default fluo (unused in PIPE mode)
+_CHANNELMIXERRGB_ILLUMINANT_LED_B1 = 0   # default LED  (unused in PIPE mode)
+_CHANNELMIXERRGB_ADAPTATION_RGB = 4
+_CHANNELMIXERRGB_VERSION_V3 = 2  # CHANNELMIXERRGB_V_3
 
 # Both tonecurve.c#L71 and basecurve.c#L56 cap their per-channel node count
 # at MAXNODES=20. DCP-bundled curves commonly carry 128 points and must be
@@ -443,6 +470,89 @@ def _encode_colorbalancergb_params(
         raise ValueError(
             f"colorbalancergb params struct size mismatch: got {len(payload)}, "
             f"expected 132. dt's reader will silently substitute defaults — "
+            f"see ADVERSARIAL_AUDIT_2026-05-23 HIGH-1."
+        )
+    return payload.hex()
+
+
+def _encode_channelmixerrgb_params(matrix: np.ndarray) -> str:
+    """Encode darktable channelmixerrgb v3 params for a pure-matrix
+    correction transform.
+
+    Struct layout from src/iop/channelmixerrgb.c
+    `dt_iop_channelmixer_rgb_params_t` at dt SHA 9402c65275:
+
+        float red[4];        // mixer row 1; entries 0..2 are R,G,B coeffs,
+                             // entry 3 is luminance-mixer
+        float green[4];      // mixer row 2
+        float blue[4];       // mixer row 3
+        float saturation[4]; // per-channel sat (default 0)
+        float lightness[4];  // per-channel lightness (default 0)
+        float grey[4];       // grey-channel mixer (default 0)
+        gboolean normalize_R / G / B / sat / light / grey;  // 4 bytes each
+        dt_illuminant_t illuminant;        // enum, 4 bytes
+        dt_illuminant_fluo_t illum_fluo;   // enum, 4 bytes
+        dt_illuminant_led_t illum_led;     // enum, 4 bytes
+        dt_adaptation_t adaptation;        // enum, 4 bytes
+        float x, y;                        // illuminant xy (unused in
+                                           // DT_ILLUMINANT_PIPE mode)
+        float temperature;                 // (unused in PIPE mode)
+        float gamut;                       // gamut compression (1.0 = identity)
+        gboolean clip;                     // 4 bytes
+        dt_iop_channelmixer_rgb_version_t version;  // enum, 4 bytes
+
+    Total: 6 × float[4] (96) + 6 × gboolean (24) + 4 × enum (16) +
+           4 × float (16) + 1 × gboolean (4) + 1 × enum (4) = 160 bytes.
+
+    Configured for the calibration use case:
+      - illuminant = DT_ILLUMINANT_PIPE (no illuminant detection)
+      - adaptation = DT_ADAPTATION_RGB (no CAT, matrix-only)
+      - normalize_* = False (no auto-normalization)
+      - saturation/lightness/grey = zeros (no side effects)
+      - gamut = 1.0, clip = True (safe defaults)
+
+    matrix: (3, 3) row-major. Identity = no correction:
+        np.eye(3) → red=[1,0,0,0], green=[0,1,0,0], blue=[0,0,1,0]
+    """
+    if matrix.shape != (3, 3):
+        raise ValueError(f"matrix must be (3, 3), got {matrix.shape}")
+    red = (float(matrix[0, 0]), float(matrix[0, 1]), float(matrix[0, 2]), 0.0)
+    green = (float(matrix[1, 0]), float(matrix[1, 1]), float(matrix[1, 2]), 0.0)
+    blue = (float(matrix[2, 0]), float(matrix[2, 1]), float(matrix[2, 2]), 0.0)
+    zeros4 = (0.0, 0.0, 0.0, 0.0)
+    payload = struct.pack(
+        "<24f"   # red, green, blue, saturation, lightness, grey (6 × float[4])
+        "6i"     # normalize_R/G/B/sat/light/grey (gboolean = int)
+        "4i"     # illuminant, illum_fluo, illum_led, adaptation
+        "4f"     # x, y, temperature, gamut
+        "i"      # clip (gboolean)
+        "i",     # version
+        # mixer rows
+        *red, *green, *blue,
+        # zeroed sat/light/grey
+        *zeros4, *zeros4, *zeros4,
+        # normalize_*
+        0, 0, 0, 0, 0, 0,
+        # illuminant enums
+        _CHANNELMIXERRGB_ILLUMINANT_PIPE,
+        _CHANNELMIXERRGB_ILLUMINANT_FLUO_F1,
+        _CHANNELMIXERRGB_ILLUMINANT_LED_B1,
+        _CHANNELMIXERRGB_ADAPTATION_RGB,
+        # x, y unused in PIPE mode but dt may still validate ranges;
+        # use the spec default 0.333.
+        0.333, 0.333,
+        # temperature unused in PIPE mode; spec default 5003.0.
+        5003.0,
+        # gamut: 1.0 = identity (no compression). Default per spec.
+        1.0,
+        # clip: True (safe — clip negative RGB from out-of-gamut samples).
+        1,
+        _CHANNELMIXERRGB_VERSION_V3,
+    )
+    if len(payload) != 160:
+        raise ValueError(
+            f"channelmixerrgb params struct size mismatch: got {len(payload)}, "
+            f"expected 160. dt's reader will silently substitute defaults — "
             f"see ADVERSARIAL_AUDIT_2026-05-23 HIGH-1."
         )
     return payload.hex()
@@ -826,6 +936,7 @@ def emit_darktable_xmp(
     apply_dcp_hsv_cubes: bool = True,
     cube_size: int = RECOMMENDED_CUBE_SIZE,
     dt_lut3d_def_path: Path | None = None,
+    calibration_matrix: np.ndarray | None = None,
 ) -> None:
     """Emit a darktable XMP sidecar for `ops` to `output_path`.
 
@@ -1071,6 +1182,23 @@ def emit_darktable_xmp(
             params_b64=_encode_sharpen_params(
                 amount=lr_sharpness_to_dt_amount(ops.sharpness),
             ),
+        )
+        num += 1
+
+    # channelmixerrgb — algorithmic-engine per-camera calibration matrix.
+    # Caller supplies the fitted 3×3 correction; the emit gate is just
+    # "matrix is not None and not identity." Skipping identity is a small
+    # optimization that also avoids emitting a no-op history entry
+    # cluttering the user's dt history panel. Configured for pure-matrix
+    # transform (DT_ADAPTATION_RGB + DT_ILLUMINANT_PIPE) per the
+    # _encode_channelmixerrgb_params docstring.
+    if calibration_matrix is not None and not np.allclose(
+        calibration_matrix, np.eye(3), atol=1e-6,
+    ):
+        _make_history_entry(
+            seq, num=num, operation="channelmixerrgb", enabled=True,
+            modversion=CHANNELMIXERRGB_MODVERSION,
+            params_b64=_encode_channelmixerrgb_params(calibration_matrix),
         )
         num += 1
 

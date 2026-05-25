@@ -281,7 +281,7 @@ def test_render_logs_calibration_detection_under_algorithmic_engine(tmp_path, ca
     assert rc == 0
     err = capsys.readouterr().err
     assert "auto-detected calibration for Nikon D750" in err
-    assert "channelmixerrgb emission is not yet wired" in err
+    assert "emitting channelmixerrgb v3 correction matrix" in err
 
 
 def test_render_does_NOT_auto_detect_calibration_under_dcp_engine(tmp_path, capsys):
