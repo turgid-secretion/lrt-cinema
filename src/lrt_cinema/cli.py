@@ -430,6 +430,32 @@ def _cmd_render(args: argparse.Namespace) -> int:
             "by the DCP-application gap. See `lrt-cinema render --help`.\n"
         )
 
+    # Algorithmic-engine calibration auto-detect (Phase 2a infrastructure).
+    # The per-camera channelmixer correction matrix that closes the
+    # algorithmic-vs-DCP color rendition gap lives at
+    # ~/.config/lrt-cinema/calibration/<label>.npz (XDG default) or under
+    # $LRT_CINEMA_CALIBRATION. Auto-detect runs ONLY under --engine
+    # algorithmic — under --engine dcp the DCP already handles per-camera
+    # color science; applying a calibration on top would double-correct.
+    #
+    # Phase 2a (this commit) ships storage + lookup. Phase 2b wires the
+    # emission as channelmixerrgb v3. Until then a detected calibration
+    # is logged but not applied; the user gets a clear message rather
+    # than silent ignoring.
+    if args.engine == "algorithmic" and seq.source_frames:
+        from lrt_cinema.calibration import auto_detect_calibration
+        first_raw = args.input / seq.source_frames[0]
+        cal_result = auto_detect_calibration(first_raw)
+        if cal_result is not None:
+            cal, cal_src = cal_result
+            sys.stderr.write(
+                f"info: auto-detected calibration for {cal.camera_label} "
+                f"(tier={cal.tier}, source={cal.source}): {cal_src}\n"
+                f"warning: calibration found but channelmixerrgb emission "
+                f"is not yet wired (Phase 2b). The matrix is NOT applied "
+                f"to this render.\n"
+            )
+
     # Audit MEDIUM-6: warn at render-time about parsed fields that don't
     # reach the rendered output. inspect already prints this; render
     # was silent before, causing surprise data loss for users who set
