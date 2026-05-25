@@ -206,10 +206,10 @@ def _assert_module_loaded_ok(log: str, op_name: str, modversion: int) -> None:
             f"could not find 'params v.' line for {op_name}; "
             f"window: {lines[op_idx:op_idx + 10]!r}"
         )
-    _assert_no_silent_substitution(log, exclude_op=op_name)
+    _assert_no_silent_substitution(log)
 
 
-def _assert_no_silent_substitution(log: str, exclude_op: str | None = None) -> None:
+def _assert_no_silent_substitution(log: str) -> None:
     """Scan the full dt-cli log for any of the substitution-warning patterns.
 
     Excludes lines mentioning `blendop`: lrt-cinema deliberately does NOT

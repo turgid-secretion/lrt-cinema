@@ -39,6 +39,9 @@ available as headroom if saturated-gamut artifacts surface in practice
 
 from __future__ import annotations
 
+import contextlib
+import os
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -331,17 +334,38 @@ def bake_dcp_cubes_to_resolve_cube(
     #    boundary will be soft-clipped, which matches Adobe's behavior.
     rgb_out = np.clip(rgb_out, 0.0, 1.0)
 
-    # 7. Write Resolve .cube. Iteration order: B-outer, G-middle, R-inner →
-    #    matches dt's indexing.
+    # 7. Write Resolve .cube atomically. Iteration order: B-outer, G-middle,
+    #    R-inner → matches dt's indexing. Atomic write via tempfile + os.replace
+    #    closes two latent bugs flagged in caveman-review on PR #10:
+    #      (a) TOCTOU race — content-hashed dedup at the emitter does an
+    #          `exists()` check before bake. Two parallel renders that both
+    #          see "not exists" would both write to the same path
+    #          non-atomically. With atomic write, last-write wins and the
+    #          intermediate bytes never appear under the final name.
+    #      (b) Partial-file-on-crash — a `kill -9` mid-write would leave a
+    #          truncated .cube that the next render's exists() check would
+    #          honor as valid. Atomic rename means the cube only appears
+    #          under the final name after the full write completes.
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(f"# lrt-cinema DCP HSV-cube bake, size={n}\n")
-        f.write(f"LUT_3D_SIZE {n}\n")
-        f.write("DOMAIN_MIN 0.0 0.0 0.0\n")
-        f.write("DOMAIN_MAX 1.0 1.0 1.0\n")
-        for bi in range(n):
-            for gi in range(n):
-                for ri in range(n):
-                    px = rgb_out[ri, gi, bi]
-                    f.write(f"{px[0]:.6f} {px[1]:.6f} {px[2]:.6f}\n")
+    fd, tmp_str = tempfile.mkstemp(
+        prefix=out_path.name + ".tmp.", dir=str(out_path.parent),
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(f"# lrt-cinema DCP HSV-cube bake, size={n}\n")
+            f.write(f"LUT_3D_SIZE {n}\n")
+            f.write("DOMAIN_MIN 0.0 0.0 0.0\n")
+            f.write("DOMAIN_MAX 1.0 1.0 1.0\n")
+            for bi in range(n):
+                for gi in range(n):
+                    for ri in range(n):
+                        px = rgb_out[ri, gi, bi]
+                        f.write(f"{px[0]:.6f} {px[1]:.6f} {px[2]:.6f}\n")
+        os.replace(tmp_str, out_path)
+    except BaseException:
+        # On any failure (incl. KeyboardInterrupt), remove the temp file
+        # rather than leave it cluttering the def_path dir.
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_str)
+        raise

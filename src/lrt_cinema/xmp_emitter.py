@@ -795,9 +795,25 @@ def _cube_content_hash(
     h.update(f"{dcp_profile.baseline_exposure_offset:.9f}".encode())
     if hsm_blended is not None:
         h.update(b"HSM")
+        # Include metadata that affects cube interpretation but not bytes:
+        # srgb_gamma gates an OETF/EOTF roundtrip on V in _apply_hsv_cube,
+        # and (V, H, S) division counts determine cube-index slicing. Two
+        # cubes with identical flat data but different shape or gamma
+        # interpret to different output — defensive hash field flagged
+        # in caveman-review on PR #10.
+        hsm_meta = dcp_profile.hue_sat_map
+        h.update(
+            f"{hsm_meta.srgb_gamma}|{hsm_meta.val_divisions}|"
+            f"{hsm_meta.hue_divisions}|{hsm_meta.sat_divisions}".encode()
+        )
         h.update(hsm_blended.tobytes())
     if look_blended is not None:
         h.update(b"LOOK")
+        look_meta = dcp_profile.look_table
+        h.update(
+            f"{look_meta.srgb_gamma}|{look_meta.val_divisions}|"
+            f"{look_meta.hue_divisions}|{look_meta.sat_divisions}".encode()
+        )
         h.update(look_blended.tobytes())
     return h.hexdigest()[:16]
 
