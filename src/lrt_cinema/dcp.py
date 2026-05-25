@@ -275,8 +275,25 @@ def _read_value(
     TIFF inlines values that fit in 4 bytes; larger values live at the
     offset that occupies those 4 bytes. We always return raw bytes; the
     caller decodes per `tag_type`.
+
+    Rejects oversized counts as malformed: a hostile (or just garbage)
+    DCP/RAW can claim count=2^31 for any tag type, causing `f.read(size)`
+    to allocate billions of bytes — MemoryError-or-OOM at parse time
+    regardless of the file's actual size. 16 MiB is strictly larger than
+    any legitimate single-tag payload (DCP HSV cubes top out around
+    270 KiB at 90×16×16 floats; LookTables similarly bounded; ASCII
+    strings are <64 B). Larger → malformed → ValueError.
     """
-    size = _TYPE_SIZES.get(tag_type, 1) * count
+    type_size = _TYPE_SIZES.get(tag_type, 1)
+    if count < 0:
+        raise ValueError(f"malformed TIFF/DCP: negative IFD-entry count {count}")
+    if count > _MAX_IFD_ENTRY_COUNT // max(1, type_size):
+        raise ValueError(
+            f"malformed TIFF/DCP: IFD entry payload {type_size} * {count} "
+            f"= {type_size * count} bytes exceeds the {_MAX_IFD_ENTRY_COUNT}-"
+            f"byte cap. A real DCP/RAW tag never approaches this size."
+        )
+    size = type_size * count
     if size <= 4:
         return value_or_offset_bytes[:size]
     offset = struct.unpack(f"{byte_order}I", value_or_offset_bytes)[0]
@@ -285,6 +302,13 @@ def _read_value(
     data = f.read(size)
     f.seek(pos)
     return data
+
+
+# 16 MiB IFD-entry payload cap. Bounded above any legitimate tag (DCP HSV
+# cubes are ~270 KB max; LookTables similar; ASCII strings <64 B). Below
+# this, malformed-input parses fail fast with ValueError instead of
+# attempting a multi-GB read on a fabricated count field.
+_MAX_IFD_ENTRY_COUNT = 16 * 1024 * 1024
 
 
 def _decode_srational(data: bytes, count: int, byte_order: str) -> list[float]:
@@ -671,7 +695,12 @@ def interpolate_hsv_cube(
     the full (V, H, S, 3) cube instead of a 3×3 matrix. Numpy broadcast
     handles the per-cell linear combination in one allocation.
     """
-    if cube.data_2 is None or kelvin_2 == 0.0:
+    # Either kelvin zero → can't compute mireds. Falls back to data_1
+    # (matches the existing "no second illuminant" convention). Real DCPs
+    # always have positive kelvins via illuminant_code_to_kelvin which
+    # supplies 5500.0 as default; this guard catches manual construction
+    # with kelvin_1=0 or a corrupted .npz where one side is zero.
+    if cube.data_2 is None or kelvin_1 <= 0.0 or kelvin_2 <= 0.0:
         return cube.data_1
     k_lo, k_hi = sorted([kelvin_1, kelvin_2])
     if kelvin_1 <= kelvin_2:
@@ -1000,7 +1029,14 @@ def save_profile(profile: DCPProfile, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     arrays: dict[str, np.ndarray] = {
         "format_version": np.int32(_PROFILE_FORMAT_VERSION),
-        "profile_name": np.array(profile.profile_name, dtype="U"),
+        # Coerce None → "" so the .npz roundtrip preserves "no name" as
+        # the empty string the dataclass default uses. Without this,
+        # np.array(None, dtype="U") saves the literal four-char string
+        # "None", which load_profile would faithfully restore as a
+        # bogus profile name. Real parse_dcp always sets profile_name
+        # to "" or a real string; this catches manual-construction edge
+        # cases per caveman-review PR #8 #7.
+        "profile_name": np.array(profile.profile_name or "", dtype="U"),
         "calibration_illuminant_1": np.int32(profile.calibration_illuminant_1),
         "calibration_illuminant_2": np.int32(profile.calibration_illuminant_2),
         "kelvin_1": np.float32(profile.kelvin_1),
