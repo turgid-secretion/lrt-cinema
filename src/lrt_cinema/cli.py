@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import struct
 import sys
 from pathlib import Path
 
@@ -10,15 +11,12 @@ from lrt_cinema import __version__
 from lrt_cinema.dcp import auto_detect_profile, parse_dcp, read_raw_make_model
 from lrt_cinema.interpolation import (
     apply_deflicker,
-    apply_holy_grail_ramps,
     apply_lrt_mask_offsets,
     materialize_all_frames,
 )
-from lrt_cinema.ir import InterpolationMode
 from lrt_cinema.presets import PRESETS, get_preset
 from lrt_cinema.runner import DarktableCliNotFound, render_sequence
-from lrt_cinema.xmp_emitter import LR_SHARPNESS_DEFAULT
-from lrt_cinema.xmp_parser import _is_identity_tone_curve, parse_sequence
+from lrt_cinema.xmp_parser import parse_sequence
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -55,21 +53,6 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Output preset.")
     render.add_argument("--style", type=Path, default=None,
                         help="Optional custom darktable .style overriding the bundled preset style.")
-    render.add_argument("--interpolation", choices=("linear", "smooth"),
-                        default="linear",
-                        help="Keyframe interpolation mode. 'smooth' uses uniform "
-                             "Catmull-Rom with mirror-extrapolated phantom tangents "
-                             "(degenerates to linear for 2-keyframe sequences). "
-                             "NOT validated to match LRT's spline shape — for "
-                             "LRT-fidelity, prefer 'linear' or run Auto Transition "
-                             "in LRT first (we then exact-match LRT's per-frame values).")
-    render.add_argument("--holy-grail", choices=("none", "apply-lrt-ramps"),
-                        default="apply-lrt-ramps",
-                        help="Synthetic-fixture Holy Grail ramp mode. 'apply-lrt-ramps' "
-                             "overlays per-segment ramp deltas from the synthetic "
-                             "<lrt:HolyGrailRamps> schema (used by tests). Real LRT "
-                             "uses mask-correction per-frame deltas — see "
-                             "--lrt-mask-offsets.")
     render.add_argument("--deflicker", choices=("none", "apply-lrt-offsets"),
                         default="apply-lrt-offsets",
                         help="Deflicker mode. 'apply-lrt-offsets' uses the per-frame "
@@ -149,8 +132,6 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="First frame index to render (inclusive).")
     render.add_argument("--to-frame", type=int, default=None,
                         help="Last frame index to render (exclusive). Default: end of sequence.")
-    render.add_argument("--workers", type=int, default=1,
-                        help="Parallel render workers. v0.1 supports 1 only.")
     render.add_argument("--dry-run", action="store_true",
                         help="Emit XMPs but skip the darktable-cli invocation.")
     render.add_argument("--quiet", action="store_true",
@@ -177,68 +158,43 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
 
-_DROPPED_AT_EMIT_FIELDS = (
-    "contrast", "highlights", "shadows", "whites", "blacks",
-    "saturation", "vibrance", "sharpness",
-)
+# Truly dropped at emit — dt's lightroom.c has dropped these since 2013 and
+# the underlying PV2012 parametric tone math is closed-source. See SCOPE.md.
+# Other PV2012 fields (contrast / blacks / saturation / vibrance / sharpness)
+# DO emit in v0.4 via colorbalancergb / exposure.black / sharpen.
+_DROPPED_AT_EMIT_FIELDS = ("highlights", "shadows", "whites")
 
 
-def _counts_as_intent(field: str, value) -> bool:
-    """True if `value` for `field` represents user intent (vs an LR default).
+def _emit_dropped_field_warnings(seq, stream, dcp_loaded: bool) -> None:
+    """Render-time stderr warning for fields LRT carried that we don't propagate.
 
-    LR/LRT writes a small set of non-zero default values into every XMP
-    regardless of whether the user touched the corresponding slider.
-    Counting those as "intent" in the dropped-emit warning gives the
-    misleading impression the renderer is dropping authored work when
-    the keyframes are actually creatively neutral. Excluded defaults:
-
-      * sharpness = 25       — LR's out-of-camera sharpness default
-                               (validated against LRT Pro 7.5.3 output)
-
-    Tone-curve identity is handled by the caller via the parser's
-    `_is_identity_tone_curve` helper.
-    """
-    if field == "sharpness":
-        return value not in (0.0, LR_SHARPNESS_DEFAULT)
-    return value != 0.0
-
-
-def _emit_dropped_field_warnings(seq, stream) -> None:
-    """Audit MEDIUM-6: render-time stderr warnings for parsed-but-dropped fields.
-
-    Same data the inspect command surfaces, in compact one-line form,
-    so users who skip `inspect` still see what their LRT keyframes
-    intended but our pipeline doesn't propagate yet. Excludes LR-default
-    values via `_counts_as_intent` so a sequence with no creative intent
-    produces no warning (was a false positive on neutral LRT sequences).
+    Two categories surface:
+      * Unconditionally dropped — highlights / shadows / whites. dt's own
+        lightroom.c has dropped these since 2013 (PV2012 parametric tone
+        math is closed-source).
+      * Conditionally dropped — tint / temperature_k. These emit only
+        when a DCP profile is loaded (auto-detected or via --dcp); without
+        one, they drop and dt falls back to as-shot WB. `dcp_loaded`
+        suppresses this category when the DCP path is active.
     """
     if not seq.keyframes:
         return
     kf_count = len(seq.keyframes)
     dropped: list[str] = []
     for name in _DROPPED_AT_EMIT_FIELDS:
-        count = sum(
-            1 for kf in seq.keyframes
-            if _counts_as_intent(name, getattr(kf.ops, name))
-        )
+        count = sum(1 for kf in seq.keyframes if getattr(kf.ops, name) != 0.0)
         if count:
             dropped.append(f"{name} ({count}/{kf_count})")
-    tc_count = sum(
-        1 for kf in seq.keyframes
-        if kf.ops.tone_curve and not _is_identity_tone_curve(kf.ops.tone_curve)
-    )
-    if tc_count:
-        dropped.append(f"tone_curve ({tc_count}/{kf_count})")
-    if any(kf.ops.tint is not None for kf in seq.keyframes):
+    if not dcp_loaded:
         t_count = sum(1 for kf in seq.keyframes if kf.ops.tint is not None)
-        dropped.append(f"tint ({t_count}/{kf_count})")
-    if any(kf.ops.temperature_k is not None for kf in seq.keyframes):
+        if t_count:
+            dropped.append(f"tint ({t_count}/{kf_count}, no DCP)")
         k_count = sum(1 for kf in seq.keyframes if kf.ops.temperature_k is not None)
-        dropped.append(f"temperature_k ({k_count}/{kf_count})")
+        if k_count:
+            dropped.append(f"temperature_k ({k_count}/{kf_count}, no DCP)")
     if dropped:
         stream.write(
-            f"warning: dropped at emit (calibration items, see SCOPE.md): "
-            f"{', '.join(dropped)}\n"
+            f"warning: dropped at emit: {', '.join(dropped)}\n"
         )
 
 
@@ -299,20 +255,6 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
                 f"curve_pts={len(ops.tone_curve)}\n"
             )
 
-    out.write(f"\nHoly Grail ramps: {len(seq.holy_grail_ramps)}\n")
-    for r in seq.holy_grail_ramps:
-        out.write(
-            f"  [{r.start_frame}..{r.end_frame}] "
-            f"{r.start_exposure_ev:+.2f} EV → {r.end_exposure_ev:+.2f} EV "
-            f"smoothness={r.smoothness}\n"
-        )
-    if not seq.holy_grail_ramps:
-        out.write(
-            "  (none found. If you used LRT's Holy Grail workflow, the schema\n"
-            "   may differ from our current guess of <lrt:HolyGrailRamps> —\n"
-            "   see docs/VALIDATION.md and SCOPE.md calibration items.)\n"
-        )
-
     out.write(f"\nDeflicker offsets (synthetic schema): {len(seq.deflicker_offsets)}\n")
     if seq.deflicker_offsets:
         evs = [d.exposure_delta_ev for d in seq.deflicker_offsets]
@@ -348,63 +290,64 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
         any_warning = False
         for name in _DROPPED_AT_EMIT_FIELDS:
             count = sum(
-                1 for kf in seq.keyframes
-                if _counts_as_intent(name, getattr(kf.ops, name))
+                1 for kf in seq.keyframes if getattr(kf.ops, name) != 0.0
             )
             if count:
                 out.write(
                     f"  - {name}: set on {count} of {kf_count} keyframes — "
-                    f"DROPPED at emit (calibration item, see SCOPE.md)\n"
+                    f"DROPPED at emit (dt's lightroom.c also drops these; "
+                    f"PV2012 tone math is closed-source)\n"
                 )
                 any_warning = True
-        tone_curve_count = sum(
-            1 for kf in seq.keyframes
-            if kf.ops.tone_curve and not _is_identity_tone_curve(kf.ops.tone_curve)
-        )
-        if tone_curve_count:
-            out.write(
-                f"  - tone_curve: set on {tone_curve_count} of {kf_count} keyframes — "
-                f"DROPPED at emit (calibration item)\n"
-            )
-            any_warning = True
         tint_count = sum(1 for kf in seq.keyframes if kf.ops.tint is not None)
         if tint_count:
             out.write(
                 f"  - tint: set on {tint_count} of {kf_count} keyframes — "
-                f"DROPPED at emit (depends on temperature calibration)\n"
+                f"emits only when a DCP is loaded (auto-detect or --dcp); "
+                f"drops otherwise\n"
             )
             any_warning = True
         temp_count = sum(1 for kf in seq.keyframes if kf.ops.temperature_k is not None)
         if temp_count:
             out.write(
                 f"  - temperature_k: set on {temp_count} of {kf_count} keyframes — "
-                f"currently NOT emitted (calibration item; darktable's "
-                f"as-shot WB will be used instead)\n"
+                f"emits only when a DCP is loaded; without DCP, dt's "
+                f"as-shot WB is used\n"
             )
             any_warning = True
         if not any_warning:
             out.write(
                 "  (none. All parsed develop ops on the keyframes have a path\n"
-                "   to the darktable XMP. Today that means exposure-only.)\n"
+                "   to the darktable XMP.)\n"
             )
 
     out.write(
-        "\nWhat WILL reach the rendered output:\n"
-        "  - Per-frame exposure_ev (linear + smooth interp + Holy Grail "
-        "ramp delta + deflicker delta).\n"
-        "  - darktable's default treatment for everything else "
-        "(as-shot WB, no tone curve, no contrast / shadow / highlight, etc.).\n"
+        "\nWhat WILL reach the rendered output (with default v0.4 flags):\n"
+        "  - exposure: LR Exposure2012 + Blacks2012 + Holy Grail / Deflicker /\n"
+        "    Global deltas + DCP BaselineExposure (when DCP loaded)\n"
+        "  - temperature: LR Temperature+Tint via DCP color matrices (when DCP)\n"
+        "  - tonecurve: LR ToneCurvePV2012 (when non-identity)\n"
+        "  - basecurve: DCP ProfileToneCurve (when DCP and not --no-dcp-tone-curve)\n"
+        "  - lut3d: DCP HueSatMap + LookTable (when DCP and not --no-dcp-hsv-cubes)\n"
+        "  - colorbalancergb: LR Saturation + Vibrance + Contrast2012\n"
+        "  - sharpen: LR Sharpness (≠ 25 default)\n"
     )
     return 0
 
 
 def _cmd_render(args: argparse.Namespace) -> int:
-    if args.workers != 1:
-        sys.stderr.write(
-            "warning: --workers > 1 is not yet implemented; falling back to 1.\n"
-        )
-
     preset = get_preset(args.preset)
+
+    # Refuse --input == --output: the per-frame TIFFs (output_dir / stem.tif)
+    # would clobber pre-existing source siblings if any (e.g. a prior dt
+    # export). The LRT XMP sidecars themselves use a different suffix
+    # (.dt.xmp vs .xmp) and survive, but a same-dir render is still wrong.
+    if args.output.resolve() == args.input.resolve():
+        sys.stderr.write(
+            "error: --output must differ from --input (would overwrite "
+            "pre-existing TIFFs in the source directory).\n"
+        )
+        return 2
 
     try:
         seq = parse_sequence(args.input)
@@ -441,8 +384,8 @@ def _cmd_render(args: argparse.Namespace) -> int:
             else:
                 dcp_profile = parse_dcp(args.dcp)
                 source_kind = "Adobe .dcp"
-        except (FileNotFoundError, ValueError) as exc:
-            sys.stderr.write(f"error: --dcp: {exc}\n")
+        except (FileNotFoundError, ValueError, struct.error) as exc:
+            sys.stderr.write(f"error: --dcp: malformed or unreadable: {exc}\n")
             return 2
         sys.stderr.write(f"info: loaded DCP ({source_kind}): {args.dcp}\n")
     elif args.auto_dcp and seq.source_frames:
@@ -491,7 +434,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
     # reach the rendered output. inspect already prints this; render
     # was silent before, causing surprise data loss for users who set
     # WB / contrast / tone-curve / etc. in LRT and didn't run inspect.
-    _emit_dropped_field_warnings(seq, sys.stderr)
+    _emit_dropped_field_warnings(seq, sys.stderr, dcp_loaded=dcp_profile is not None)
 
     if seq.frame_count() == 0:
         sys.stderr.write(f"error: no RAW frames found under {args.input}\n")
@@ -509,16 +452,11 @@ def _cmd_render(args: argparse.Namespace) -> int:
         )
         return 2
 
-    seq.interpolation_mode = InterpolationMode(args.interpolation)
-
     per_frame = materialize_all_frames(seq)
     # Pipeline ordering: keyframe-interpolated values are the base; then
-    # overlay Holy Grail ramps (synthetic schema), then real-LRT
-    # mask-correction per-frame deltas (HG / Deflicker / Global), then
-    # synthetic-schema deflicker offsets. All four sources add
-    # exposure_ev linearly.
-    if args.holy_grail == "apply-lrt-ramps":
-        per_frame = apply_holy_grail_ramps(per_frame, seq)
+    # overlay real-LRT mask-correction per-frame deltas (HG / Deflicker /
+    # Global); then synthetic-schema deflicker offsets. Both overlay
+    # sources add exposure_ev linearly.
     if args.lrt_mask_offsets != "none":
         kinds = ("hg", "deflicker", "global") if args.lrt_mask_offsets == "all" \
             else (args.lrt_mask_offsets,)

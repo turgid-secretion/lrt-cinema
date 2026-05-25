@@ -13,8 +13,10 @@ the orchestration without darktable installed.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,6 +28,63 @@ from lrt_cinema.xmp_emitter import emit_darktable_xmp
 
 class DarktableCliNotFound(RuntimeError):
     """Raised when `darktable-cli` is not on PATH and dry_run is False."""
+
+
+# SHAs of darktable revisions the emitter's modversion constants have been
+# verified against (see audit doc + per-module 'accepts' integration tests).
+# A `darktable-cli --version` that reports any other SHA gets a one-line
+# stderr warning — every dt release bumps modversions and the established
+# failure mode is silent default-substitution producing wrong pixels with
+# a successful exit code.
+_KNOWN_TESTED_DT_SHAS = frozenset({
+    "9402c65275",  # darktable 5.5.0+1375 — primary dev / audit target
+})
+
+_DT_VERSION_RE = re.compile(r"darktable\s+(\S+).*~g([0-9a-f]{8,})", re.IGNORECASE)
+
+
+def darktable_version() -> tuple[str, str] | None:
+    """Return (version_string, sha) for the installed darktable-cli, or None.
+
+    None when darktable-cli is not on PATH or `--version` output cannot be
+    parsed. Output shape:
+        darktable 5.5.0+1375~g9402c65275 OpenMP support: yes...
+    """
+    bin_path = shutil.which("darktable-cli")
+    if bin_path is None:
+        return None
+    try:
+        proc = subprocess.run(
+            [bin_path, "--version"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    text = proc.stdout + proc.stderr
+    match = _DT_VERSION_RE.search(text)
+    if match is None:
+        return None
+    return match.group(1), match.group(2)
+
+
+def warn_on_untested_darktable_version() -> None:
+    """One-line stderr warning if the installed dt's SHA is not in our
+    tested set. Idempotent within a process (caches the result)."""
+    if warn_on_untested_darktable_version.__dict__.get("_done"):
+        return
+    warn_on_untested_darktable_version.__dict__["_done"] = True
+    info = darktable_version()
+    if info is None:
+        return  # silent when probe fails — runner's own checks surface the issue
+    version, sha = info
+    if sha not in _KNOWN_TESTED_DT_SHAS:
+        sys.stderr.write(
+            f"warning: darktable {version} (sha {sha}) is outside lrt-cinema's "
+            f"tested SHA set ({sorted(_KNOWN_TESTED_DT_SHAS)}). Module "
+            f"params layouts can shift release-to-release; dt's silent "
+            f"default-substitution on a rejected params blob produces "
+            f"wrong pixels with a successful exit code. Watch the output.\n"
+        )
 
 
 @dataclass
@@ -60,7 +119,6 @@ def render_frame(
     output_dir: Path,
     ops: DevelopOps,
     preset: Preset,
-    bundled_style_dir: Path | None = None,
     custom_style: Path | None = None,
     dcp_profile: DCPProfile | None = None,
     apply_dcp_tone_curve: bool = True,
@@ -104,10 +162,6 @@ def render_frame(
     style_path: Path | None = None
     if custom_style is not None:
         style_path = custom_style.resolve()
-    elif bundled_style_dir is not None and preset.style_filename:
-        candidate = (bundled_style_dir / preset.style_filename).resolve()
-        if candidate.exists():
-            style_path = candidate
 
     # Build argv per dt EXPORT.md (docs/reference/darktable/EXPORT.md).
     #
@@ -238,7 +292,6 @@ def render_sequence(
     source_frames: list[str],
     from_frame: int = 0,
     to_frame: int | None = None,
-    bundled_style_dir: Path | None = None,
     custom_style: Path | None = None,
     dcp_profile: DCPProfile | None = None,
     apply_dcp_tone_curve: bool = True,
@@ -247,6 +300,8 @@ def render_sequence(
     timeout_s: float | None = DEFAULT_PER_FRAME_TIMEOUT_S,
 ) -> list[FrameResult]:
     """Render a frame range. Single-worker for v0.1."""
+    if not dry_run:
+        warn_on_untested_darktable_version()
     end = len(source_frames) if to_frame is None else min(to_frame, len(source_frames))
     results: list[FrameResult] = []
     for i in range(from_frame, end):
@@ -258,7 +313,6 @@ def render_sequence(
             output_dir=output_dir,
             ops=ops,
             preset=preset,
-            bundled_style_dir=bundled_style_dir,
             custom_style=custom_style,
             dcp_profile=dcp_profile,
             apply_dcp_tone_curve=apply_dcp_tone_curve,

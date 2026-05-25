@@ -26,7 +26,6 @@ from lrt_cinema.dcp import (
     _adobe_camera_label,
     _build_hsv_cube,
     adobe_make_for_camera,
-    auto_detect_dcp,
     auto_detect_profile,
     find_dcp_for_camera,
     find_extracted_profile_for_camera,
@@ -484,13 +483,6 @@ def test_find_dcp_for_camera_returns_none_on_miss(tmp_path):
     assert find_dcp_for_camera("UnknownVendor", "X", extra_roots=[tmp_path]) is None
 
 
-def test_auto_detect_dcp_end_to_end_with_synthetic(tmp_path):
-    nef = tmp_path / "fake.NEF"
-    nef.write_bytes(_build_synthetic_nef("ACMECAM", "Z1"))
-    # No DCP planted anywhere — returns None.
-    assert auto_detect_dcp(nef) is None
-
-
 # ---------------------------------------------------------------------------
 # HSV-cube parser tests
 # ---------------------------------------------------------------------------
@@ -796,3 +788,30 @@ def test_auto_detect_profile_skips_non_tiff_raw(tmp_path):
     cr3.write_bytes(b"\x00\x00\x00\x18ftypcrx ")  # ISO BMFF (Canon CR3)
     result = auto_detect_profile(cr3, extra_extracted_roots=[_BUNDLED_FIXTURE_DIR])
     assert result is None
+
+
+def test_parse_dcp_rewraps_struct_error_as_value_error(tmp_path):
+    """A truncated DCP must raise ValueError (the contract every callsite
+    catches), not a bare struct.error. Before this guard, callers got an
+    opaque struct.unpack traceback instead of a clean parse-failure
+    message."""
+    bad = tmp_path / "truncated.dcp"
+    # Valid TIFF magic but truncated mid-header (header needs 8 bytes).
+    bad.write_bytes(b"II\x2a\x00\x08")
+    with pytest.raises(ValueError, match="malformed DCP"):
+        parse_dcp(bad)
+
+
+def test_load_profile_version_mismatch_error_is_actionable(tmp_path):
+    """When format_version doesn't match the build, the error must point
+    the user at how to re-extract — they likely don't remember the .npz
+    schema."""
+    import numpy as np
+    bad_npz = tmp_path / "old.npz"
+    np.savez_compressed(
+        bad_npz,
+        format_version=np.int32(999),
+        color_matrix_1=np.eye(3, dtype=np.float32),
+    )
+    with pytest.raises(ValueError, match="extract_dcp_library"):
+        load_profile(bad_npz)

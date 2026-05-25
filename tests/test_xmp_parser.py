@@ -10,7 +10,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def test_parse_keyframe_a_fields():
-    ops, is_kf, deflicker, _ramps, _rating, _mask = parse_xmp_file(FIXTURES / "synthetic_keyframe_a.xmp")
+    ops, is_kf, deflicker, _rating, _mask = parse_xmp_file(FIXTURES / "synthetic_keyframe_a.xmp")
     assert is_kf is True
     assert deflicker is None
     assert ops.exposure_ev == 0.5
@@ -27,7 +27,7 @@ def test_parse_keyframe_a_fields():
 
 
 def test_parse_keyframe_b_with_deflicker():
-    ops, is_kf, deflicker, _ramps, _rating, _mask = parse_xmp_file(FIXTURES / "synthetic_keyframe_b.xmp")
+    ops, is_kf, deflicker, _rating, _mask = parse_xmp_file(FIXTURES / "synthetic_keyframe_b.xmp")
     assert is_kf is True
     assert deflicker == pytest.approx(0.12)
     assert ops.exposure_ev == 2.5
@@ -35,7 +35,7 @@ def test_parse_keyframe_b_with_deflicker():
 
 
 def test_parse_tone_curve_from_seq():
-    ops, _, _, _, _, _ = parse_xmp_file(FIXTURES / "synthetic_with_tone_curve.xmp")
+    ops, _, _, _, _ = parse_xmp_file(FIXTURES / "synthetic_with_tone_curve.xmp")
     assert len(ops.tone_curve) == 5
     assert ops.tone_curve[0].x == 0.0
     assert ops.tone_curve[0].y == 0.0
@@ -46,7 +46,7 @@ def test_parse_tone_curve_from_seq():
 
 
 def test_parse_multi_description_merges_intent():
-    ops, is_kf, deflicker, _ramps, _rating, _mask = parse_xmp_file(
+    ops, is_kf, deflicker, _rating, _mask = parse_xmp_file(
         FIXTURES / "synthetic_multi_description.xmp"
     )
     assert is_kf is True
@@ -70,7 +70,7 @@ def test_parse_kelvin_as_float_text():
         f.write(xmp)
         path = Path(f.name)
     try:
-        ops, _, _, _, _, _ = parse_xmp_file(path)
+        ops, _, _, _, _ = parse_xmp_file(path)
         assert ops.temperature_k == 5500
     finally:
         path.unlink()
@@ -82,7 +82,7 @@ def test_parse_real_lrt_mask_offsets():
     # not as top-level lrt:* attributes. Parser must walk that container,
     # match #LRT internal use ({HG,Deflicker,Global}) names, extract
     # crs:LocalExposure2012, and FILTER ZEROS (initialized-but-unused).
-    _ops, _is_kf, _delta, _ramps, _rating, mask_offsets = parse_xmp_file(
+    _ops, _is_kf, _delta, _rating, mask_offsets = parse_xmp_file(
         FIXTURES / "synthetic_real_lrt_mask_offsets.xmp",
     )
     # Fixture has 4 mask entries: HG=0.25 + Deflicker=-0.075 + Global=0.0 +
@@ -113,7 +113,7 @@ def test_parse_sequence_collects_lrt_mask_offsets(tmp_path):
 
 
 def test_parse_real_lrt_fixture_uses_xmp_rating():
-    ops, is_kf, deflicker, _ramps, rating, _mask = parse_xmp_file(
+    ops, is_kf, deflicker, rating, _mask = parse_xmp_file(
         FIXTURES / "synthetic_real_lrt_keyframe.xmp",
     )
     assert rating == 4
@@ -229,3 +229,38 @@ def test_parse_sequence_walks_folder(tmp_path):
     assert seq.keyframe_indices() == [0, 2]
     assert seq.deflicker_offsets[0].frame_index == 2
     assert seq.deflicker_offsets[0].exposure_delta_ev == pytest.approx(0.12)
+
+
+def test_parse_float_rejects_nan_and_inf():
+    """Hostile/corrupted XMPs may carry NaN/Inf. These must not propagate
+    into struct.pack — they render frames solid black with no diagnostic."""
+    from lrt_cinema.xmp_parser import _parse_float
+
+    assert _parse_float("NaN") == 0.0
+    assert _parse_float("nan") == 0.0
+    assert _parse_float("inf") == 0.0
+    assert _parse_float("-inf") == 0.0
+    assert _parse_float("Infinity") == 0.0
+    assert _parse_float("NaN", default=-1.0) == -1.0
+    assert _parse_float("+1.5") == 1.5
+    assert _parse_float("-0.5") == -0.5
+
+
+def test_parse_sequence_warns_on_corrupted_xmp(tmp_path, capsys):
+    """A corrupted XMP must NOT silently degrade the frame to defaults
+    (would produce a flat frame mid-graded-sequence with no diagnostic).
+    Surface the skip so the user can investigate."""
+    (tmp_path / "frame_0001.CR3").write_bytes(b"raw-stub")
+    (tmp_path / "frame_0002.CR3").write_bytes(b"raw-stub")
+    (tmp_path / "frame_0001.CR3.xmp").write_text(
+        (FIXTURES / "synthetic_keyframe_a.xmp").read_text()
+    )
+    (tmp_path / "frame_0002.CR3.xmp").write_bytes(
+        b"<this is not valid xml: half-written file"
+    )
+
+    seq = parse_sequence(tmp_path)
+    err = capsys.readouterr().err
+    assert "warning: skipping unreadable XMP frame_0002.CR3.xmp" in err
+    # The valid frame still loads.
+    assert len(seq.keyframes) == 1

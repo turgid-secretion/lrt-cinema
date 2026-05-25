@@ -22,6 +22,8 @@ calibration lands.
 
 from __future__ import annotations
 
+import math
+import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -30,7 +32,6 @@ from defusedxml import ElementTree as DefusedET
 from lrt_cinema.ir import (
     DeflickerOffset,
     DevelopOps,
-    HolyGrailRamp,
     Keyframe,
     LRTMaskOffset,
     LRTSequence,
@@ -68,24 +69,13 @@ NS = {
 XMP_RATING_ATTR = "{http://ns.adobe.com/xap/1.0/}Rating"
 
 LRT_NS_HINTS = {
-    # Legacy synthetic-fixture attribute. Real LRT does NOT carry an
-    # lrt:keyframe attribute — it uses xmp:Rating (see XMP_RATING_ATTR).
-    # The fallback path here exists to keep tests/fixtures/synthetic_*.xmp
-    # working without rewriting them.
+    # Legacy synthetic-fixture attributes. Real LRT does NOT carry these
+    # — it uses xmp:Rating for keyframes and crs:MaskGroupBasedCorrections
+    # for per-frame deflicker / HG / global exposure deltas (parsed via
+    # _parse_lrt_mask_offsets). The fallback paths here exist to keep
+    # tests/fixtures/synthetic_*.xmp working without rewriting them.
     "keyframe_attr_synthetic": "{http://lrtimelapse.com/ns/1.0/}keyframe",
     "deflicker_attr_synthetic": "{http://lrtimelapse.com/ns/1.0/}deflickerExposure",
-    # Holy Grail container element + per-segment attribute names —
-    # SYNTHETIC schema, not real. Real LRT encodes Holy Grail / deflicker
-    # as named mask corrections inside crs:MaskGroupBasedCorrections
-    # (e.g. CorrectionName="#LRT internal use (HG)") carrying a
-    # crs:LocalExposure2012 per-frame delta. Parsing that mask-based
-    # encoding is the next calibration item — see SCOPE.md.
-    "hgramps_element": "{http://lrtimelapse.com/ns/1.0/}HolyGrailRamps",
-    "hg_start_frame": "{http://lrtimelapse.com/ns/1.0/}startFrame",
-    "hg_end_frame": "{http://lrtimelapse.com/ns/1.0/}endFrame",
-    "hg_start_exposure": "{http://lrtimelapse.com/ns/1.0/}startExposure",
-    "hg_end_exposure": "{http://lrtimelapse.com/ns/1.0/}endExposure",
-    "hg_smoothness": "{http://lrtimelapse.com/ns/1.0/}smoothness",
 }
 
 
@@ -97,9 +87,13 @@ def _parse_float(text: str | None, default: float = 0.0) -> float:
     if text is None:
         return default
     try:
-        return float(text.strip().lstrip("+"))
+        value = float(text.strip().lstrip("+"))
     except ValueError:
         return default
+    # Hostile or corrupted XMPs may carry NaN / Inf. Allowing those through
+    # propagates into struct.pack and dt renders the frame solid black with
+    # no diagnostic. Treat as a parse failure (use the default).
+    return value if math.isfinite(value) else default
 
 
 def _parse_int(text: str | None) -> int | None:
@@ -213,52 +207,6 @@ def _merge_ops(base: DevelopOps, override: DevelopOps) -> DevelopOps:
     return merged
 
 
-def _parse_holy_grail_ramps(desc: ET.Element) -> list[HolyGrailRamp]:
-    """Extract HolyGrailRamp entries from one rdf:Description, if present.
-
-    Schema (synthetic-fixture contract; see LRT_NS_HINTS):
-
-        <lrt:HolyGrailRamps>
-          <rdf:Seq>
-            <rdf:li lrt:startFrame="0" lrt:endFrame="200"
-                    lrt:startExposure="0.0" lrt:endExposure="3.0"
-                    lrt:smoothness="1.0"/>
-            ...
-          </rdf:Seq>
-        </lrt:HolyGrailRamps>
-
-    Missing or malformed attributes drop the offending `rdf:li` rather
-    than raising — keeps the parser tolerant of partial sequences in
-    the same spirit as the rest of the file.
-    """
-    container = desc.find(LRT_NS_HINTS["hgramps_element"])
-    if container is None:
-        return []
-    seq = container.find(_q("rdf", "Seq"))
-    if seq is None:
-        return []
-    ramps: list[HolyGrailRamp] = []
-    for li in seq.findall(_q("rdf", "li")):
-        start_frame = li.get(LRT_NS_HINTS["hg_start_frame"])
-        end_frame = li.get(LRT_NS_HINTS["hg_end_frame"])
-        start_ev = li.get(LRT_NS_HINTS["hg_start_exposure"])
-        end_ev = li.get(LRT_NS_HINTS["hg_end_exposure"])
-        smoothness = li.get(LRT_NS_HINTS["hg_smoothness"])
-        if start_frame is None or end_frame is None or start_ev is None or end_ev is None:
-            continue
-        try:
-            ramps.append(HolyGrailRamp(
-                start_frame=int(start_frame),
-                end_frame=int(end_frame),
-                start_exposure_ev=float(start_ev),
-                end_exposure_ev=float(end_ev),
-                smoothness=float(smoothness) if smoothness is not None else 1.0,
-            ))
-        except ValueError:
-            continue
-    return ramps
-
-
 def _parse_lrt_mask_offsets(desc: ET.Element) -> list[tuple[str, float]]:
     """Extract LRT mask-correction per-frame exposure deltas from one
     rdf:Description.
@@ -322,11 +270,10 @@ def parse_xmp_file(
     DevelopOps,
     bool,
     float | None,
-    list[HolyGrailRamp],
     int | None,
     list[tuple[str, float]],
 ]:
-    """Parse one XMP file → (DevelopOps, is_keyframe, deflicker_delta, hg_ramps, rating, mask_offsets).
+    """Parse one XMP file → (DevelopOps, is_keyframe, deflicker_delta, rating, mask_offsets).
 
     XMP allows multiple `rdf:Description` nodes; we merge them so intent
     split across nodes is not silently dropped. The is_keyframe flag is
@@ -336,9 +283,7 @@ def parse_xmp_file(
     `lrt:keyframe` attribute or, in `parse_sequence`, the
     `_has_meaningful_ops` heuristic. deflicker_delta is taken from the
     first Description that supplies one (synthetic schema only — real
-    LRT uses mask corrections, returned as mask_offsets). hg_ramps is
-    the concatenation of every Description's `<lrt:HolyGrailRamps>`
-    block in document order (synthetic schema only). rating is the
+    LRT uses mask corrections, returned as mask_offsets). rating is the
     maximum xmp:Rating value seen across all Descriptions, or None if
     absent. mask_offsets is the concatenation of every Description's
     `crs:MaskGroupBasedCorrections` entries that match real LRT's
@@ -365,7 +310,6 @@ def parse_xmp_file(
     is_keyframe = False
     rating_seen: int | None = None
     deflicker_delta: float | None = None
-    hg_ramps: list[HolyGrailRamp] = []
     mask_offsets: list[tuple[str, float]] = []
 
     for desc in descriptions:
@@ -399,7 +343,6 @@ def parse_xmp_file(
                 except ValueError:
                     deflicker_delta = None
 
-        hg_ramps.extend(_parse_holy_grail_ramps(desc))
         mask_offsets.extend(_parse_lrt_mask_offsets(desc))
 
     # Rating, when present, is authoritative: rating>=1 = keyframe,
@@ -409,7 +352,7 @@ def parse_xmp_file(
     if rating_seen is not None:
         is_keyframe = rating_seen >= 1
 
-    return ops, is_keyframe, deflicker_delta, hg_ramps, rating_seen, mask_offsets
+    return ops, is_keyframe, deflicker_delta, rating_seen, mask_offsets
 
 
 def parse_sequence(folder: Path, raw_extensions: tuple[str, ...] = (
@@ -442,10 +385,17 @@ def parse_sequence(folder: Path, raw_extensions: tuple[str, ...] = (
         if not xmp.exists():
             continue
         try:
-            ops, is_kf, deflicker_delta, hg_ramps, rating, mask_offsets = (
+            ops, is_kf, deflicker_delta, rating, mask_offsets = (
                 parse_xmp_file(xmp)
             )
-        except (ET.ParseError, ValueError):
+        except (ET.ParseError, ValueError) as exc:
+            # Silent skip-on-corruption is a data-loss path: a half-written
+            # XMP (LRT crash, partial save) silently degrades the frame to
+            # defaults and the render produces a flat frame mid-sequence.
+            # Surface the skip so the user can investigate.
+            sys.stderr.write(
+                f"warning: skipping unreadable XMP {xmp.name}: {exc}\n"
+            )
             continue
 
         # Keyframe gating policy:
@@ -474,12 +424,6 @@ def parse_sequence(folder: Path, raw_extensions: tuple[str, ...] = (
             seq.deflicker_offsets.append(DeflickerOffset(
                 frame_index=idx, exposure_delta_ev=deflicker_delta,
             ))
-        # Holy Grail ramps are sequence-level metadata; LRT may write the
-        # same ramp block into every frame XMP or only the first keyframe.
-        # First-found-wins: take the ramps from the first XMP that supplies
-        # any, ignore later ones. SCHEMA TBR — see LRT_NS_HINTS.
-        if hg_ramps and not seq.holy_grail_ramps:
-            seq.holy_grail_ramps = hg_ramps
 
         # Real-LRT mask-correction per-frame deltas (HG/Deflicker/Global).
         # Each XMP carries at most one of each kind; we flatten across all

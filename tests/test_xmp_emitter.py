@@ -519,3 +519,83 @@ def test_emitter_emits_sharpen_for_non_default_sharpness(tmp_path):
     assert radius == pytest.approx(2.0, abs=1e-6)
     assert amount == pytest.approx(1.0, abs=1e-6)  # LR 50 → dt 1.0
     assert threshold == pytest.approx(0.5, abs=1e-6)
+
+
+def _make_test_dcp_with_looktable() -> DCPProfile:
+    """Minimal DCP with an identity LookTable. Mirrors the helper in
+    test_dt_integration.py; duplicated here so the dedup test is callable
+    without the real darktable-cli dependency."""
+    from lrt_cinema.dcp import HsvCube
+    identity_cell = np.array([0.0, 1.0, 1.0], dtype=np.float32)
+    look = HsvCube(
+        hue_divisions=6, sat_divisions=2, val_divisions=2,
+        srgb_gamma=False,
+        data_1=np.tile(identity_cell, (2, 6, 2, 1)),
+    )
+    return DCPProfile(
+        color_matrix_1=np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+        color_matrix_2=np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+        kelvin_1=2856.0, kelvin_2=6504.0,
+        baseline_exposure=0.0, baseline_exposure_offset=0.0,
+        look_table=look,
+    )
+
+
+def test_emitter_dedupes_identical_cubes_across_frames(tmp_path):
+    """Emitting many XMPs from one DCP at one target_k must write exactly
+    one .cube file. Per-frame .cube duplication (~3MB/frame at cube_size=33)
+    on a 10K-frame fixed-WB sequence would produce ~29GB of byte-identical
+    files; content-hashed filenames let all frames reference one file."""
+    dcp = _make_test_dcp_with_looktable()
+    cube_dir = tmp_path / "cubes"
+    cube_dir.mkdir()
+    for i in range(5):
+        emit_darktable_xmp(
+            DevelopOps(exposure_ev=0.0),
+            tmp_path / f"frame_{i:04d}.NEF.xmp",
+            dcp_profile=dcp,
+            dt_lut3d_def_path=cube_dir,
+        )
+    cubes = list(cube_dir.glob("lrt-cinema-cube-*.cube"))
+    assert len(cubes) == 1, (
+        f"expected exactly one cube file across 5 identical-WB frames, "
+        f"got {len(cubes)}: {[c.name for c in cubes]}"
+    )
+
+
+def test_emitter_distinct_cubes_when_target_kelvin_differs(tmp_path):
+    """Two different target kelvin values must produce two distinct
+    cube files (different HSM interpolations → different content hashes).
+    """
+    from lrt_cinema.dcp import HsvCube
+    # DCP with an HSM (so target_k actually affects the cube content;
+    # a LookTable alone is target_k-invariant).
+    hsm_data_a = np.tile(
+        np.array([0.0, 1.0, 1.0], dtype=np.float32), (2, 6, 2, 1),
+    )
+    hsm_data_b = hsm_data_a * 0.9  # differs from data_1 so blend matters
+    dcp = DCPProfile(
+        color_matrix_1=np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+        color_matrix_2=np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+        kelvin_1=2856.0, kelvin_2=6504.0,
+        baseline_exposure=0.0, baseline_exposure_offset=0.0,
+        hue_sat_map=HsvCube(
+            hue_divisions=6, sat_divisions=2, val_divisions=2,
+            srgb_gamma=False,
+            data_1=hsm_data_a, data_2=hsm_data_b,
+        ),
+    )
+    cube_dir = tmp_path / "cubes"
+    cube_dir.mkdir()
+    for kelvin in (3200, 6500):
+        emit_darktable_xmp(
+            DevelopOps(exposure_ev=0.0, temperature_k=kelvin),
+            tmp_path / f"frame_{kelvin}.NEF.xmp",
+            dcp_profile=dcp,
+            dt_lut3d_def_path=cube_dir,
+        )
+    cubes = list(cube_dir.glob("lrt-cinema-cube-*.cube"))
+    assert len(cubes) == 2, (
+        f"expected two distinct cubes for two distinct target_k values, "
+        f"got {len(cubes)}: {[c.name for c in cubes]}"
+    )
