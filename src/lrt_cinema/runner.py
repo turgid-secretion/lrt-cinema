@@ -123,6 +123,9 @@ def render_frame(
     dcp_profile: DCPProfile | None = None,
     apply_dcp_tone_curve: bool = True,
     apply_dcp_hsv_cubes: bool = True,
+    calibration_matrix=None,  # np.ndarray | None — kept loose-typed to
+                              # avoid threading numpy into runner.py's import
+                              # surface for callers that don't need it
     dry_run: bool = False,
     timeout_s: float | None = DEFAULT_PER_FRAME_TIMEOUT_S,
 ) -> FrameResult:
@@ -157,6 +160,7 @@ def render_frame(
         apply_dcp_tone_curve=apply_dcp_tone_curve,
         apply_dcp_hsv_cubes=apply_dcp_hsv_cubes,
         dt_lut3d_def_path=output_dir if cube_will_emit else None,
+        calibration_matrix=calibration_matrix,
     )
 
     style_path: Path | None = None
@@ -296,6 +300,9 @@ def render_sequence(
     dcp_profile: DCPProfile | None = None,
     apply_dcp_tone_curve: bool = True,
     apply_dcp_hsv_cubes: bool = True,
+    calibration_matrix=None,  # np.ndarray | None — per-camera channelmixerrgb
+                              # correction matrix; emitted only under the
+                              # algorithmic-engine path (caller's gating)
     dry_run: bool = False,
     timeout_s: float | None = DEFAULT_PER_FRAME_TIMEOUT_S,
 ) -> list[FrameResult]:
@@ -317,6 +324,7 @@ def render_sequence(
             dcp_profile=dcp_profile,
             apply_dcp_tone_curve=apply_dcp_tone_curve,
             apply_dcp_hsv_cubes=apply_dcp_hsv_cubes,
+            calibration_matrix=calibration_matrix,
             dry_run=dry_run,
             timeout_s=timeout_s,
         )
