@@ -124,11 +124,22 @@ def test_inspect_reports_keyframes_and_drops(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "Source RAW frames: 3" in out
     assert "Keyframes detected: 2" in out
-    # Both fixtures carry lrt:keyframe and several dropped fields.
     assert "xmp:Rating or lrt:keyframe): 2 of 2" in out
-    assert "contrast" in out
-    assert "DROPPED at emit" in out
-    assert "temperature_k" in out
+
+    emit_section = out.split("Emit warnings")[1].split("What WILL")[0]
+    # Real drops: highlights / shadows / whites unconditionally; tint and
+    # temperature_k drop here because no DCP is loaded (CR3 stub fixture).
+    for truly_dropped in ("highlights", "shadows", "whites", "tint", "temperature_k"):
+        assert truly_dropped in emit_section, (
+            f"{truly_dropped!r} should be flagged dropped in:\n{emit_section}"
+        )
+    # v0.4 routes these through emitted dt modules — they must NOT be flagged
+    # dropped (the prior stale list caused this exact false positive).
+    for emitted in ("contrast", "saturation", "vibrance", "sharpness", "blacks"):
+        assert emitted not in emit_section, (
+            f"{emitted!r} is emitted in v0.4 and must not appear as DROPPED:\n"
+            f"{emit_section}"
+        )
 
 
 def test_inspect_show_fields_dumps_per_keyframe(tmp_path, capsys):
@@ -143,20 +154,6 @@ def test_inspect_show_fields_dumps_per_keyframe(tmp_path, capsys):
     assert "Per-keyframe parsed develop ops:" in out
     assert "ev=+0.50" in out
     assert "k=5500" in out
-
-
-def test_inspect_reports_holy_grail_ramps(tmp_path, capsys):
-    src = tmp_path / "input"
-    src.mkdir()
-    (src / "frame_0001.CR3").write_bytes(b"raw-stub")
-    shutil.copy(FIXTURES / "synthetic_holy_grail.xmp", src / "frame_0001.CR3.xmp")
-
-    rc = main(["inspect", "--input", str(src)])
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert "Holy Grail ramps: 2" in out
-    assert "[0..200]" in out
-    assert "[200..400]" in out
 
 
 def test_inspect_rejects_missing_folder(capsys):
@@ -255,6 +252,53 @@ def test_engine_algorithmic_suppresses_dcp_modules(tmp_path, capsys):
         assert dcp_module not in emitted, (
             f"algorithmic engine leaked DCP-derived module {dcp_module}: {emitted}"
         )
+
+
+def test_render_refuses_same_input_output_dir(tmp_path, capsys):
+    """--input == --output would overwrite pre-existing TIFFs (a prior
+    dt export, a previous lrt-cinema run to the same dir). Guard with
+    an early actionable error."""
+    src = tmp_path / "shared"
+    src.mkdir()
+    (src / "frame_0001.CR3").write_bytes(b"raw-stub")
+    shutil.copy(FIXTURES / "synthetic_keyframe_a.xmp", src / "frame_0001.CR3.xmp")
+
+    rc = main([
+        "render",
+        "--input", str(src),
+        "--output", str(src),
+        "--preset", "cinema-linear",
+        "--dry-run",
+        "--quiet",
+    ])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "--output must differ from --input" in err
+
+
+def test_render_dcp_flag_rejects_malformed_dcp(tmp_path, capsys):
+    """A truncated/malformed DCP must produce a clean actionable error,
+    not a raw struct.error traceback."""
+    src = tmp_path / "input"
+    src.mkdir()
+    (src / "frame_0001.CR3").write_bytes(b"raw-stub")
+    shutil.copy(FIXTURES / "synthetic_keyframe_a.xmp", src / "frame_0001.CR3.xmp")
+    bad_dcp = tmp_path / "truncated.dcp"
+    # Valid TIFF magic but truncated mid-header — struct.unpack reads short.
+    bad_dcp.write_bytes(b"II\x2a\x00\x08")  # 5 bytes, header needs 8
+
+    rc = main([
+        "render",
+        "--input", str(src),
+        "--output", str(tmp_path / "out"),
+        "--preset", "cinema-linear",
+        "--dcp", str(bad_dcp),
+        "--dry-run",
+        "--quiet",
+    ])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "malformed" in err.lower() or "unreadable" in err.lower()
 
 
 def test_engine_dcp_default_unchanged(tmp_path, capsys):

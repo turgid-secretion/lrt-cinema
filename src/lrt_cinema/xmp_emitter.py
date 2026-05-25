@@ -34,6 +34,7 @@ Scaffold approach (v0.1):
 
 from __future__ import annotations
 
+import hashlib
 import io
 import struct
 import xml.etree.ElementTree as ET
@@ -772,6 +773,51 @@ def _make_history_entry(
     # blendop_* intentionally omitted — see module-level comment.
 
 
+def _cube_content_hash(
+    cube_size: int,
+    target_k: float,
+    dcp_profile: DCPProfile,
+    hsm_blended,
+    look_blended,
+) -> str:
+    """16-char content hash for the DCP cube the emitter is about to bake.
+
+    Used as the cube filename to dedupe identical cubes across frames
+    in a sequence — typical timelapse keeps WB fixed, so all frames
+    bake byte-identical cubes from the same inputs. Hashing the input
+    arrays + the baseline_exposure_offset that gets baked in keeps
+    distinct profiles distinct, while a fixed-WB sequence writes one
+    cube and references it from every frame's XMP.
+    """
+    h = hashlib.sha256()
+    h.update(str(cube_size).encode())
+    h.update(f"{target_k:.6f}".encode())
+    h.update(f"{dcp_profile.baseline_exposure_offset:.9f}".encode())
+    if hsm_blended is not None:
+        h.update(b"HSM")
+        # Include metadata that affects cube interpretation but not bytes:
+        # srgb_gamma gates an OETF/EOTF roundtrip on V in _apply_hsv_cube,
+        # and (V, H, S) division counts determine cube-index slicing. Two
+        # cubes with identical flat data but different shape or gamma
+        # interpret to different output — defensive hash field flagged
+        # in caveman-review on PR #10.
+        hsm_meta = dcp_profile.hue_sat_map
+        h.update(
+            f"{hsm_meta.srgb_gamma}|{hsm_meta.val_divisions}|"
+            f"{hsm_meta.hue_divisions}|{hsm_meta.sat_divisions}".encode()
+        )
+        h.update(hsm_blended.tobytes())
+    if look_blended is not None:
+        h.update(b"LOOK")
+        look_meta = dcp_profile.look_table
+        h.update(
+            f"{look_meta.srgb_gamma}|{look_meta.val_divisions}|"
+            f"{look_meta.hue_divisions}|{look_meta.sat_divisions}".encode()
+        )
+        h.update(look_blended.tobytes())
+    return h.hexdigest()[:16]
+
+
 def emit_darktable_xmp(
     ops: DevelopOps,
     output_path: Path,
@@ -901,8 +947,6 @@ def emit_darktable_xmp(
                 "dt_lut3d_def_path=output_path.parent or pass "
                 "apply_dcp_hsv_cubes=False to skip cube emission."
             )
-        cube_filename = output_path.with_suffix(".cube").name
-        cube_full_path = Path(dt_lut3d_def_path) / cube_filename
 
         # Target kelvin for the per-cell mired blend of the HSM cube. For
         # the Nikon D750 LookTable code path (no HSM, no per-illuminant
@@ -910,11 +954,6 @@ def emit_darktable_xmp(
         # an HSM, we use the explicit user kelvin when set, otherwise
         # default to 5500 K (mid-daylight, the conventional fallback used
         # by dt's libraw-derived as-shot before the DCP refines it).
-        # An AsShotNeutral path that recovers the true as-shot kelvin from
-        # MakerNote/AsShotNeutral is the v0.4.x follow-up that closes the
-        # remaining wb-divergence; until then the 5500 K default is a
-        # reasonable choice that matches LR's default-WB behavior on
-        # daylight-temperature scenes (the user's test sequence).
         target_k = (
             float(ops.temperature_k) if ops.temperature_k is not None else 5500.0
         )
@@ -930,15 +969,28 @@ def emit_darktable_xmp(
             dcp_profile.look_table.data_1
             if dcp_profile.look_table is not None else None
         )
-        bake_dcp_cubes_to_resolve_cube(
-            out_path=cube_full_path,
-            cube_size=cube_size,
-            hsm_blended=hsm_blended,
-            hsm_meta=dcp_profile.hue_sat_map,
-            look_blended=look_blended,
-            look_meta=dcp_profile.look_table,
-            baseline_exposure_offset_ev=dcp_profile.baseline_exposure_offset,
+
+        # Per-frame cube files were once stem-named ({frame}.cube), which
+        # duplicated identical cubes for every frame in a fixed-WB sequence
+        # — a 10k-frame timelapse with a LookTable-bearing DCP produced
+        # ~29 GB of byte-identical files. Content-hashed filenames let
+        # all frames sharing the same (target_k, profile) reference one
+        # file. Same dt def_path lookup, no per-frame XMP semantic change.
+        cube_filename = (
+            f"lrt-cinema-cube-{_cube_content_hash(cube_size, target_k, dcp_profile, hsm_blended, look_blended)}"
+            f".cube"
         )
+        cube_full_path = Path(dt_lut3d_def_path) / cube_filename
+        if not cube_full_path.exists():
+            bake_dcp_cubes_to_resolve_cube(
+                out_path=cube_full_path,
+                cube_size=cube_size,
+                hsm_blended=hsm_blended,
+                hsm_meta=dcp_profile.hue_sat_map,
+                look_blended=look_blended,
+                look_meta=dcp_profile.look_table,
+                baseline_exposure_offset_ev=dcp_profile.baseline_exposure_offset,
+            )
         _make_history_entry(
             seq, num=num, operation="lut3d", enabled=True,
             modversion=LUT3D_MODVERSION,
