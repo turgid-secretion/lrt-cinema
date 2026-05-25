@@ -23,6 +23,7 @@ import pytest
 from lrt_cinema.dcp import (
     DCPProfile,
     HsvCube,
+    ProfileResolutionError,
     _adobe_camera_label,
     _build_hsv_cube,
     adobe_make_for_camera,
@@ -37,6 +38,7 @@ from lrt_cinema.dcp import (
     load_profile,
     parse_dcp,
     read_raw_make_model,
+    resolve_profile,
     save_profile,
     uv_to_kelvin,
     xy_to_camera_neutral,
@@ -815,3 +817,99 @@ def test_load_profile_version_mismatch_error_is_actionable(tmp_path):
     )
     with pytest.raises(ValueError, match="extract_dcp_library"):
         load_profile(bad_npz)
+
+
+# ---------------------------------------------------------------------------
+# resolve_profile — CLI-facing profile resolver (audit #23)
+# ---------------------------------------------------------------------------
+
+def test_resolve_profile_algorithmic_returns_none_and_logs():
+    """--engine algorithmic must always return None regardless of --dcp."""
+    import io
+    stream = io.StringIO()
+    result = resolve_profile(
+        engine="algorithmic",
+        dcp_path=Path("/nonexistent.dcp"),  # ignored when engine=algorithmic
+        auto_dcp=True,
+        first_raw_path=None,
+        stream=stream,
+    )
+    assert result is None
+    text = stream.getvalue()
+    assert "ignores --dcp" in text
+    assert "DCP-derived modules suppressed" in text
+
+
+def test_resolve_profile_explicit_npz_loads():
+    """An explicit --dcp pointing at the bundled .npz fixture loads cleanly."""
+    import io
+    bundled = (
+        Path(__file__).parent / "fixtures" / "dcp_data"
+        / "Nikon D750 Camera Standard.npz"
+    )
+    assert bundled.exists()
+    stream = io.StringIO()
+    result = resolve_profile(
+        engine="dcp",
+        dcp_path=bundled,
+        auto_dcp=False,
+        first_raw_path=None,
+        stream=stream,
+    )
+    assert result is not None
+    assert result.profile_name == "Camera Standard"
+    text = stream.getvalue()
+    assert "loaded DCP (extracted .npz)" in text
+
+
+def test_resolve_profile_malformed_dcp_raises(tmp_path):
+    """A malformed --dcp must raise ProfileResolutionError so the CLI
+    returns exit code 2 with an actionable error message."""
+    import io
+    bad = tmp_path / "garbage.dcp"
+    bad.write_bytes(b"not a tiff/dcp file")
+    stream = io.StringIO()
+    with pytest.raises(ProfileResolutionError, match="malformed or unreadable"):
+        resolve_profile(
+            engine="dcp",
+            dcp_path=bad,
+            auto_dcp=False,
+            first_raw_path=None,
+            stream=stream,
+        )
+
+
+def test_resolve_profile_auto_detect_with_no_raw_falls_through():
+    """When auto_dcp is True but no RAW path is provided, the function
+    skips the auto-detect block and emits the 'no DCP' warning."""
+    import io
+    stream = io.StringIO()
+    result = resolve_profile(
+        engine="dcp",
+        dcp_path=None,
+        auto_dcp=True,
+        first_raw_path=None,
+        stream=stream,
+    )
+    assert result is None
+    text = stream.getvalue()
+    assert "no DCP supplied or detected" in text
+
+
+def test_resolve_profile_auto_detect_skips_non_tiff_raw(tmp_path):
+    """A Canon CR3 (or any non-TIFF RAW) should make auto-detect log a
+    clear 'not a TIFF-shaped RAW' message rather than fail noisily."""
+    import io
+    cr3 = tmp_path / "fake.CR3"
+    cr3.write_bytes(b"\x00\x00\x00\x18ftypcrx ")  # ISO BMFF (Canon CR3)
+    stream = io.StringIO()
+    result = resolve_profile(
+        engine="dcp",
+        dcp_path=None,
+        auto_dcp=True,
+        first_raw_path=cr3,
+        stream=stream,
+    )
+    assert result is None
+    text = stream.getvalue()
+    assert "not a TIFF-shaped RAW" in text
