@@ -22,11 +22,23 @@ import pytest
 
 from lrt_cinema.dcp import (
     DCPProfile,
+    HsvCube,
+    _adobe_camera_label,
+    _build_hsv_cube,
+    adobe_make_for_camera,
+    auto_detect_dcp,
+    auto_detect_profile,
+    find_dcp_for_camera,
+    find_extracted_profile_for_camera,
     illuminant_code_to_kelvin,
     interpolate_color_matrix,
+    interpolate_hsv_cube,
     kelvin_tint_to_dt_multipliers,
     kelvin_tint_to_xy,
+    load_profile,
     parse_dcp,
+    read_raw_make_model,
+    save_profile,
     uv_to_kelvin,
     xy_to_camera_neutral,
     xy_to_uv,
@@ -88,9 +100,12 @@ def _build_synthetic_dcp(
     if forward_matrix_2 is not None:
         entries.append((50965, 10, 9, _srational_matrix(forward_matrix_2)))
 
-    # CalibrationIlluminant1/2 (SHORT)
-    entries.append((50931, 3, 1, struct.pack("<H", calibration_illuminant_1)))
-    entries.append((50932, 3, 1, struct.pack("<H", calibration_illuminant_2)))
+    # CalibrationIlluminant1/2 (SHORT). Canonical DNG 1.7.1 tag IDs are
+    # 50778 / 50779, NOT 50931/50932 (this fixture matched the prior
+    # incorrect parser constants; updated to canonical at the parser-tag fix
+    # commit).
+    entries.append((50778, 3, 1, struct.pack("<H", calibration_illuminant_1)))
+    entries.append((50779, 3, 1, struct.pack("<H", calibration_illuminant_2)))
 
     # BaselineExposure (SRATIONAL, count=1)
     entries.append((
@@ -366,6 +381,206 @@ def test_real_adobe_dcp_parses():
     assert np.all(np.diff(p.profile_tone_curve[:, 1]) >= 0)
 
 
+# ---------------------------------------------------------------------------
+# RAW Make/Model + DCP auto-detect tests
+# ---------------------------------------------------------------------------
+
+def _build_synthetic_nef(make: str, model: str) -> bytes:
+    """Build a minimal TIFF-shaped RAW header with IFD0 carrying Make+Model.
+
+    Mirrors `_build_synthetic_dcp` shape but uses standard TIFF magic 42 (the
+    DCP probe rejects this; the RAW probe accepts it). Enough for
+    `read_raw_make_model` — a real NEF has hundreds more IFD entries we do
+    not care about.
+    """
+    make_bytes = (make + "\x00").encode("ascii")
+    model_bytes = (model + "\x00").encode("ascii")
+    entries = [
+        (271, 2, len(make_bytes), make_bytes),   # Make
+        (272, 2, len(model_bytes), model_bytes), # Model
+    ]
+    n_entries = len(entries)
+    ifd_size = 2 + 12 * n_entries + 4
+    big_blob_offset = 8 + ifd_size
+
+    ifd_bytes = struct.pack("<H", n_entries)
+    big_blob = b""
+    cur_blob_off = big_blob_offset
+    for tag, ttype, count, payload in entries:
+        if len(payload) <= 4:
+            value_field = payload + b"\x00" * (4 - len(payload))
+        else:
+            value_field = struct.pack("<I", cur_blob_off)
+            big_blob += payload
+            cur_blob_off += len(payload)
+        ifd_bytes += struct.pack("<HHI4s", tag, ttype, count, value_field)
+    ifd_bytes += struct.pack("<I", 0)
+    header = b"II" + struct.pack("<H", 42) + struct.pack("<I", 8)  # standard TIFF
+    return header + ifd_bytes + big_blob
+
+
+def test_read_raw_make_model_from_synthetic_tiff(tmp_path):
+    path = tmp_path / "fake.NEF"
+    path.write_bytes(_build_synthetic_nef("NIKON CORPORATION", "NIKON D750"))
+    assert read_raw_make_model(path) == ("NIKON CORPORATION", "NIKON D750")
+
+
+def test_read_raw_make_model_rejects_dcp_magic(tmp_path):
+    # DCP files use magic 0x4352, not standard TIFF 42. The RAW probe
+    # must NOT accept them — they would never carry a Make/Model anyway,
+    # and accepting them would mask real "this is not a RAW" errors.
+    path = tmp_path / "fake.dcp"
+    path.write_bytes(b"II" + struct.pack("<H", 0x4352) + b"\x08\x00\x00\x00" + b"\x00" * 20)
+    assert read_raw_make_model(path) is None
+
+
+def test_read_raw_make_model_rejects_non_tiff(tmp_path):
+    path = tmp_path / "fake.CR3"
+    path.write_bytes(b"\x00\x00\x00\x18ftypcrx ")  # ISO BMFF (Canon CR3)
+    assert read_raw_make_model(path) is None
+
+
+def test_read_raw_make_model_handles_truncated_file(tmp_path):
+    path = tmp_path / "tiny.NEF"
+    path.write_bytes(b"II*\x00")  # 4 bytes — header truncated
+    assert read_raw_make_model(path) is None
+
+
+def test_adobe_make_for_camera_normalization():
+    assert adobe_make_for_camera("NIKON CORPORATION") == "Nikon"
+    assert adobe_make_for_camera("Canon") == "Canon"
+    assert adobe_make_for_camera("SONY") == "Sony"
+    assert adobe_make_for_camera("FUJIFILM") == "Fujifilm"
+    assert adobe_make_for_camera("RICOH IMAGING COMPANY, LTD.") == "PENTAX"
+    # Unknown make → title-case fallback.
+    assert adobe_make_for_camera("ACME PHOTOMATIC") == "Acme Photomatic"
+
+
+def test_adobe_camera_label_strips_make_prefix():
+    # EXIF: Make="NIKON CORPORATION", Model="NIKON D750"
+    # Adobe filename label: "Nikon D750" (strip "NIKON " from model, normalize make).
+    assert _adobe_camera_label("NIKON CORPORATION", "NIKON D750") == "Nikon D750"
+    # Canon: Make="Canon", Model="Canon EOS R5"
+    assert _adobe_camera_label("Canon", "Canon EOS R5") == "Canon EOS R5"
+    # Sony: Make="SONY", Model="ILCE-7M3" (no make prefix)
+    assert _adobe_camera_label("SONY", "ILCE-7M3") == "Sony ILCE-7M3"
+
+
+def test_find_dcp_for_camera_searches_extra_roots(tmp_path):
+    # Plant a Camera Standard DCP under tmp_path/<root>/Camera/<label>/...
+    # `adobe_make_for_camera` title-cases unknown vendors, so the planted
+    # path must match the normalized label (label-build is what `find` looks
+    # up — not the raw EXIF strings).
+    label = _adobe_camera_label("Acme", "X100")  # "Acme X100"
+    cam_dir = tmp_path / "extra_root" / "Camera" / label
+    cam_dir.mkdir(parents=True)
+    dcp_path = cam_dir / f"{label} Camera Standard.dcp"
+    dcp_path.write_bytes(b"dummy content")  # not a real DCP — find only matches existence
+    found = find_dcp_for_camera("Acme", "X100", extra_roots=[tmp_path / "extra_root"])
+    assert found == dcp_path
+
+
+def test_find_dcp_for_camera_returns_none_on_miss(tmp_path):
+    assert find_dcp_for_camera("UnknownVendor", "X", extra_roots=[tmp_path]) is None
+
+
+def test_auto_detect_dcp_end_to_end_with_synthetic(tmp_path):
+    nef = tmp_path / "fake.NEF"
+    nef.write_bytes(_build_synthetic_nef("ACMECAM", "Z1"))
+    # No DCP planted anywhere — returns None.
+    assert auto_detect_dcp(nef) is None
+
+
+# ---------------------------------------------------------------------------
+# HSV-cube parser tests
+# ---------------------------------------------------------------------------
+
+def test_build_hsv_cube_reshapes_in_value_hue_sat_order():
+    # 2 hue × 2 sat × 3 val × 3 floats = 36 floats.
+    # Value-major, hue-medium, sat-minor layout means flat index 0..2 is
+    # the cell (v=0, h=0, s=0); 3..5 is (v=0, h=0, s=1); etc.
+    flat = list(range(36))
+    cube = _build_hsv_cube([2, 2, 3], 0, [float(x) for x in flat], None)
+    assert cube.hue_divisions == 2
+    assert cube.sat_divisions == 2
+    assert cube.val_divisions == 3
+    assert cube.srgb_gamma is False
+    # Shape order must be (V, H, S, 3) — matches RT cell traversal.
+    assert cube.data_1.shape == (3, 2, 2, 3)
+    # Cell (v=0, h=0, s=0) = [0, 1, 2]; (v=0, h=0, s=1) = [3, 4, 5];
+    # (v=0, h=1, s=0) = [6, 7, 8].
+    np.testing.assert_array_equal(cube.data_1[0, 0, 0], [0, 1, 2])
+    np.testing.assert_array_equal(cube.data_1[0, 0, 1], [3, 4, 5])
+    np.testing.assert_array_equal(cube.data_1[0, 1, 0], [6, 7, 8])
+
+
+def test_build_hsv_cube_decodes_srgb_gamma_encoding():
+    flat = [0.0] * 12  # 2 × 2 × 1 × 3 = 12 floats
+    cube_lin = _build_hsv_cube([2, 2, 1], 0, flat, None)
+    cube_srgb = _build_hsv_cube([2, 2, 1], 1, flat, None)
+    assert cube_lin.srgb_gamma is False
+    assert cube_srgb.srgb_gamma is True
+
+
+def test_build_hsv_cube_rejects_size_mismatch():
+    with pytest.raises(ValueError, match="size mismatch"):
+        _build_hsv_cube([2, 2, 1], 0, [0.0] * 10, None)
+
+
+def test_build_hsv_cube_rejects_data2_size_mismatch():
+    flat = [0.0] * 12
+    with pytest.raises(ValueError, match="Data2 size"):
+        _build_hsv_cube([2, 2, 1], 0, flat, [0.0] * 8)
+
+
+def test_interpolate_hsv_cube_returns_data1_when_no_data2():
+    flat = list(range(12))
+    cube = _build_hsv_cube([2, 2, 1], 0, [float(x) for x in flat], None)
+    out = interpolate_hsv_cube(cube, kelvin=5500, kelvin_1=2856, kelvin_2=6504)
+    np.testing.assert_array_equal(out, cube.data_1)
+
+
+def test_interpolate_hsv_cube_blends_in_mired_space():
+    # Data1 all 0, Data2 all 1. At mired midpoint, expect 0.5.
+    n = 12
+    cube = _build_hsv_cube([2, 2, 1], 0, [0.0] * n, [1.0] * n)
+    # Mired midpoint between 2856 and 6504 K:
+    mid_inv = (1.0/2856 + 1.0/6504) / 2
+    mid_k = 1.0 / mid_inv
+    out = interpolate_hsv_cube(cube, kelvin=mid_k, kelvin_1=2856, kelvin_2=6504)
+    np.testing.assert_allclose(out, np.full(cube.data_1.shape, 0.5), atol=1e-5)
+
+
+@pytest.mark.skipif(
+    not _REAL_DCP.exists(),
+    reason="real Adobe DCP not installed at standard macOS path",
+)
+def test_real_d750_dcp_carries_looktable_no_hsm():
+    # Per the agent's empirical survey: Nikon D750 Camera Standard.dcp has
+    # ONLY a LookTable (no HueSatMap). This regression-guards that finding.
+    p = parse_dcp(_REAL_DCP)
+    assert p.hue_sat_map is None
+    assert p.look_table is not None
+    lt = p.look_table
+    assert lt.hue_divisions == 90
+    assert lt.sat_divisions == 16
+    assert lt.val_divisions == 16
+    assert lt.srgb_gamma is True
+    assert lt.data_1.shape == (16, 90, 16, 3)
+    # First cell should be ~identity (no shift at hue=0, sat=0, val=0).
+    np.testing.assert_allclose(lt.data_1[0, 0, 0], [0.0, 1.0, 1.0], atol=1e-3)
+
+
+@pytest.mark.skipif(
+    not _REAL_DCP.exists(),
+    reason="real Adobe DCP not installed at standard macOS path",
+)
+def test_find_dcp_for_camera_real_d750():
+    found = find_dcp_for_camera("NIKON CORPORATION", "NIKON D750")
+    assert found is not None
+    assert found.name == "Nikon D750 Camera Standard.dcp"
+
+
 @pytest.mark.skipif(
     not _REAL_DCP.exists(),
     reason="real Adobe DCP not installed at standard macOS path",
@@ -381,3 +596,203 @@ def test_real_adobe_dcp_multipliers_match_lr_expected_range():
     assert 1.5 < r < 2.5, f"R multiplier {r} outside expected Nikon range"
     assert g == pytest.approx(1.0)
     assert 1.0 < b < 1.6, f"B multiplier {b} outside expected Nikon range"
+
+
+# ---------------------------------------------------------------------------
+# Extracted-profile .npz format — save/load round-trip + auto-detect
+# ---------------------------------------------------------------------------
+
+_BUNDLED_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "dcp_data"
+_BUNDLED_D750 = _BUNDLED_FIXTURE_DIR / "Nikon D750 Camera Standard.npz"
+
+
+def _build_minimal_profile() -> DCPProfile:
+    """A minimal DCPProfile with all the optional fields populated.
+
+    Used to round-trip the save/load path without depending on a real DCP.
+    """
+    return DCPProfile(
+        profile_name="Test Camera Standard",
+        color_matrix_1=np.array([
+            [1.0, -0.4,  0.0],
+            [-0.5, 1.3,  0.3],
+            [-0.1,  0.2, 0.8],
+        ]),
+        color_matrix_2=np.array([
+            [0.9, -0.3, -0.1],
+            [-0.5, 1.3,  0.2],
+            [-0.1,  0.2, 0.7],
+        ]),
+        forward_matrix_1=np.eye(3) * 0.5,
+        forward_matrix_2=np.eye(3) * 0.6,
+        calibration_illuminant_1=17,
+        calibration_illuminant_2=21,
+        baseline_exposure=-0.5,
+        baseline_exposure_offset=0.25,
+        profile_tone_curve=np.stack(
+            [np.linspace(0, 1, 32), np.linspace(0, 1, 32) ** 0.5], axis=1,
+        ),
+        kelvin_1=2856.0,
+        kelvin_2=6504.0,
+    )
+
+
+def test_save_load_profile_round_trip_minimal(tmp_path):
+    profile = _build_minimal_profile()
+    out = tmp_path / "min.npz"
+    save_profile(profile, out)
+    loaded = load_profile(out)
+    assert loaded.profile_name == profile.profile_name
+    np.testing.assert_allclose(loaded.color_matrix_1, profile.color_matrix_1)
+    np.testing.assert_allclose(loaded.color_matrix_2, profile.color_matrix_2)
+    np.testing.assert_allclose(loaded.forward_matrix_1, profile.forward_matrix_1)
+    np.testing.assert_allclose(loaded.forward_matrix_2, profile.forward_matrix_2)
+    assert loaded.calibration_illuminant_1 == 17
+    assert loaded.calibration_illuminant_2 == 21
+    assert loaded.baseline_exposure == pytest.approx(-0.5)
+    assert loaded.baseline_exposure_offset == pytest.approx(0.25)
+    np.testing.assert_allclose(loaded.profile_tone_curve, profile.profile_tone_curve)
+    assert loaded.kelvin_1 == pytest.approx(2856.0)
+    assert loaded.kelvin_2 == pytest.approx(6504.0)
+    # Optional fields default to None when not saved.
+    assert loaded.hue_sat_map is None
+    assert loaded.look_table is None
+
+
+def test_save_load_profile_round_trip_with_cubes(tmp_path):
+    profile = _build_minimal_profile()
+    profile.hue_sat_map = HsvCube(
+        hue_divisions=4, sat_divisions=3, val_divisions=2,
+        srgb_gamma=True,
+        data_1=np.arange(72, dtype=np.float32).reshape(2, 4, 3, 3),
+        data_2=np.arange(72, 144, dtype=np.float32).reshape(2, 4, 3, 3),
+    )
+    profile.look_table = HsvCube(
+        hue_divisions=6, sat_divisions=4, val_divisions=2,
+        srgb_gamma=False,
+        data_1=np.arange(144, dtype=np.float32).reshape(2, 6, 4, 3),
+    )
+    out = tmp_path / "cubes.npz"
+    save_profile(profile, out)
+    loaded = load_profile(out)
+    assert loaded.hue_sat_map is not None
+    assert loaded.hue_sat_map.hue_divisions == 4
+    assert loaded.hue_sat_map.sat_divisions == 3
+    assert loaded.hue_sat_map.val_divisions == 2
+    assert loaded.hue_sat_map.srgb_gamma is True
+    np.testing.assert_array_equal(loaded.hue_sat_map.data_1, profile.hue_sat_map.data_1)
+    np.testing.assert_array_equal(loaded.hue_sat_map.data_2, profile.hue_sat_map.data_2)
+    assert loaded.look_table is not None
+    assert loaded.look_table.hue_divisions == 6
+    assert loaded.look_table.srgb_gamma is False
+    np.testing.assert_array_equal(loaded.look_table.data_1, profile.look_table.data_1)
+    assert loaded.look_table.data_2 is None
+
+
+def test_load_profile_rejects_unsupported_version(tmp_path):
+    out = tmp_path / "bad.npz"
+    np.savez_compressed(
+        out,
+        format_version=np.int32(99),
+        profile_name=np.array("X", dtype="U"),
+        color_matrix_1=np.eye(3, dtype=np.float32),
+        calibration_illuminant_1=np.int32(0),
+        calibration_illuminant_2=np.int32(0),
+        kelvin_1=np.float32(2856),
+        kelvin_2=np.float32(6504),
+        baseline_exposure=np.float32(0),
+        baseline_exposure_offset=np.float32(0),
+    )
+    with pytest.raises(ValueError, match="unsupported profile format_version"):
+        load_profile(out)
+
+
+def test_load_profile_rejects_missing_color_matrix(tmp_path):
+    out = tmp_path / "no_cm1.npz"
+    np.savez_compressed(
+        out,
+        format_version=np.int32(1),
+        profile_name=np.array("X", dtype="U"),
+        calibration_illuminant_1=np.int32(0),
+        calibration_illuminant_2=np.int32(0),
+        kelvin_1=np.float32(2856),
+        kelvin_2=np.float32(6504),
+        baseline_exposure=np.float32(0),
+        baseline_exposure_offset=np.float32(0),
+    )
+    with pytest.raises(ValueError, match="missing color_matrix_1"):
+        load_profile(out)
+
+
+def test_find_extracted_profile_for_camera_via_extra_roots(tmp_path):
+    profile = _build_minimal_profile()
+    save_profile(profile, tmp_path / "Acme X100 Camera Standard.npz")
+    found = find_extracted_profile_for_camera(
+        "Acme", "X100", extra_roots=[tmp_path],
+    )
+    assert found is not None
+    assert found.name == "Acme X100 Camera Standard.npz"
+    # Fallback Adobe-Standard naming also works.
+    save_profile(profile, tmp_path / "Acme Z200 Adobe Standard.npz")
+    found_adobe = find_extracted_profile_for_camera(
+        "Acme", "Z200", extra_roots=[tmp_path],
+    )
+    assert found_adobe is not None
+    assert found_adobe.name == "Acme Z200 Adobe Standard.npz"
+
+
+def test_find_extracted_profile_returns_none_on_miss(tmp_path):
+    assert find_extracted_profile_for_camera(
+        "Unknown", "Camera", extra_roots=[tmp_path],
+    ) is None
+
+
+def test_bundled_d750_fixture_loads():
+    # The repo ships one camera's extracted profile under tests/fixtures/
+    # so the test suite can exercise the end-to-end auto-detect path
+    # without requiring Adobe DNG Converter installed on the test machine.
+    assert _BUNDLED_D750.is_file(), (
+        f"Bundled D750 fixture not present at {_BUNDLED_D750}; "
+        f"re-generate via `python3 tools/extract_dcp.py ...`"
+    )
+    profile = load_profile(_BUNDLED_D750)
+    assert profile.profile_name == "Camera Standard"
+    assert profile.color_matrix_1 is not None
+    assert profile.look_table is not None
+    assert profile.look_table.hue_divisions == 90
+    assert profile.look_table.sat_divisions == 16
+    assert profile.look_table.val_divisions == 16
+
+
+def test_auto_detect_profile_prefers_bundled_npz_over_adobe_dcp(tmp_path):
+    """When both an extracted .npz and a system Adobe .dcp exist, .npz wins.
+
+    Setup: synthesize a TIFF-shaped NEF that reports the user's actual
+    D750 Make/Model, then point auto-detect at our bundled fixture via
+    extra_extracted_roots. The bundled .npz is what comes back.
+    """
+    nef = tmp_path / "fake.NEF"
+    nef.write_bytes(_build_synthetic_nef("NIKON CORPORATION", "NIKON D750"))
+    result = auto_detect_profile(
+        nef, extra_extracted_roots=[_BUNDLED_FIXTURE_DIR],
+    )
+    assert result is not None
+    profile, source = result
+    assert source == _BUNDLED_D750
+    assert profile.profile_name == "Camera Standard"
+
+
+def test_auto_detect_profile_returns_none_when_nothing_found(tmp_path):
+    nef = tmp_path / "fake.NEF"
+    nef.write_bytes(_build_synthetic_nef("ACMECAM", "Z9999"))
+    # No bundled profile for ACMECAM; no system Adobe DCP either.
+    # extra_extracted_roots points at tmp_path which has no .npz.
+    result = auto_detect_profile(nef, extra_extracted_roots=[tmp_path])
+    assert result is None
+
+
+def test_auto_detect_profile_skips_non_tiff_raw(tmp_path):
+    cr3 = tmp_path / "fake.CR3"
+    cr3.write_bytes(b"\x00\x00\x00\x18ftypcrx ")  # ISO BMFF (Canon CR3)
+    result = auto_detect_profile(cr3, extra_extracted_roots=[_BUNDLED_FIXTURE_DIR])
+    assert result is None

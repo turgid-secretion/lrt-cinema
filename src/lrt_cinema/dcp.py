@@ -54,11 +54,19 @@ References
 from __future__ import annotations
 
 import struct
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO
 
 import numpy as np
+
+# ---------------------------------------------------------------------------
+# TIFF IFD0 tags used by the RAW-side EXIF probe (TIFF 6.0)
+# ---------------------------------------------------------------------------
+
+_TAG_MAKE = 271
+_TAG_MODEL = 272
 
 # ---------------------------------------------------------------------------
 # DCP IFD tags (DNG 1.7.1)
@@ -69,13 +77,40 @@ _TAG_COLOR_MATRIX_2 = 50722
 _TAG_CAMERA_CALIBRATION_1 = 50723
 _TAG_CAMERA_CALIBRATION_2 = 50724
 _TAG_BASELINE_EXPOSURE = 50730
-_TAG_CALIBRATION_ILLUMINANT_1 = 50931
-_TAG_CALIBRATION_ILLUMINANT_2 = 50932
+# CalibrationIlluminant1/2 — canonical DNG 1.7.1 tag IDs (verified against
+# RawTherapee dcp.cc:856-857, LibRaw tiff.cpp:1427-1431, darktable
+# imageio_dng.c#L606 at SHA 9402c65275, and the real Nikon D750
+# Camera Standard.dcp on the dev machine). Prior code used 50931/50932 — wrong;
+# 50932 on the D750 DCP is an unrelated ASCII metadata string ("com.adobe").
+# The mismatch was harmless because Adobe DCPs leave the canonical tags at
+# 17 (Standard A) / 21 (D65) and the existing "both zero → A/D65 fallback" at
+# parse_dcp coincidentally produced the same kelvin pair (2856/6504); the
+# fix lets the parser actually read non-default vendor profiles correctly.
+_TAG_CALIBRATION_ILLUMINANT_1 = 50778
+_TAG_CALIBRATION_ILLUMINANT_2 = 50779
 _TAG_PROFILE_NAME = 50936
 _TAG_PROFILE_TONE_CURVE = 50940
 _TAG_FORWARD_MATRIX_1 = 50964
 _TAG_FORWARD_MATRIX_2 = 50965
 _TAG_BASELINE_EXPOSURE_OFFSET = 50970
+
+# DCP HueSatMap (DNG 1.7.1 §"Hue Sat Map"). Applied BEFORE
+# BaselineExposureOffset in Adobe's pipeline. Two cubes (per-illuminant); the
+# kelvin-driven mired blend selects per-cell between Data1 and Data2.
+_TAG_PROFILE_HUE_SAT_MAP_DIMS = 50937
+_TAG_PROFILE_HUE_SAT_MAP_DATA_1 = 50938
+_TAG_PROFILE_HUE_SAT_MAP_DATA_2 = 50939
+_TAG_PROFILE_HUE_SAT_MAP_ENCODING = 51107
+
+# DCP LookTable (DNG 1.7.1 §"Profile Look Table"). Binary-identical algorithm
+# to HueSatMap; Adobe applies it AFTER BaselineExposureOffset, BEFORE the
+# ProfileToneCurve. Single cube (no per-illuminant variant). For the project's
+# test camera (Nikon D750 Camera Standard.dcp) this is the only HSV cube
+# present, and is the source of the ΔE post-fit 2.24 structural residual the
+# diagnostic flagged on DSC_4053.
+_TAG_PROFILE_LOOK_TABLE_DIMS = 50981
+_TAG_PROFILE_LOOK_TABLE_DATA = 50982
+_TAG_PROFILE_LOOK_TABLE_ENCODING = 51108
 
 # TIFF type IDs (TIFF 6.0)
 _TYPE_BYTE = 1
@@ -136,6 +171,45 @@ def illuminant_code_to_kelvin(code: int) -> float:
 
 
 # ---------------------------------------------------------------------------
+# DCP HSV-cube dataclass (HueSatMap + LookTable share this layout)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class HsvCube:
+    """A DCP HSV-cube transformation — covers HueSatMap and LookTable.
+
+    Both tags decode to the same shape (hue × sat × val × {hueShift_deg,
+    satScale, valScale}) and run through the same trilinear-sampling
+    algorithm (RawTherapee `dcp.cc::hsdApply` at L2013-2133 — used for
+    both). Differences are pipeline position (Adobe applies HSM before
+    BaselineExposureOffset, LookTable after) and Data2 presence (HSM has
+    per-illuminant variants; LookTable is single-illuminant).
+
+    Cube array shape: (val_divisions, hue_divisions, sat_divisions, 3) —
+    the order matches DNG 1.7.1 §"Hue Sat Map" cell traversal
+    (value-major, hue-medium, sat-minor) so reshape from the raw float
+    sequence is direct.
+
+    `srgb_gamma=True` means the cube's V axis was authored against an
+    sRGB-gamma-ENCODED V (`HueSatMapEncoding`/`LookTableEncoding` = 1
+    per DNG 1.7.1 §"Hue Sat Map Encoding"). The baker must OETF-encode
+    the linear V into perceptual space before indexing the cube and
+    EOTF-decode after applying valScale.
+    """
+
+    hue_divisions: int
+    sat_divisions: int
+    val_divisions: int
+    srgb_gamma: bool
+    data_1: np.ndarray
+    data_2: np.ndarray | None = None
+
+    @property
+    def cell_count(self) -> int:
+        return self.hue_divisions * self.sat_divisions * self.val_divisions
+
+
+# ---------------------------------------------------------------------------
 # DCP profile dataclass
 # ---------------------------------------------------------------------------
 
@@ -171,6 +245,14 @@ class DCPProfile:
 
     # Tone curve as Nx2 array of (x, y) in 0..1. None if not present.
     profile_tone_curve: np.ndarray | None = None
+
+    # DCP HSV-cube transformations (DNG 1.7.1 §"Hue Sat Map", §"Profile
+    # Look Table"). Both are HsvCube instances. HSM has Data2; LookTable
+    # never does. For Nikon D750 Camera Standard.dcp on the dev machine,
+    # `hue_sat_map` is None and `look_table` is the 90×16×16 cube that
+    # produces the ΔE post-fit ~2.24 structural residual.
+    hue_sat_map: HsvCube | None = None
+    look_table: HsvCube | None = None
 
     # Cached calibration kelvin (set after parse).
     kelvin_1: float = field(default=0.0)
@@ -264,6 +346,16 @@ def parse_dcp(path: Path) -> DCPProfile:
         n_entries = struct.unpack(f"{byte_order}H", f.read(2))[0]
 
         prof = DCPProfile()
+        # HSV-cube fields are deferred — Dims/Data/Encoding tags may appear
+        # in any IFD order, so we collect raw decoded values during the loop
+        # and resolve them to HsvCube instances afterward.
+        hsm_dims: list[int] | None = None
+        hsm_enc: int = 0
+        hsm_data1: list[float] | None = None
+        hsm_data2: list[float] | None = None
+        lt_dims: list[int] | None = None
+        lt_enc: int = 0
+        lt_data: list[float] | None = None
         for _ in range(n_entries):
             entry = f.read(12)
             tag, tag_type, count = struct.unpack(f"{byte_order}HHI", entry[:8])
@@ -311,6 +403,42 @@ def parse_dcp(path: Path) -> DCPProfile:
             ):
                 floats = _decode_floats(data, count, byte_order)
                 prof.profile_tone_curve = np.asarray(floats).reshape(count // 2, 2)
+            # HueSatMap (two illuminants — same algorithm + layout as
+            # LookTable below, just different tag IDs and pipeline position).
+            elif tag == _TAG_PROFILE_HUE_SAT_MAP_DIMS and count == 3:
+                # DNG spec mandates SHORT (type 3) but accept LONG (type 4)
+                # for symmetry with the LookTable-Dims Adobe-non-spec case.
+                if tag_type == _TYPE_SHORT:
+                    hsm_dims = _decode_short(data, 3, byte_order)
+                elif tag_type == _TYPE_LONG:
+                    hsm_dims = _decode_long(data, 3, byte_order)
+            elif tag == _TAG_PROFILE_HUE_SAT_MAP_ENCODING and tag_type == _TYPE_LONG:
+                hsm_enc = _decode_long(data, 1, byte_order)[0]
+            elif tag == _TAG_PROFILE_HUE_SAT_MAP_DATA_1 and tag_type == _TYPE_FLOAT:
+                hsm_data1 = _decode_floats(data, count, byte_order)
+            elif tag == _TAG_PROFILE_HUE_SAT_MAP_DATA_2 and tag_type == _TYPE_FLOAT:
+                hsm_data2 = _decode_floats(data, count, byte_order)
+            # LookTable (single cube, same algorithm). Adobe's real DCPs
+            # emit LookTableDims as type=4 LONG (count=3) — NOT the
+            # spec-mandated type=3 SHORT. Verified empirically against the
+            # Nikon D750 Camera Standard.dcp (LookTableDims is type=4
+            # LONG, value (90, 16, 16)). Accept both forms; fail silent on
+            # neither (cube simply not loaded).
+            elif tag == _TAG_PROFILE_LOOK_TABLE_DIMS and count == 3:
+                if tag_type == _TYPE_LONG:
+                    lt_dims = _decode_long(data, 3, byte_order)
+                elif tag_type == _TYPE_SHORT:
+                    lt_dims = _decode_short(data, 3, byte_order)
+            elif tag == _TAG_PROFILE_LOOK_TABLE_ENCODING and tag_type == _TYPE_LONG:
+                lt_enc = _decode_long(data, 1, byte_order)[0]
+            elif tag == _TAG_PROFILE_LOOK_TABLE_DATA and tag_type == _TYPE_FLOAT:
+                lt_data = _decode_floats(data, count, byte_order)
+
+    # Resolve deferred HSV-cube tags now that the IFD walk is complete.
+    if hsm_dims is not None and hsm_data1 is not None:
+        prof.hue_sat_map = _build_hsv_cube(hsm_dims, hsm_enc, hsm_data1, hsm_data2)
+    if lt_dims is not None and lt_data is not None:
+        prof.look_table = _build_hsv_cube(lt_dims, lt_enc, lt_data, None)
 
     if prof.color_matrix_1 is None:
         raise ValueError(f"{path}: missing ColorMatrix1 — not a valid DCP")
@@ -468,6 +596,82 @@ def uv_to_kelvin(u: float, v: float) -> float:
 # DCP color matrix → camera-neutral multipliers
 # ---------------------------------------------------------------------------
 
+def _build_hsv_cube(
+    dims: list[int],
+    encoding: int,
+    data_1_floats: list[float],
+    data_2_floats: list[float] | None,
+) -> HsvCube:
+    """Construct an HsvCube from the raw DNG-IFD payload.
+
+    `dims` is the (hueDivisions, satDivisions, valDivisions) triple as
+    decoded from the file. `encoding` is the HueSatMapEncoding /
+    LookTableEncoding LONG (0 = linear V axis, 1 = sRGB-gamma-encoded V).
+    `data_1_floats` / `data_2_floats` are flat lists of 3 ×
+    hueDivisions × satDivisions × valDivisions IEEE floats; the reshape
+    order (V, H, S, 3) matches the DNG spec's cell-traversal convention
+    (value-major, hue-medium, sat-minor — see RT dcp.cc#L2088-L2091).
+    """
+    h_div, s_div, v_div = dims
+    expected = 3 * h_div * s_div * v_div
+    if len(data_1_floats) != expected:
+        raise ValueError(
+            f"DCP HSV cube size mismatch: dims={dims} → expected "
+            f"{expected} floats, got {len(data_1_floats)}"
+        )
+    arr1 = np.asarray(data_1_floats, dtype=np.float32).reshape(
+        v_div, h_div, s_div, 3
+    )
+    arr2: np.ndarray | None = None
+    if data_2_floats is not None:
+        if len(data_2_floats) != expected:
+            raise ValueError(
+                f"DCP HSV cube Data2 size {len(data_2_floats)} does not match "
+                f"Data1 size {expected} — invalid DCP"
+            )
+        arr2 = np.asarray(data_2_floats, dtype=np.float32).reshape(
+            v_div, h_div, s_div, 3
+        )
+    return HsvCube(
+        hue_divisions=h_div,
+        sat_divisions=s_div,
+        val_divisions=v_div,
+        srgb_gamma=bool(encoding & 1),
+        data_1=arr1,
+        data_2=arr2,
+    )
+
+
+def interpolate_hsv_cube(
+    cube: HsvCube,
+    kelvin: float,
+    kelvin_1: float,
+    kelvin_2: float,
+) -> np.ndarray:
+    """Per-cell mired-linear blend of an HsvCube's Data1/Data2 arrays.
+
+    LookTable cubes always have `data_2=None` and return `data_1` unchanged.
+    HSM cubes blend per-corresponding-cell between the two calibration
+    illuminants — identical math to `interpolate_color_matrix`, just on
+    the full (V, H, S, 3) cube instead of a 3×3 matrix. Numpy broadcast
+    handles the per-cell linear combination in one allocation.
+    """
+    if cube.data_2 is None or kelvin_2 == 0.0:
+        return cube.data_1
+    k_lo, k_hi = sorted([kelvin_1, kelvin_2])
+    if kelvin_1 <= kelvin_2:
+        c_lo, c_hi = cube.data_1, cube.data_2
+    else:
+        c_lo, c_hi = cube.data_2, cube.data_1
+    if kelvin <= k_lo:
+        return c_lo
+    if kelvin >= k_hi:
+        return c_hi
+    inv_lo, inv_hi = 1.0 / k_lo, 1.0 / k_hi
+    f = (1.0 / kelvin - inv_lo) / (inv_hi - inv_lo)
+    return ((1.0 - f) * c_lo + f * c_hi).astype(np.float32)
+
+
 def interpolate_color_matrix(profile: DCPProfile, kelvin: float) -> np.ndarray:
     """Interpolate ColorMatrix1/2 by kelvin per DNG SDK convention.
 
@@ -555,3 +759,443 @@ def kelvin_tint_to_dt_multipliers(
     g_mul = 1.0
     b_mul = green / neutral[2] if abs(neutral[2]) > 1e-9 else 1.0
     return float(r_mul), float(g_mul), float(b_mul), float(g_mul)
+
+
+# ---------------------------------------------------------------------------
+# RAW EXIF Make/Model probe — drives the auto-detect path
+# ---------------------------------------------------------------------------
+#
+# All RAW formats this project targets except Canon CR3 (ISO BMFF container) are
+# TIFF-shaped (NEF, DNG, ARW, RW2, RAF, ORF, FFF). The TIFF header rules at
+# IFD0 are stable across vendors; Make/Model live at the canonical tag IDs
+# 271/272 (TIFF 6.0 §8). We use the same struct-based IFD walk we already do
+# for DCPs in `parse_dcp` rather than pulling in a heavier dep (exifread,
+# rawpy, exiftool).
+
+def read_raw_make_model(raw_path: Path) -> tuple[str, str] | None:
+    """Extract (make, model) ASCII strings from a TIFF-shaped RAW's IFD0.
+
+    Returns None when:
+      - file is not TIFF-shaped (e.g. Canon CR3 is QuickTime/ISO BMFF; in
+        practice the caller falls back to `--dcp` for those formats)
+      - file is unreadable or truncated
+      - Make/Model tags are absent
+
+    Make/Model are read as raw ASCII strings; Adobe's DCP filename
+    convention is a separate normalization step (`adobe_make_for_camera`).
+    """
+    raw_path = Path(raw_path)
+    try:
+        with open(raw_path, "rb") as f:
+            header = f.read(8)
+            if len(header) < 8:
+                return None
+            if header[:2] == b"II":
+                bo = "<"
+            elif header[:2] == b"MM":
+                bo = ">"
+            else:
+                return None
+            magic = struct.unpack(f"{bo}H", header[2:4])[0]
+            # Standard TIFF magic 42 (NEF/DNG/ARW/RW2/RAF/ORF/FFF). DCP's 0x4352
+            # is intentionally NOT accepted here — DCPs are not RAW images.
+            if magic != 42:
+                return None
+            ifd0_offset = struct.unpack(f"{bo}I", header[4:8])[0]
+            f.seek(ifd0_offset)
+            n_entries_data = f.read(2)
+            if len(n_entries_data) < 2:
+                return None
+            n_entries = struct.unpack(f"{bo}H", n_entries_data)[0]
+
+            make: str | None = None
+            model: str | None = None
+            for _ in range(n_entries):
+                entry = f.read(12)
+                if len(entry) < 12:
+                    return None
+                tag, tag_type, count = struct.unpack(f"{bo}HHI", entry[:8])
+                if tag not in (_TAG_MAKE, _TAG_MODEL) or tag_type != _TYPE_ASCII:
+                    continue
+                value_or_offset = entry[8:12]
+                data = _read_value(f, tag_type, count, value_or_offset, bo)
+                decoded = _decode_ascii(data).strip()
+                if tag == _TAG_MAKE:
+                    make = decoded
+                elif tag == _TAG_MODEL:
+                    model = decoded
+                if make is not None and model is not None:
+                    break
+            if make is None or model is None:
+                return None
+            return make, model
+    except (OSError, struct.error):
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Adobe DCP install paths + camera Make/Model → DCP filename
+# ---------------------------------------------------------------------------
+#
+# Per Adobe DNG Converter convention (also LR Classic's bundled set), DCPs
+# install at one of:
+#   <root>/Adobe Standard/<Make> <Model> Adobe Standard.dcp
+#   <root>/Camera/<Make> <Model>/<Make> <Model> Camera <variant>.dcp
+# Real LRT XMP carries `crs:CameraProfile="Camera Standard"` by default, so
+# our auto-detect prefers the Camera Standard variant over the Adobe Standard
+# fallback — that matches what LR rendered the LRT preview with.
+
+# EXIF Make → Adobe's DCP-filename Make. Adobe normalizes vendor strings
+# from EXIF caps + corporate-suffix forms ("NIKON CORPORATION") to the
+# friendly form ("Nikon"). PENTAX is uppercase per Adobe's own filenames.
+_ADOBE_MAKE_NORMALIZE = {
+    "NIKON CORPORATION": "Nikon",
+    "NIKON": "Nikon",
+    "CANON": "Canon",
+    "SONY": "Sony",
+    "FUJIFILM": "Fujifilm",
+    "PANASONIC": "Panasonic",
+    "OLYMPUS CORPORATION": "Olympus",
+    "OLYMPUS IMAGING CORP.": "Olympus",
+    "OM DIGITAL SOLUTIONS": "OM Digital Solutions",
+    "RICOH IMAGING COMPANY, LTD.": "PENTAX",
+    "PENTAX CORPORATION": "PENTAX",
+    "PENTAX": "PENTAX",
+    "LEICA CAMERA AG": "Leica",
+    "SAMSUNG": "Samsung",
+    "HASSELBLAD": "Hasselblad",
+    "PHASE ONE": "Phase One",
+    "APPLE": "Apple",
+}
+
+
+def adobe_make_for_camera(make: str) -> str:
+    """Map an EXIF Make value to Adobe's DCP-filename Make convention."""
+    return _ADOBE_MAKE_NORMALIZE.get(make.strip().upper(), make.strip().title())
+
+
+def _adobe_camera_label(make: str, model: str) -> str:
+    """Build the `<Make> <Model>` label Adobe uses in DCP filenames.
+
+    Adobe strips a leading Make from Model when present. The strip is
+    against the NORMALIZED Make (the first word, uppercased) so a NEF
+    whose EXIF Make is "NIKON CORPORATION" and Model "NIKON D750" still
+    yields label "Nikon D750" (Model's "NIKON" prefix matches the
+    "NIKON" core of "NIKON CORPORATION").
+    """
+    norm_make = adobe_make_for_camera(make)
+    m = model.strip()
+    # Strip the first-word prefix of Make from Model — handles both
+    # "NIKON CORPORATION" + "NIKON D750" and "Canon" + "Canon EOS R5".
+    make_head = make.strip().split()[0].upper() if make.strip() else ""
+    if make_head and m.upper().startswith(make_head):
+        m = m[len(make_head):].strip()
+    return f"{norm_make} {m}".strip()
+
+
+def _adobe_dcp_search_roots() -> list[Path]:
+    """DCP install roots present on this system, in lookup order.
+
+    Adobe DNG Converter is the canonical install path. LR Classic ships a
+    duplicate set under its .app bundle on macOS; we include it as a
+    fallback for users who installed LR but not the standalone converter.
+    Linux has no canonical Adobe install location.
+    """
+    roots: list[Path] = []
+    if sys.platform == "darwin":
+        roots.append(Path("/Library/Application Support/Adobe/CameraRaw/CameraProfiles"))
+        lr_bundle = Path(
+            "/Applications/Adobe Lightroom Classic/"
+            "Adobe Lightroom Classic.app/Contents/Resources/CameraProfiles"
+        )
+        roots.append(lr_bundle)
+    elif sys.platform == "win32":
+        import os
+        program_data = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData"))
+        roots.append(program_data / "Adobe" / "CameraRaw" / "CameraProfiles")
+    return [r for r in roots if r.is_dir()]
+
+
+def find_dcp_for_camera(
+    make: str,
+    model: str,
+    extra_roots: list[Path] | None = None,
+) -> Path | None:
+    """Locate a DCP for (`make`, `model`) under standard Adobe install paths.
+
+    Lookup order (first hit wins):
+      1. `Camera/<label>/<label> Camera Standard.dcp`
+         — matches LR's default `crs:CameraProfile="Camera Standard"`
+      2. `Camera/<label>/<label> Adobe Standard.dcp`
+         — some camera subfolders use the Adobe-Standard naming
+      3. `Adobe Standard/<label> Adobe Standard.dcp`
+         — Adobe's universal fallback, present for every supported body
+
+    Returns None when no DCP is found across all roots and naming
+    variants. The caller is expected to log a clear warning and fall
+    back to the no-DCP code path.
+    """
+    label = _adobe_camera_label(make, model)
+    roots = _adobe_dcp_search_roots()
+    if extra_roots:
+        roots.extend(r for r in extra_roots if r.is_dir())
+    for root in roots:
+        for candidate in (
+            root / "Camera" / label / f"{label} Camera Standard.dcp",
+            root / "Camera" / label / f"{label} Adobe Standard.dcp",
+            root / "Adobe Standard" / f"{label} Adobe Standard.dcp",
+        ):
+            if candidate.is_file():
+                return candidate
+    return None
+
+
+def auto_detect_dcp(raw_path: Path) -> Path | None:
+    """End-to-end: probe a RAW's Make/Model and return a matching DCP path.
+
+    Returns None when the RAW's Make/Model cannot be read (non-TIFF
+    format, truncated file) or when no matching DCP is installed.
+
+    Note: callers preferring format-agnostic profile loading (which also
+    picks up lrt-cinema's own .npz extracted-profile format from user
+    config / env-var roots, not just Adobe .dcp files) should use
+    `auto_detect_profile()` instead.
+    """
+    info = read_raw_make_model(raw_path)
+    if info is None:
+        return None
+    make, model = info
+    return find_dcp_for_camera(make, model)
+
+
+# ---------------------------------------------------------------------------
+# Extracted-profile format (.npz) — Adobe-free in-repo path
+# ---------------------------------------------------------------------------
+#
+# Project-defined lossless serialization of the DCP fields the renderer
+# actually consumes (matrices, illuminants, baseline exposure, tone curve,
+# HSV cubes). Storing extracted *data* — not Adobe's .dcp file format — is
+# the project's stance on Adobe DCP redistribution per
+# docs/research/KELVIN_MULTIPLIERS_RESEARCH.md.
+#
+# Format: numpy `.npz` (zip of zlib-compressed `.npy` arrays) with the
+# field names listed in `_PROFILE_NPZ_FIELDS`. All numeric arrays are
+# float32; calibration illuminant codes are int32; profile_name is a
+# 0-d unicode string array. Optional fields are simply absent from the
+# archive when the source DCP doesn't carry them.
+#
+# Version tag (`format_version`) is bumped only on backwards-incompatible
+# changes — additive fields land at the next minor without a bump.
+
+_PROFILE_FORMAT_VERSION = 1
+
+
+def save_profile(profile: DCPProfile, path: Path) -> None:
+    """Serialize a DCPProfile to lrt-cinema's `.npz` extracted format.
+
+    Lossless w.r.t. the fields lrt-cinema's renderer consumes. Adobe DCPs
+    carry additional metadata (UniqueCameraModel, ProfileCopyright, etc.)
+    that the renderer doesn't use; those are NOT preserved by the
+    extractor — re-extract from the source .dcp if more fields are ever
+    needed.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    arrays: dict[str, np.ndarray] = {
+        "format_version": np.int32(_PROFILE_FORMAT_VERSION),
+        "profile_name": np.array(profile.profile_name, dtype="U"),
+        "calibration_illuminant_1": np.int32(profile.calibration_illuminant_1),
+        "calibration_illuminant_2": np.int32(profile.calibration_illuminant_2),
+        "kelvin_1": np.float32(profile.kelvin_1),
+        "kelvin_2": np.float32(profile.kelvin_2),
+        "baseline_exposure": np.float32(profile.baseline_exposure),
+        "baseline_exposure_offset": np.float32(profile.baseline_exposure_offset),
+    }
+    if profile.color_matrix_1 is not None:
+        arrays["color_matrix_1"] = profile.color_matrix_1.astype(np.float32)
+    if profile.color_matrix_2 is not None:
+        arrays["color_matrix_2"] = profile.color_matrix_2.astype(np.float32)
+    if profile.forward_matrix_1 is not None:
+        arrays["forward_matrix_1"] = profile.forward_matrix_1.astype(np.float32)
+    if profile.forward_matrix_2 is not None:
+        arrays["forward_matrix_2"] = profile.forward_matrix_2.astype(np.float32)
+    if profile.camera_calibration_1 is not None:
+        arrays["camera_calibration_1"] = profile.camera_calibration_1.astype(np.float32)
+    if profile.camera_calibration_2 is not None:
+        arrays["camera_calibration_2"] = profile.camera_calibration_2.astype(np.float32)
+    if profile.profile_tone_curve is not None:
+        arrays["profile_tone_curve"] = profile.profile_tone_curve.astype(np.float32)
+    if profile.hue_sat_map is not None:
+        hsm = profile.hue_sat_map
+        arrays["hsm_dims"] = np.array(
+            [hsm.hue_divisions, hsm.sat_divisions, hsm.val_divisions], dtype=np.int32,
+        )
+        arrays["hsm_srgb_gamma"] = np.int32(1 if hsm.srgb_gamma else 0)
+        arrays["hsm_data_1"] = hsm.data_1.astype(np.float32)
+        if hsm.data_2 is not None:
+            arrays["hsm_data_2"] = hsm.data_2.astype(np.float32)
+    if profile.look_table is not None:
+        lt = profile.look_table
+        arrays["look_dims"] = np.array(
+            [lt.hue_divisions, lt.sat_divisions, lt.val_divisions], dtype=np.int32,
+        )
+        arrays["look_srgb_gamma"] = np.int32(1 if lt.srgb_gamma else 0)
+        arrays["look_data"] = lt.data_1.astype(np.float32)
+    np.savez_compressed(path, **arrays)
+
+
+def load_profile(path: Path) -> DCPProfile:
+    """Deserialize a DCPProfile from lrt-cinema's `.npz` extracted format.
+
+    Raises ValueError on missing required fields (ColorMatrix1, profile name)
+    or on a format-version we don't recognize. Optional fields default
+    consistently with `parse_dcp`'s behavior on a DCP that simply omits them.
+    """
+    path = Path(path)
+    with np.load(path, allow_pickle=False) as data:
+        version = int(data["format_version"])
+        if version != _PROFILE_FORMAT_VERSION:
+            raise ValueError(
+                f"{path}: unsupported profile format_version {version} "
+                f"(expected {_PROFILE_FORMAT_VERSION})"
+            )
+        if "color_matrix_1" not in data:
+            raise ValueError(f"{path}: missing color_matrix_1 — not a valid extracted profile")
+
+        def _opt(name: str) -> np.ndarray | None:
+            return data[name].astype(np.float32) if name in data else None
+
+        prof = DCPProfile(
+            profile_name=str(data["profile_name"]),
+            color_matrix_1=data["color_matrix_1"].astype(np.float32),
+            color_matrix_2=_opt("color_matrix_2"),
+            forward_matrix_1=_opt("forward_matrix_1"),
+            forward_matrix_2=_opt("forward_matrix_2"),
+            camera_calibration_1=_opt("camera_calibration_1"),
+            camera_calibration_2=_opt("camera_calibration_2"),
+            calibration_illuminant_1=int(data["calibration_illuminant_1"]),
+            calibration_illuminant_2=int(data["calibration_illuminant_2"]),
+            baseline_exposure=float(data["baseline_exposure"]),
+            baseline_exposure_offset=float(data["baseline_exposure_offset"]),
+            profile_tone_curve=_opt("profile_tone_curve"),
+            kelvin_1=float(data["kelvin_1"]),
+            kelvin_2=float(data["kelvin_2"]),
+        )
+        if "hsm_data_1" in data:
+            hsm_dims = data["hsm_dims"]
+            prof.hue_sat_map = HsvCube(
+                hue_divisions=int(hsm_dims[0]),
+                sat_divisions=int(hsm_dims[1]),
+                val_divisions=int(hsm_dims[2]),
+                srgb_gamma=bool(int(data["hsm_srgb_gamma"])),
+                data_1=data["hsm_data_1"].astype(np.float32),
+                data_2=(
+                    data["hsm_data_2"].astype(np.float32)
+                    if "hsm_data_2" in data else None
+                ),
+            )
+        if "look_data" in data:
+            look_dims = data["look_dims"]
+            prof.look_table = HsvCube(
+                hue_divisions=int(look_dims[0]),
+                sat_divisions=int(look_dims[1]),
+                val_divisions=int(look_dims[2]),
+                srgb_gamma=bool(int(data["look_srgb_gamma"])),
+                data_1=data["look_data"].astype(np.float32),
+            )
+    return prof
+
+
+def _extracted_profile_search_roots() -> list[Path]:
+    """Where to look for `.npz` extracted-profile files, in lookup order.
+
+    1. `$LRT_CINEMA_PROFILES` env var — explicit user override; takes any
+       absolute directory (typically points at a cloned sister
+       `lrt-cinema-profiles` repo or a custom local cache).
+    2. `~/.config/lrt-cinema/profiles/` — XDG-style per-user config dir,
+       written by `tools/extract_dcp_library.py` when the user runs the
+       one-shot extraction against their Adobe DCP install.
+
+    Linux / macOS use the XDG path verbatim; Windows uses the
+    `%APPDATA%/lrt-cinema/profiles` equivalent. Honors the
+    `XDG_CONFIG_HOME` env var on platforms where it applies.
+    """
+    import os
+    roots: list[Path] = []
+    env = os.environ.get("LRT_CINEMA_PROFILES")
+    if env:
+        p = Path(env)
+        if p.is_dir():
+            roots.append(p)
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            roots.append(Path(appdata) / "lrt-cinema" / "profiles")
+    else:
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        config_home = Path(xdg) if xdg else (Path.home() / ".config")
+        roots.append(config_home / "lrt-cinema" / "profiles")
+    return [r for r in roots if r.is_dir()]
+
+
+def find_extracted_profile_for_camera(
+    make: str,
+    model: str,
+    extra_roots: list[Path] | None = None,
+) -> Path | None:
+    """Locate an `.npz` extracted profile for (make, model).
+
+    Filename convention mirrors Adobe's DCP naming:
+    `<label> Camera Standard.npz` (preferred) or `<label> Adobe Standard.npz`
+    (fallback), where `<label>` is the Adobe-style camera label
+    (e.g. "Nikon D750"). Returns the first match across the search roots
+    in `_extracted_profile_search_roots()` plus any `extra_roots` passed
+    in (used by tests to point at fixture dirs).
+    """
+    label = _adobe_camera_label(make, model)
+    roots = _extracted_profile_search_roots()
+    if extra_roots:
+        roots.extend(r for r in extra_roots if r.is_dir())
+    for root in roots:
+        for candidate in (
+            root / f"{label} Camera Standard.npz",
+            root / f"{label} Adobe Standard.npz",
+        ):
+            if candidate.is_file():
+                return candidate
+    return None
+
+
+def auto_detect_profile(
+    raw_path: Path,
+    extra_extracted_roots: list[Path] | None = None,
+) -> tuple[DCPProfile, Path] | None:
+    """End-to-end profile lookup: try extracted `.npz` first, then Adobe `.dcp`.
+
+    Probes the RAW's EXIF Make/Model, then:
+      1. Searches the extracted-profile roots (env var, user config,
+         optional `extra_extracted_roots`). When a match is found, loads
+         and returns the DCPProfile directly — no Adobe install required.
+      2. Falls back to the Adobe DCP install paths (matches dt's libraw
+         /lr's bundled-profile convention on macOS / Windows). Parses the
+         `.dcp` and returns the DCPProfile.
+      3. Returns None when neither path turns up a match (caller logs a
+         clear "install profile data or pass --dcp" message).
+
+    Returns `(profile, source_path)` so callers can log where the profile
+    came from. Both lookup arms share the same DCPProfile shape — the
+    caller doesn't need to know which arm fired.
+    """
+    info = read_raw_make_model(raw_path)
+    if info is None:
+        return None
+    make, model = info
+    extracted_path = find_extracted_profile_for_camera(
+        make, model, extra_roots=extra_extracted_roots,
+    )
+    if extracted_path is not None:
+        return load_profile(extracted_path), extracted_path
+    dcp_path = find_dcp_for_camera(make, model)
+    if dcp_path is not None:
+        return parse_dcp(dcp_path), dcp_path
+    return None
