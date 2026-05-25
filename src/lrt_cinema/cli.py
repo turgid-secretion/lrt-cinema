@@ -130,6 +130,21 @@ def _build_parser() -> argparse.ArgumentParser:
                              "preview (typical +1.5-2.5 ΔE on real footage). "
                              "BaselineExposureOffset still rolls into the "
                              "exposure module's bias when the cubes are off.")
+    render.add_argument("--engine", choices=("dcp", "algorithmic"),
+                        default="dcp",
+                        help="Color-engine pipeline. 'dcp' (default): Adobe-DCP-"
+                             "driven — emits temperature, basecurve, lut3d from "
+                             "the camera's DCP profile (auto-detected or via "
+                             "--dcp). 'algorithmic': suppress all DCP-derived "
+                             "module emissions; the render uses darktable's "
+                             "libraw-derived defaults for white-balance and "
+                             "input-color, plus the LR-authored "
+                             "exposure/blacks/tonecurve/sharpen/colorbalancergb "
+                             "ops only. Use 'algorithmic' for a DCP-free "
+                             "baseline or when a per-camera calibration matrix "
+                             "is fitted separately (see "
+                             "tools/calibrate_camera.py). Implies --no-auto-dcp "
+                             "and ignores --dcp.")
     render.add_argument("--from-frame", type=int, default=0,
                         help="First frame index to render (inclusive).")
     render.add_argument("--to-frame", type=int, default=None,
@@ -398,7 +413,24 @@ def _cmd_render(args: argparse.Namespace) -> int:
         return 2
 
     dcp_profile = None
-    if args.dcp is not None:
+    if args.engine == "algorithmic":
+        # Algorithmic engine: deliberately skip DCP loading/auto-detect.
+        # Sets dcp_profile=None which gates ALL DCP-derived module
+        # emissions downstream (temperature, basecurve, lut3d). LR-
+        # authored ops (exposure, blacks, tonecurve, sharpen,
+        # colorbalancergb) still emit. dt's libraw default supplies
+        # white-balance and input-color matrix.
+        if args.dcp is not None:
+            sys.stderr.write(
+                "info: --engine algorithmic ignores --dcp; "
+                "DCP-derived emissions are suppressed.\n"
+            )
+        sys.stderr.write(
+            "info: --engine algorithmic — DCP-derived modules suppressed "
+            "(temperature/basecurve/lut3d). dt's libraw defaults handle "
+            "white-balance and input-color.\n"
+        )
+    elif args.dcp is not None:
         # Explicit --dcp path. Accepts either Adobe `.dcp` or lrt-cinema's
         # extracted `.npz` format; dispatch by extension.
         try:
@@ -449,7 +481,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
             f"{0 if dcp_profile.profile_tone_curve is None else dcp_profile.profile_tone_curve.shape[0]})"
             f"\n"
         )
-    else:
+    elif args.engine != "algorithmic":
         sys.stderr.write(
             "warning: no DCP supplied or detected; render will diverge from LR's "
             "by the DCP-application gap. See `lrt-cinema render --help`.\n"
