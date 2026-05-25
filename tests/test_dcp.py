@@ -880,3 +880,47 @@ def test_parse_dcp_rejects_oversized_count_field(tmp_path):
     bad.write_bytes(header + ifd)
     with pytest.raises(ValueError, match="exceeds the .* cap|malformed"):
         parse_dcp(bad)
+
+
+def test_xy_to_camera_neutral_matches_colour_hdri_reference():
+    """Lock in equivalence with colour-hdri's canonical DNG-SDK port.
+
+    Inputs taken verbatim from `colour_hdri.models.dng.xy_to_camera_neutral`
+    docstring example (BSD-3, Mansencal et al.). Expected output
+    [0.413070, 1.000000, 0.646465] also from that docstring. The
+    colour-hdri reference is the authoritative Python port of DNG SDK
+    1.7.1's `dng_color_spec::SetWhiteXY`.
+
+    Historical note: audit #19 flagged this function's `for _ in range(10)`
+    loop as a broken "iterative solver." The output was always correct
+    (matched this reference exactly) because the loop returned on iteration
+    1 — and the single-pass form is mathematically equivalent for DCPs
+    with identity CameraCalibration matrices and unit AnalogBalance (i.e.
+    every Adobe DCP). The fix removed the dead loop + clarified the
+    docstring; this test locks in the empirical equivalence so future
+    edits can't regress it."""
+    m_color_matrix_1 = np.array([
+        [0.5309, -0.0229, -0.0336],
+        [-0.6241, 1.3265, 0.3337],
+        [-0.0817, 0.1215, 0.6664],
+    ])
+    m_color_matrix_2 = np.array([
+        [0.4716, 0.0603, -0.0830],
+        [-0.7798, 1.5474, 0.2480],
+        [-0.1496, 0.1937, 0.6651],
+    ])
+    prof = DCPProfile(
+        color_matrix_1=m_color_matrix_1,
+        color_matrix_2=m_color_matrix_2,
+        kelvin_1=2850.0,
+        kelvin_2=6500.0,
+    )
+    # xy from colour-hdri docstring; normalize by green to match its
+    # output convention (xy_to_camera_neutral / camera_neutral[1]).
+    result = xy_to_camera_neutral(prof, 0.32816244, 0.34698169)
+    result = result / result[1]
+    expected = np.array([0.413070, 1.0, 0.646465])
+    np.testing.assert_allclose(result, expected, atol=1e-5, err_msg=(
+        f"xy_to_camera_neutral diverged from colour-hdri reference: "
+        f"got {result.tolist()}, expected {expected.tolist()}"
+    ))
