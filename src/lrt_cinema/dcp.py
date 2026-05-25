@@ -57,7 +57,7 @@ import struct
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, TextIO
 
 import numpy as np
 
@@ -1200,3 +1200,128 @@ def auto_detect_profile(
     if dcp_path is not None:
         return parse_dcp(dcp_path), dcp_path
     return None
+
+
+# ---------------------------------------------------------------------------
+# CLI-facing profile resolution — extracted from cli._cmd_render
+# ---------------------------------------------------------------------------
+
+class ProfileResolutionError(ValueError):
+    """Raised when an explicit --dcp path can't be loaded or is malformed.
+
+    Caller (cli.py) catches this and returns exit code 2 with the message.
+    Auto-detect failures do NOT raise — they return None and the caller
+    falls back to the no-DCP code path.
+    """
+
+
+def resolve_profile(
+    *,
+    engine: str,
+    dcp_path: Path | None,
+    auto_dcp: bool,
+    first_raw_path: Path | None,
+    stream: TextIO,
+) -> DCPProfile | None:
+    """Resolve the DCPProfile (if any) per `lrt-cinema render` flags.
+
+    Decision tree (matches the prior in-line `_cmd_render` block):
+
+      * `engine == "algorithmic"` → returns None, suppresses all DCP-
+        derived emission downstream. Logs that `--dcp` is ignored if
+        the user passed it (a common mistake).
+      * `dcp_path is not None` → explicit `--dcp` load. Accepts either
+        Adobe `.dcp` or lrt-cinema's `.npz` extracted format; dispatches
+        by extension. Raises `ProfileResolutionError` on parse failure.
+      * `auto_dcp` (default true) and a `first_raw_path` is available →
+        auto-detect by reading the RAW's EXIF Make/Model. Returns None
+        and logs an actionable message if no profile is found (Canon CR3
+        non-TIFF case, or no DCP available for the camera).
+      * `engine == "dcp"` and no DCP resolved → logs the "no DCP / render
+        will diverge from LR" warning.
+
+    Writes all info / warning lines to `stream` (stderr in production).
+    Returning vs raising is the recoverability split: a user-supplied
+    --dcp that doesn't parse is a hard error (return 2); auto-detect
+    missing a profile is a soft fallback.
+
+    Parameters: keyword-only to keep the call site self-documenting and
+    avoid breaking changes if order shifts.
+    """
+    if engine == "algorithmic":
+        # Algorithmic engine: deliberately skip DCP loading/auto-detect.
+        # Returns None which gates ALL DCP-derived module emissions
+        # downstream (temperature, basecurve, lut3d). LR-authored ops
+        # (exposure, blacks, tonecurve, sharpen, colorbalancergb) still
+        # emit. dt's libraw default supplies white-balance and input-color
+        # matrix.
+        if dcp_path is not None:
+            stream.write(
+                "info: --engine algorithmic ignores --dcp; "
+                "DCP-derived emissions are suppressed.\n"
+            )
+        stream.write(
+            "info: --engine algorithmic — DCP-derived modules suppressed "
+            "(temperature/basecurve/lut3d). dt's libraw defaults handle "
+            "white-balance and input-color.\n"
+        )
+        return None
+
+    profile: DCPProfile | None = None
+    if dcp_path is not None:
+        # Explicit --dcp path. Accepts either Adobe `.dcp` or lrt-cinema's
+        # extracted `.npz` format; dispatch by extension.
+        try:
+            if dcp_path.suffix.lower() == ".npz":
+                profile = load_profile(dcp_path)
+                source_kind = "extracted .npz"
+            else:
+                profile = parse_dcp(dcp_path)
+                source_kind = "Adobe .dcp"
+        except (FileNotFoundError, ValueError, struct.error) as exc:
+            raise ProfileResolutionError(
+                f"--dcp: malformed or unreadable: {exc}"
+            ) from exc
+        stream.write(f"info: loaded DCP ({source_kind}): {dcp_path}\n")
+    elif auto_dcp and first_raw_path is not None:
+        info = read_raw_make_model(first_raw_path)
+        if info is None:
+            stream.write(
+                f"info: {first_raw_path.name} is not a TIFF-shaped RAW "
+                f"(Canon CR3 or unknown format); auto-detect skipped. "
+                f"Pass --dcp <path> to use a DCP-aware render.\n"
+            )
+        else:
+            make, model = info
+            result = auto_detect_profile(first_raw_path)
+            if result is not None:
+                profile, src_path = result
+                stream.write(
+                    f"info: auto-detected profile for {make} {model}: {src_path}\n"
+                )
+            else:
+                stream.write(
+                    f"info: no profile found for {make} {model}. Either:\n"
+                    f"  * run `tools/extract_dcp_library.py` against an Adobe DNG "
+                    f"Converter install to populate ~/.config/lrt-cinema/profiles/, or\n"
+                    f"  * clone a sister `lrt-cinema-profiles` repo and set "
+                    f"$LRT_CINEMA_PROFILES to its path, or\n"
+                    f"  * pass --dcp <path> explicitly, or\n"
+                    f"  * pass --no-auto-dcp to suppress this message.\n"
+                )
+
+    if profile is not None:
+        stream.write(
+            f"info: loaded DCP {profile.profile_name!r} "
+            f"(baseline_exposure={profile.baseline_exposure:+.2f} EV, "
+            f"tone_curve_pts="
+            f"{0 if profile.profile_tone_curve is None else profile.profile_tone_curve.shape[0]})"
+            f"\n"
+        )
+    else:
+        stream.write(
+            "warning: no DCP supplied or detected; render will diverge from LR's "
+            "by the DCP-application gap. See `lrt-cinema render --help`.\n"
+        )
+
+    return profile

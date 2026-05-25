@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import argparse
-import struct
 import sys
 from pathlib import Path
 
 from lrt_cinema import __version__
-from lrt_cinema.dcp import auto_detect_profile, parse_dcp, read_raw_make_model
+from lrt_cinema.dcp import ProfileResolutionError, resolve_profile
 from lrt_cinema.interpolation import (
     apply_deflicker,
     apply_lrt_mask_offsets,
@@ -355,80 +354,18 @@ def _cmd_render(args: argparse.Namespace) -> int:
         sys.stderr.write(f"error: {exc}\n")
         return 2
 
-    dcp_profile = None
-    if args.engine == "algorithmic":
-        # Algorithmic engine: deliberately skip DCP loading/auto-detect.
-        # Sets dcp_profile=None which gates ALL DCP-derived module
-        # emissions downstream (temperature, basecurve, lut3d). LR-
-        # authored ops (exposure, blacks, tonecurve, sharpen,
-        # colorbalancergb) still emit. dt's libraw default supplies
-        # white-balance and input-color matrix.
-        if args.dcp is not None:
-            sys.stderr.write(
-                "info: --engine algorithmic ignores --dcp; "
-                "DCP-derived emissions are suppressed.\n"
-            )
-        sys.stderr.write(
-            "info: --engine algorithmic — DCP-derived modules suppressed "
-            "(temperature/basecurve/lut3d). dt's libraw defaults handle "
-            "white-balance and input-color.\n"
+    first_raw = args.input / seq.source_frames[0] if seq.source_frames else None
+    try:
+        dcp_profile = resolve_profile(
+            engine=args.engine,
+            dcp_path=args.dcp,
+            auto_dcp=args.auto_dcp,
+            first_raw_path=first_raw,
+            stream=sys.stderr,
         )
-    elif args.dcp is not None:
-        # Explicit --dcp path. Accepts either Adobe `.dcp` or lrt-cinema's
-        # extracted `.npz` format; dispatch by extension.
-        try:
-            if args.dcp.suffix.lower() == ".npz":
-                from lrt_cinema.dcp import load_profile
-                dcp_profile = load_profile(args.dcp)
-                source_kind = "extracted .npz"
-            else:
-                dcp_profile = parse_dcp(args.dcp)
-                source_kind = "Adobe .dcp"
-        except (FileNotFoundError, ValueError, struct.error) as exc:
-            sys.stderr.write(f"error: --dcp: malformed or unreadable: {exc}\n")
-            return 2
-        sys.stderr.write(f"info: loaded DCP ({source_kind}): {args.dcp}\n")
-    elif args.auto_dcp and seq.source_frames:
-        first_raw = args.input / seq.source_frames[0]
-        info = read_raw_make_model(first_raw)
-        if info is None:
-            sys.stderr.write(
-                f"info: {first_raw.name} is not a TIFF-shaped RAW (Canon CR3 or "
-                f"unknown format); auto-detect skipped. Pass --dcp <path> to use "
-                f"a DCP-aware render.\n"
-            )
-        else:
-            make, model = info
-            result = auto_detect_profile(first_raw)
-            if result is not None:
-                dcp_profile, src_path = result
-                sys.stderr.write(
-                    f"info: auto-detected profile for {make} {model}: {src_path}\n"
-                )
-            else:
-                sys.stderr.write(
-                    f"info: no profile found for {make} {model}. Either:\n"
-                    f"  * run `tools/extract_dcp_library.py` against an Adobe DNG "
-                    f"Converter install to populate ~/.config/lrt-cinema/profiles/, or\n"
-                    f"  * clone a sister `lrt-cinema-profiles` repo and set "
-                    f"$LRT_CINEMA_PROFILES to its path, or\n"
-                    f"  * pass --dcp <path> explicitly, or\n"
-                    f"  * pass --no-auto-dcp to suppress this message.\n"
-                )
-
-    if dcp_profile is not None:
-        sys.stderr.write(
-            f"info: loaded DCP {dcp_profile.profile_name!r} "
-            f"(baseline_exposure={dcp_profile.baseline_exposure:+.2f} EV, "
-            f"tone_curve_pts="
-            f"{0 if dcp_profile.profile_tone_curve is None else dcp_profile.profile_tone_curve.shape[0]})"
-            f"\n"
-        )
-    elif args.engine != "algorithmic":
-        sys.stderr.write(
-            "warning: no DCP supplied or detected; render will diverge from LR's "
-            "by the DCP-application gap. See `lrt-cinema render --help`.\n"
-        )
+    except ProfileResolutionError as exc:
+        sys.stderr.write(f"error: {exc}\n")
+        return 2
 
     # Audit MEDIUM-6: warn at render-time about parsed fields that don't
     # reach the rendered output. inspect already prints this; render
