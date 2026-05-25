@@ -364,10 +364,14 @@ def _encode_lut3d_params(
         + c_clut_buf
         + lutname_buf
     )
-    assert len(payload) == 12940, (
-        f"lut3d params struct size mismatch: got {len(payload)}, expected 12940. "
-        f"dt's reader will silently substitute defaults — see ADVERSARIAL_AUDIT."
-    )
+    if len(payload) != 12940:
+        # Was assert (disabled with python -O). dt's silent-substitution
+        # path is exactly what the audit was designed to close; a guard
+        # that vanishes in optimized builds defeats the purpose.
+        raise ValueError(
+            f"lut3d params struct size mismatch: got {len(payload)}, expected 12940. "
+            f"dt's reader will silently substitute defaults — see ADVERSARIAL_AUDIT."
+        )
     return payload.hex()
 
 
@@ -434,11 +438,12 @@ def _encode_colorbalancergb_params(
         # saturation_formula = DT_COLORBALANCE_SATURATION_DTUCS = 1
         1,
     )
-    assert len(payload) == 132, (
-        f"colorbalancergb params struct size mismatch: got {len(payload)}, "
-        f"expected 132. dt's reader will silently substitute defaults — "
-        f"see ADVERSARIAL_AUDIT_2026-05-23 HIGH-1."
-    )
+    if len(payload) != 132:
+        raise ValueError(
+            f"colorbalancergb params struct size mismatch: got {len(payload)}, "
+            f"expected 132. dt's reader will silently substitute defaults — "
+            f"see ADVERSARIAL_AUDIT_2026-05-23 HIGH-1."
+        )
     return payload.hex()
 
 
@@ -469,9 +474,10 @@ def _encode_sharpen_params(
         float(amount),
         float(threshold),
     )
-    assert len(payload) == 12, (
-        f"sharpen params struct size mismatch: got {len(payload)}, expected 12"
-    )
+    if len(payload) != 12:
+        raise ValueError(
+            f"sharpen params struct size mismatch: got {len(payload)}, expected 12"
+        )
     return payload.hex()
 
 
@@ -647,11 +653,12 @@ def _encode_tonecurve_params(curve: list[TonePoint]) -> str:
     # the L curve lifts luminance. dt's init() default.
     payload += struct.pack("<i", _TONECURVE_PRESERVE_AVERAGE)
 
-    assert len(payload) == 520, (
-        f"tonecurve params struct size mismatch: got {len(payload)}, "
-        f"expected 520. dt's reader will silently substitute defaults — "
-        f"see ADVERSARIAL_AUDIT_2026-05-23."
-    )
+    if len(payload) != 520:
+        raise ValueError(
+            f"tonecurve params struct size mismatch: got {len(payload)}, "
+            f"expected 520. dt's reader will silently substitute defaults — "
+            f"see ADVERSARIAL_AUDIT_2026-05-23."
+        )
     return payload.hex()
 
 
@@ -737,11 +744,12 @@ def _encode_basecurve_params(
     # tone-curve application. See _BASECURVE_PRESERVE_MAX docstring.
     payload += struct.pack("<i", preserve_colors)
 
-    assert len(payload) == 520, (
-        f"basecurve params struct size mismatch: got {len(payload)}, "
-        f"expected 520. dt's reader will silently substitute defaults — "
-        f"see ADVERSARIAL_AUDIT_2026-05-23."
-    )
+    if len(payload) != 520:
+        raise ValueError(
+            f"basecurve params struct size mismatch: got {len(payload)}, "
+            f"expected 520. dt's reader will silently substitute defaults — "
+            f"see ADVERSARIAL_AUDIT_2026-05-23."
+        )
     return payload.hex()
 
 
