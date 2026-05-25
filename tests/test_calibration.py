@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import struct
+from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
@@ -196,13 +197,12 @@ def test_auto_detect_calibration_returns_none_on_non_tiff_raw(tmp_path):
 
 
 def test_calibrate_camera_tool_writes_npz_with_explicit_matrix(tmp_path):
-    """CLI tool stub: --camera + --matrix should write a .npz under --output."""
+    """CLI tool: --camera + --matrix should write a .npz under --output."""
     from tools.calibrate_camera import main as tool_main
     out_dir = tmp_path / "cal"
     rc = tool_main([
         "--camera", "Nikon D750",
         "--matrix", "1.05,0,0, 0,1.04,0, 0,0,1.10",
-        "--tier", "0",
         "--source", "test fixture",
         "--output", str(out_dir),
     ])
@@ -210,7 +210,7 @@ def test_calibrate_camera_tool_writes_npz_with_explicit_matrix(tmp_path):
     written = out_dir / "Nikon D750.npz"
     assert written.is_file()
     loaded = load_calibration(written)
-    assert loaded.tier == 0
+    assert loaded.tier == 0  # explicit-matrix mode always records tier=0
     assert loaded.source == "test fixture"
     expected = np.array(
         [[1.05, 0, 0], [0, 1.04, 0], [0, 0, 1.10]],
@@ -236,6 +236,14 @@ def test_calibrate_camera_tool_camera_required_or_raw_required(capsys):
     # Neither --camera nor --raw → argparse error
     with pytest.raises(SystemExit) as exc:
         tool_main(["--matrix", "1,0,0,0,1,0,0,0,1"])
+    assert exc.value.code != 0
+
+
+def test_calibrate_camera_tool_matrix_or_fit_tier_required(capsys):
+    from tools.calibrate_camera import main as tool_main
+    # --camera supplied but no --matrix or --fit-tier → argparse error
+    with pytest.raises(SystemExit) as exc:
+        tool_main(["--camera", "Nikon D750"])
     assert exc.value.code != 0
 
 
@@ -325,3 +333,196 @@ def test_render_does_NOT_auto_detect_calibration_under_dcp_engine(tmp_path, caps
     assert rc == 0
     err = capsys.readouterr().err
     assert "auto-detected calibration" not in err
+
+
+# ---------------------------------------------------------------------------
+# Tier 2 math primitives
+# ---------------------------------------------------------------------------
+
+def test_colorchecker_xyz_under_d55_returns_24_patches():
+    """24 patches in row-major ColorChecker order, all positive XYZ."""
+    from lrt_cinema.calibration import (
+        COLORCHECKER_PATCH_NAMES,
+        colorchecker_xyz_under_illuminant,
+    )
+    xyz = colorchecker_xyz_under_illuminant("D55")
+    assert xyz.shape == (24, 3)
+    assert (xyz >= 0).all()
+    assert len(COLORCHECKER_PATCH_NAMES) == 24
+    # White patch (#18, "white 9.5") must be brightest; black patch (#23)
+    # darkest. Canonical ColorChecker ordering check.
+    assert xyz[18].sum() > xyz[23].sum()
+    # White Y should be near 0.9 (the "white" patch is ~90% reflectance).
+    assert 0.7 < xyz[18, 1] < 1.0
+
+
+def test_colorchecker_xyz_different_illuminants_differ():
+    """D50 vs D65 XYZ values must differ — confirms illuminant routing
+    isn't dropped."""
+    from lrt_cinema.calibration import colorchecker_xyz_under_illuminant
+    d50 = colorchecker_xyz_under_illuminant("D50")
+    d65 = colorchecker_xyz_under_illuminant("D65")
+    assert not np.allclose(d50, d65)
+
+
+def test_fit_calibration_matrix_recovers_known_matrix():
+    """Given measured = known_M @ target, fitter must recover known_M."""
+    from lrt_cinema.calibration import fit_calibration_matrix
+    rng = np.random.default_rng(42)
+    target = rng.uniform(0.05, 0.95, size=(24, 3)).astype(np.float32)
+    known_M = np.array(
+        [[1.10, -0.05, -0.02],
+         [-0.04, 1.05, -0.01],
+         [-0.03, -0.02, 1.15]],
+        dtype=np.float32,
+    )
+    measured = (known_M @ target.T).T
+    fitted = fit_calibration_matrix(measured, target)
+    # Should recover the INVERSE of known_M (fitted @ measured → target).
+    expected_inverse = np.linalg.inv(known_M)
+    np.testing.assert_allclose(fitted, expected_inverse, atol=1e-4)
+
+
+def test_fit_calibration_matrix_identity_passes_through():
+    """When measured == target, fitted matrix is identity."""
+    from lrt_cinema.calibration import fit_calibration_matrix
+    rng = np.random.default_rng(42)
+    same = rng.uniform(0.05, 0.95, size=(24, 3)).astype(np.float32)
+    fitted = fit_calibration_matrix(same, same)
+    np.testing.assert_allclose(fitted, np.eye(3), atol=1e-5)
+
+
+def test_fit_calibration_matrix_rejects_bad_shape():
+    from lrt_cinema.calibration import fit_calibration_matrix
+    with pytest.raises(ValueError, match="shape mismatch"):
+        fit_calibration_matrix(np.zeros((10, 3)), np.zeros((10, 4)))
+    with pytest.raises(ValueError, match=r"must be \(N, 3\)"):
+        fit_calibration_matrix(np.zeros((10,)), np.zeros((10,)))
+    with pytest.raises(ValueError, match="need at least 3 patches"):
+        fit_calibration_matrix(np.zeros((2, 3)), np.zeros((2, 3)))
+
+
+def test_sample_patches_from_tiff_picks_inner_region(tmp_path):
+    """Plant a known-color rectangle in a TIFF, verify the sampler
+    returns the mean of the inner pixels."""
+    try:
+        import tifffile
+    except ImportError:
+        pytest.skip("tifffile not installed")
+    from lrt_cinema.calibration import sample_patches_from_tiff
+    # 100×100 uint16 RGB image. Patch 1 covers (10,10)-(50,50) filled
+    # with (10000, 20000, 30000); rest is zero.
+    img = np.zeros((100, 100, 3), dtype=np.uint16)
+    img[10:50, 10:50, 0] = 10000
+    img[10:50, 10:50, 1] = 20000
+    img[10:50, 10:50, 2] = 30000
+    tif_path = tmp_path / "test.tif"
+    tifffile.imwrite(str(tif_path), img)
+    # Sampling with patch_size=40 at origin (10, 10), margin 0.25 →
+    # inner region (20, 20)-(40, 40), which is filled with our color.
+    samples = sample_patches_from_tiff(
+        tif_path, [(10, 10)], patch_size=40, margin_fraction=0.25,
+    )
+    assert samples.shape == (1, 3)
+    # uint16 max=65535; normalized to [0, 1]:
+    expected = np.array([10000, 20000, 30000], dtype=np.float32) / 65535.0
+    np.testing.assert_allclose(samples[0], expected, atol=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# Tier 2 end-to-end integration via lrt-cinema render subprocess
+# Gated on dt-cli + colour-science + bundled D750 .npz being available.
+# ---------------------------------------------------------------------------
+
+import shutil  # noqa: E402
+
+_BUNDLED_D750 = (
+    Path(__file__).parent / "fixtures" / "dcp_data"
+    / "Nikon D750 Camera Standard.npz"
+)
+_TIER2_SKIP: list[str] = []
+if shutil.which("darktable-cli") is None:
+    _TIER2_SKIP.append("darktable-cli not on PATH")
+if not _BUNDLED_D750.is_file():
+    _TIER2_SKIP.append(f"bundled D750 .npz missing at {_BUNDLED_D750}")
+try:
+    import colour  # noqa: F401
+except ImportError:
+    _TIER2_SKIP.append("colour-science not installed")
+try:
+    import tifffile  # noqa: F401
+except ImportError:
+    _TIER2_SKIP.append("tifffile not installed")
+if os.environ.get("DT_INTEGRATION_TEST") == "skip":
+    _TIER2_SKIP.append("DT_INTEGRATION_TEST=skip")
+
+
+@pytest.mark.skipif(bool(_TIER2_SKIP), reason="; ".join(_TIER2_SKIP) or "")
+def test_tier2_fit_end_to_end_against_bundled_d750():
+    """End-to-end Tier 2 fit: synthesize chart → write DNG → dt-cli ×2
+    → sample patches → fit matrix → confirm post-fit ΔE2000 is bounded.
+
+    This is the canonical "does the pipeline actually work" test for
+    Phase 2b. Pre-fit ΔE2000 (algorithmic-only output vs DCP-rendered
+    target) is typically 5-15 on real cameras; post-fit should be < 4
+    on average for a 3×3 matrix fit. The bundled Nikon D750 .npz is
+    the dev camera; this test locks in a per-camera expected envelope
+    so future regressions on the math (synthesis, dt-cli flags, fit
+    solver) are caught."""
+    from lrt_cinema.calibration import (
+        fit_tier2_via_dt_cli_roundtrip,
+        load_calibration,
+    )
+    from lrt_cinema.dcp import load_profile
+
+    dcp_profile = load_profile(_BUNDLED_D750)
+    result = fit_tier2_via_dt_cli_roundtrip(
+        dcp_profile,
+        camera_make="NIKON CORPORATION",
+        camera_model="NIKON D750",
+        unique_camera_model="Nikon D750",
+        illuminant="D55",
+    )
+    # Sanity: matrix is 3x3, finite, has reasonable magnitude.
+    assert result.matrix.shape == (3, 3)
+    assert np.isfinite(result.matrix).all()
+    assert (np.abs(result.matrix) < 10).all(), (
+        f"matrix has wild magnitudes: {result.matrix}"
+    )
+    # Envelope check. A 3×3 fit captures ONLY the linear portion of the
+    # DCP transformation. The bundled D750 .npz has a 90×16×16 LookTable
+    # (non-linear hue/sat/val shifts) plus a ProfileToneCurve plus
+    # potential HSM contributions — none of which a 3×3 can recover.
+    # Empirically the fit lands around ΔE2000 mean ~13 on this camera
+    # (vs ~30+ without any correction). Closing the residual gap requires
+    # 3D LUT fitting (v0.5+ work — channelmixerrgb is not the right
+    # emission for that).
+    #
+    # The 20.0 bound is generous-but-meaningful: a regression in the fit
+    # math (wrong synthesis, wrong sampling, wrong patch order) typically
+    # blows past this; a healthy fit stays well under it.
+    assert result.delta_e2000_mean < 20.0, (
+        f"Tier 2 post-fit ΔE2000 mean {result.delta_e2000_mean:.2f} > 20.0; "
+        f"likely a fit-math regression (synthesis, dt-cli flags, sampling, "
+        f"or solver). Baseline expected ~13 on the bundled D750 .npz."
+    )
+    # Round-trip via save_calibration / load_calibration to confirm the
+    # full storage path works on a real fit result.
+
+    import tempfile as _tempfile
+    with _tempfile.TemporaryDirectory() as td:
+        out = Path(td) / "Nikon D750.npz"
+        save_calibration(
+            Calibration(
+                camera_label="Nikon D750",
+                matrix=result.matrix,
+                tier=2,
+                source=f"Tier 2 fit @ D55, ΔE2000 mean {result.delta_e2000_mean:.2f}",
+                delta_e2000_mean=result.delta_e2000_mean,
+                delta_e2000_max=result.delta_e2000_max,
+            ),
+            out,
+        )
+        reloaded = load_calibration(out)
+        np.testing.assert_allclose(reloaded.matrix, result.matrix, rtol=1e-5)
+        assert reloaded.tier == 2
