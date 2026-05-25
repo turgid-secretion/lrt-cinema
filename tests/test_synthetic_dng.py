@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from lrt_cinema.dcp import HsvCube, interpolate_color_matrix, load_profile
+from lrt_cinema.dcp import interpolate_color_matrix, load_profile
 from lrt_cinema.synthetic_dng import (
     CFA_RGGB,
     PatchLayout,

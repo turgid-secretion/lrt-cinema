@@ -319,10 +319,10 @@ def write_calibration_dng(
         white_camera_rgb = patches_camera_rgb.mean(axis=0)
         # Normalize so green = 1, then invert (AsShotNeutral encodes
         # the camera's response to neutral — multipliers = 1/asn).
-        if white_camera_rgb[1] != 0:
-            asn = white_camera_rgb / white_camera_rgb[1]
-        else:
-            asn = np.ones(3)
+        asn = (
+            white_camera_rgb / white_camera_rgb[1]
+            if white_camera_rgb[1] != 0 else np.ones(3)
+        )
         as_shot_neutral = (float(asn[0]), float(asn[1]), float(asn[2]))
 
     # Pack AsShotNeutral as 3 RATIONAL entries (num/den at 10000 scale).
