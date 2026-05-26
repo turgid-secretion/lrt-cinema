@@ -1,5 +1,16 @@
 # v0.6 Impact Audit: Repo state assessment after refined Shape α decision
 
+> **SUPERSEDED 2026-05-26 by
+> [v06-simplification-plan.md](v06-simplification-plan.md).** The first
+> pass below preserved too much per-camera complexity and read the v0.6
+> decision as a renaming exercise rather than a simplification mandate.
+> Three load-bearing findings from this pass remain valid and are carried
+> forward into the simplification plan: (1) `dcp.load_profile` rejects
+> A′-shaped `.npz`; (2) `--apply-custom-presets 0` may suppress dt's
+> basecurve ACR3 baseline that A′'s ceiling implicitly assumes; (3) the
+> decision's "ColorMatrix from EXIF" claim is only true for DNG.
+> Everything else in this doc is overtaken by the simplification plan.
+
 **Status:** Audit (advisory) — 2026-05-26
 **Audits against:** [docs/research/color-correction/decision.md](color-correction/decision.md)
 **Scope:** every committed file in `src/`, `tools/`, `tests/`, `docs/`,
