@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Measure A' empirical ΔE ceiling across the Adobe Standard catalog.
 
-Companion to `09_dcp_variance.md` (Q1 variance measurement). Where Q1 asked
-"how much do per-camera DCPs vary?", this script asks "given that variance,
-how close can a SHARED transform come to matching each camera's Adobe
-Standard render?"
+Companion to M1 (DCP variance measurement; `tools/measure_dcp_variance.py`).
+Where M1 asked "how much do per-camera DCPs vary?", this script asks "given
+that variance, how close can a SHARED transform come to matching each
+camera's Adobe Standard render?"
 
-Three coupled questions (per `docs/research/.../09e_a_prime_ceiling.md`):
+Three coupled questions (per `docs/research/color-correction/measurements.md` M2):
 
   Q-A: Achievable ΔE2000 when replacing per-camera HSM/LookTable/ToneCurve
        with a single shared transform — the A' ceiling.
@@ -69,7 +69,7 @@ A' candidates measured
   identity       : do nothing. Baseline showing the gap if A' ships nothing.
   median-HSV     : median over (90,30,1) HSMs + median over (36,8,16)
                    LookTables. Compressed shape — current recommendation
-                   in 11_recommendation.md.
+                   in docs/research/color-correction/decision.md.
   median-look    : LookTable only (drop HSM). Tests Q-C.
   median-hsm     : HSM only (drop LookTable). Tests Q-C.
   output-avg-33  : 33³ direct-RGB cube; at each grid cell, mean of

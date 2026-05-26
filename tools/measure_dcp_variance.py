@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure Adobe DCP catalog variance to inform A' viability (Q1 from 08_search_framing.md).
+"""Measure Adobe DCP catalog variance to inform A' viability (M1 from docs/research/color-correction/measurements.md).
 
 Hypothesis: a meaningful fraction of "Adobe color" is *not* per-camera-specific
 — the per-camera variance in HueSatMap / LookTable / ProfileToneCurve /
@@ -19,7 +19,7 @@ Methodology:
         - LookTable (same)
     5. Output: distribution stats + classification thresholds.
 
-Thresholds (from 08_search_framing.md):
+Thresholds (from docs/research/color-correction/option-space.md candidate A'):
     - Low variance (mean cross-camera ΔE < ~2): A' viable
     - Medium (~2–5): A' partially viable (per-camera-family)
     - High (> ~5): A' not viable; per-camera essential
