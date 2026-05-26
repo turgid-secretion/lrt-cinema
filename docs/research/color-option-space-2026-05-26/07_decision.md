@@ -1,331 +1,359 @@
-# Decision: ship current state, reframe PR #15, document the multi-stage workflow
+# Color-correction option space: decision input
 
-*Fresh-context chip's decision deliverable for the color-correction bind.
-Builds on `05_synthesis.md` (option-space technical math) and
-`06_framing_shift.md` (user's control-loop reframing). Two new empirical
-inputs land here: the LRT preview-cache behavior test, and the user's
-grading-workflow answer.*
+*Fresh-context chip's deliverable for the bind described in
+`06_framing_shift.md`. Two new inputs land here: an empirical
+cache-behavior test on the user's working LRT 7.5.3 sequence, and a
+revised analysis of where the control loop closes (and does not) in
+the multi-stage pipeline. Recommendations are conditional on
+workflow target, not collapsed on a single user's stated practice.*
 
-## TL;DR
+## What the system does, in plain terms
 
-1. **Empirical (cache test):** Exit 2 (substitute our JPEGs into
-   `.lrt/visual/` as LRT's preview source) is **dead.** LRT live-computes
-   the editor-pane preview from RAW + XMP via its bundled Adobe DNG
-   Converter the moment the user touches a slider, and overwrites the
-   on-disk cache as a side effect. The on-disk JPEG is the *output* of
-   LRT's preview pipeline, not the *input* to the editor pane.
+The pipeline has three stages and four artifacts:
 
-2. **Workflow (user answer):** LRT is the first-pass tool (exposure
-   ramps, transitions, deflicker, Holy Grail). Final color decisions
-   happen in Resolve against the lrt-cinema-rendered linear TIFF.
+```
+camera RAW (.NEF/.CR3/...) 
+   ├─→ LRTimelapse  ─→  per-frame XMP sidecars (LR-shape CRS schema)
+   │                    .lrt/visual/*.lrtpreview JPEGs (LRT's preview cache)
+   │
+   ├─→ lrt-cinema  ─→   16-bit linear Rec.2020 TIFF (or ACES OpenEXR, or AgX-tonemapped TIFF)
+   │
+   └─→ colorist (Resolve / Baselight / Nuke / ...)
+                ─→   deliverable encode (ProRes / DPX / H.265 / ...)
+```
 
-3. **Recommendation:** ship the current state. The "broken control loop"
-   the framing-shift doc described is real, but it closes one stage
-   downstream — at Resolve, not in LRT. Retire PR #15 (plain 3×3
-   chasing-Adobe fit). Keep #11/12/13/14. Reframe the project's
-   documentation around the actual two-stage workflow.
+Three reference points exist, each backed by a different rendering
+pipeline:
 
-4. **Engineering output:** ~1 PR for SCOPE/README rewording + retiring
-   PR #15. Optional follow-up: a colour-science root-polynomial drop-in
-   for ColorChecker-relative correctness (improves the *absolute*
-   colorimetric quality of the linear TIFF Resolve consumes; not
-   load-bearing for the workflow narrative).
-
-## The cache-behavior test (verbatim record)
-
-**Setup.** Backed up
-`/Volumes/SanDisk Extreme Pro 55AF Media/Projects/2026 international faire
-timelapse/.lrt/visual/DSC_4053.lrtpreview` (SHA-256 `3a31bcdb…`). Wrote
-a 1024×684 baseline JPEG marker (blue field, `CACHE TEST` text overlay)
-to the same path (SHA `a8a61b6e…`). LRT not running.
-
-**Test 1: does LRT respect external JPEGs in `.lrt/visual/` during
-passive navigation?**
-
-- Action: user opened LRT, navigated to keyframe DSC_4053, did NOT click
-  Visual Previews / Save Metadata / any editing button.
-- Observation: user saw the blue marker.
-- File state post-test: SHA unchanged, mtime unchanged.
-- **Conclusion:** LRT does NOT regenerate the cache on passive
-  navigation. The editor pane displays the on-disk JPEG when the user
-  is not actively editing.
-
-**Test 2: does LRT regenerate the cache when the user edits or saves?**
-
-- Action: user moved the Exposure slider +0.5 on the keyframe, then
-  clicked Save Metadata.
-- Observation: user reported "Preview updates live to show the
-  brightened scene" — the moment the slider moved, the marker was
-  replaced in-pane by a live-computed Adobe-pipeline preview of the new
-  exposure. User: *"Marker is gone after hitting save — but it was
-  already gone after altering exposure."*
-- File state post-test: SHA changed to `783401ab…`; size 43408 → 40136;
-  mtime advanced ~3 minutes. **LRT overwrote our cached JPEG with its
-  own Adobe-pipeline render.**
-- **Conclusion:** the moment the user touches the editor, LRT routes
-  preview generation through its bundled Adobe DNG Converter pipeline
-  and writes the result back to disk. Our substituted JPEG only
-  affects the *pre-edit* state — the timeline thumbnails, the
-  initial scrub-through, and the pixel luminance LRT's Visual
-  Deflicker analyzes.
-
-**Implications:**
-
-| Use the cache JPEG controls? | Yes / No |
-|---|---|
-| Initial timeline scrub-through (pre-edit) | Yes |
-| "Pink curve" luminance visualization | Yes (until next regen) |
-| Visual Deflicker input | Yes (until next regen) |
-| The live preview the user grades against | **No** |
-| The post-edit preview after Save Metadata | No (LRT just overwrote it) |
-
-**The grading control loop is in the live preview, not in the cache
-JPEG.** And the live preview is hard-wired to Adobe via LRT's bundled
-DNG Converter. There is no documented or empirical hook to redirect
-it without forking LRT.
-
-`OBSERVED 2026-05-26.` Reproducer: replace any `.lrt/visual/*.lrtpreview`
-with a marker JPEG, open LRT, touch any develop slider, watch the file
-on disk get rewritten with LRT's render.
-
-## The workflow discriminator (user answer)
-
-> *"LRT first-pass; Resolve does final color."*
-
-This answer changes the whole framing. The "broken control loop"
-framing assumes the user grades final color **in LRT**, against the LRT
-preview. If LRT is the grade tool, the loop must close — Exit 1
-(chase Adobe) is then the only real path, since Exit 2 is dead.
-
-But the user grades final color **in Resolve**, against the
-lrt-cinema-rendered linear TIFF. The loop **closes one stage
-downstream**: the user looks at the dt-rendered TIFF in Resolve and
-makes color decisions there, against what they will deliver. LRT's
-role is timelapse-mechanical (transitions, deflicker, exposure ramps,
-Holy Grail) — domains where Adobe→dt translation is well-defined and
-the residual ΔE is small (~6 ΔE pre-affine, ~2 ΔE post-affine on the
-DSC_4053 baseline per [V04_PLAN.md](../../V04_PLAN.md), broadcast-acceptable
-after a single Resolve grade adjustment).
-
-The "instruments giving unpredictable feedback" failure mode the user
-named in `06_framing_shift.md` would be acute if the user were grading
-HSL panel / per-color saturation / per-hue luminance in LRT and
-expecting the dt-render to track. In the actual workflow, those
-controls aren't where decisions happen — they happen in Resolve, against
-the dt output. The first-pass controls the user DOES use in LRT
-(Exposure, WB, basic curve, transitions) translate cleanly across both
-pipelines.
-
-## Renaming the option taxonomy
-
-The framing-shift doc's three exits anchor too tightly to the
-control-loop metaphor. Replacing with concrete labels that name the
-decision rather than the philosophy:
-
-| Old label | Concrete label | Status |
+| Reference point | Pipeline that renders it | Stage where the user sees it |
 |---|---|---|
-| Exit 1 (match Adobe) | **A. Continue Adobe-match calibration tower** | Possible; high cost |
-| Exit 2 (preview-source) | **B. Substitute LRT's preview cache** | **DEAD per cache test** |
-| Exit 3 (full-dt path, contradictory) | split into:<br>**C₃ₐ. dt-native render, grade in LRT preview, broken loop**<br>**C₃ᵣ. dt-native render, grade in Resolve downstream**<br>**C₃ᵦ. dt-native render, leave LRT for grading entirely** | Depends on workflow |
-| — | **D. Hybrid: restricted-slider claim** | Optional positioning play |
+| **LRT preview** (`.lrt/visual/*.lrtpreview`) | Adobe DNG Converter (bundled in LRT 7.x) + LRT-internal JPEG-encode | LRT editor pane, during keyframe authoring |
+| **lrt-cinema linear TIFF** | darktable (input matrix + CAT16 + the modules emitted from the LRT XMP) | Resolve's clip view, after lrt-cinema render completes |
+| **Resolve display** | Resolve's pipeline (configurable: ACES ODT, DaVinci YRGB, Rec.709 working, etc.) applied to the linear TIFF | Resolve's grading viewport |
 
-The framing doc's Exit 3 conflated C₃ₐ (broken loop) and C₃ᵦ
-(loop-closes-by-leaving-LRT) into one option. They are different
-products. C₃ᵣ — the "Resolve downstream" path — was not in the framing
-doc at all but is what the user actually does.
+The "control loop" the framing-shift doc names is this: a grader makes
+decisions while looking at one of these reference points; the decisions
+are encoded into XMP (LRT-stage) or into Resolve's project (Resolve-
+stage); the encoded decisions, when rendered through whichever pipeline
+produces the deliverable, must produce the perceptual result the grader
+saw at decision time. The loop closes when the grader's visual
+reference IS the deliverable view, modulo a known stable transform.
 
-## Per-option cost / risk matrix
+## Where lrt-cinema's pipeline closes the loop, and where it does not
+
+For a grader working *only inside Resolve* (LRT XMP carries identity-or-
+near-identity intent; all color decisions live in Resolve's project):
+the loop closes. Their grading viewport, their deliverable encode, and
+their adjustment history all share Resolve's pipeline and ODT.
+
+For a grader working *only inside LRT* (deliverable is an export of the
+LRT-rendered sequence, no Resolve stage): the loop closes if the LRT
+preview's pipeline matches the deliverable's pipeline. Today, LRT's
+internal-export path produces 8-bit sRGB JPGs from its Adobe-pipeline
+preview, so this loop is closed (LRT preview ≈ LRT export). lrt-cinema
+does NOT participate in that loop; it is bypassed.
+
+For a grader working in *both* (the cross-stage workflow the user's
+framing-shift doc describes — and the workflow where lrt-cinema lives):
+the loop is open between stages. The LRT-stage grading reference
+(Adobe-pipeline preview) is a different display transform than the
+Resolve-stage grading reference (Resolve's ODT applied to the dt-
+rendered TIFF). Numeric scene-referred operations (linear exposure
+scaling, well-defined chromatic adaptation) preserve cleanly across the
+gap; perceptually-targeted operations (saturation, curve shape, per-
+hue HSL) do not, because their *perceptual* effect depends on the
+display transform under which they were authored.
+
+The framing-shift doc's "broken instruments" metaphor describes this
+gap. The metaphor is correct when applied to perceptually-targeted
+LRT-stage operations. It overstates the case for mathematically-clean
+LRT-stage operations (exposure ramps, WB shifts, transition smoothing
+— the timelapse-mechanical use of LRT).
+
+### What ACES does, more carefully
+
+ACES grades in a wide working space (ACEScg) for headroom — analogous
+to audio's 32-bit float for headroom. The wide space is not the
+grader's perceptual reference. The grader's reference is the ODT view
+(Rec.709 / P3 / Rec.2020 ODT — one transform pinned to the
+deliverable's display). The colorist makes decisions while looking
+through that ODT, and the deliverable carries the same ODT. The loop
+closes because the grading reference IS the deliverable view.
+
+The earlier draft of this document used "ACES grades in one space and
+delivers in others" to argue that grade-vs-render space mismatch is
+normal. That framing was misleading: ACES decouples *headroom* from
+*reference*, but the reference is always pinned to the deliverable.
+The grade-vs-render mismatch in the LRT → lrt-cinema → Resolve chain
+is a mismatch of *references*, which is structurally different.
+
+### What is "baked in" to the lrt-cinema linear TIFF
+
+The TIFF is scene-referred (post-camera-response, post-CAT, before any
+display gamma). This is more flexible than a display-encoded TIFF for
+downstream operations: linear scaling, chromatic adaptation, and HDR
+headroom all work cleanly in scene-referred space.
+
+The TIFF is *not* RAW. The following are baked in irreversibly at the
+lrt-cinema stage:
+
+- LR-keyframe-authored intent that lrt-cinema's emitter translates
+  (Exposure2012, Temperature2012 + Tint, Blacks2012, ToneCurvePV2012,
+  Sharpness, Saturation / Vibrance / Contrast2012 best-effort)
+- darktable's input matrix and CAT16 chromatic adaptation
+- DCP-derived corrections when `--engine dcp` is in effect (BaselineExposure,
+  ProfileToneCurve, HSM/LookTable cube)
+
+Downstream tools can apply additive operations on top of the baked-in
+state; they cannot reverse the baked-in operations to recover the
+state of an earlier stage. In particular, an LR-stage `+5 saturation`
+that bakes into the TIFF via dt's `colorbalancergb` is not recoverable
+to "no saturation applied" in Resolve. Resolve can apply a counter-
+saturation; that's a different operation with different mathematical
+properties.
+
+A `--engine raw-passthrough` mode (or equivalent) that suppresses LR-
+intent emission and leaves all grading to Resolve is technically
+feasible but does not exist today. Whether it should exist is a
+product-positioning question, not a fit-and-finish one.
+
+## Empirical input: the LRT preview-cache behavior test
+
+Test conducted 2026-05-26 on the user's working sequence
+(`/Volumes/SanDisk Extreme Pro 55AF Media/Projects/2026 international
+faire timelapse/`).
+
+**Setup.** Backed up `.lrt/visual/DSC_4053.lrtpreview` (SHA-256
+`3a31bcdb…`). Wrote a 1024×684 baseline JPEG marker (blue field,
+"CACHE TEST" text overlay) to the same path (SHA `a8a61b6e…`). LRT was
+not running.
+
+**Test 1 — passive navigation.** User opened LRT, navigated to keyframe
+DSC_4053, clicked nothing else. Observation: editor pane displayed the
+marker. File state post-test: SHA unchanged, mtime unchanged.
+
+**Test 2 — interactive editing.** User moved the Exposure slider +0.5
+on the keyframe, then clicked Save Metadata. Observation: the editor
+pane updated live to show a brightened scene the moment the slider
+moved, replacing the marker in-pane. File state post-test: SHA changed
+to `783401ab…`, size 43408 → 40136, mtime advanced ~3 minutes. **LRT
+overwrote the marker JPEG with its own Adobe-pipeline render.**
+
+**Conclusion.** LRT live-computes the editor-pane preview from RAW +
+XMP via its bundled Adobe DNG Converter the moment the user begins an
+edit operation, and writes the result to the on-disk cache as a side
+effect. The cache JPEG is the *output* of LRT's preview pipeline, not
+the *input* to the editor pane.
+
+**What this forecloses, what it does not.** Externally-placed JPEGs in
+`.lrt/visual/` cannot serve as the grading reference during interactive
+editing — that reference is hard-wired to Adobe via LRT's bundled DNG
+Converter, and there is no documented hook to redirect it without
+forking LRT. Externally-placed JPEGs DO control pre-edit timeline
+thumbnails, the pixel-luminance basis of Visual Deflicker's analysis,
+and the "pink curve" visualization until the next interactive edit
+triggers regeneration. These are observable side-channel uses; they do
+not close the live-grading control loop.
+
+(`OBSERVED 2026-05-26`. Reproducer: replace any
+`.lrt/visual/*.lrtpreview` with a marker JPEG of identical dimensions,
+open LRT, touch any develop slider in the editor, watch the file
+on disk get rewritten with LRT's Adobe-pipeline render.)
+
+## Option space
+
+The framing-shift doc proposed three exits. With the cache-behavior
+test result and the multi-stage workflow analysis above, the
+taxonomy is:
+
+| Option | What it does | Closes the cross-stage loop? | Workflow-agnostic viability |
+|---|---|---|---|
+| **A. Adobe-match calibration tower** | Make lrt-cinema's render approach LR's render (root-poly + SSF-IDT + HSV residual catcher per `05_synthesis.md`) | Closes the LRT-stage → lrt-cinema stage. The Resolve stage's loop closure is then dependent on Resolve's pipeline matching LR's (commonly Yes via Resolve's "ACES IDT for ACR" workflow or similar) | Viable; engineering-heavy |
+| **B. Preview substitution** | Place dt-rendered JPGs into `.lrt/visual/` so LRT uses them | — | **Foreclosed by cache test.** LRT regenerates on any edit. |
+| **C. dt-native render, LRT for first-pass only** | Current state. lrt-cinema renders LR-keyframe intent into dt's color science. Documented mismatch with LRT preview; user accepts | Open between stages. Magnitude scales with how much LRT-stage authoring is perceptually-targeted (saturation / HSL / curve) vs mathematically-clean (exposure / WB / transitions) | Viable today |
+| **D. dt-native render, LRT replaced for grading entirely** | Build keyframe authoring + interpolation + deflicker + Holy Grail into a new lrt-cinema UI; user no longer touches LRT for color decisions | Closes (single-stage grading inside a dt-native UI) | Multi-engineer-month; out of current scope |
+| **E. Render mode that leaves LR intent unbaked** | New `--engine raw-passthrough` (or equivalent) that emits the LR XMP intent as an OCIO / CLF / sidecar artifact for Resolve to apply, instead of baking it into the TIFF | Closes by collapsing both stages into Resolve | Multi-engineer-week if XMP→OCIO mapping is well-defined; possibly large if not |
+
+## Per-option cost and risk matrix
 
 Engineer-weeks estimates are rough, single-engineer, calendar time
-including code review and validation. ΔE numbers are mean ΔE2000 on
-the DSC_4053 neutral keyframe vs LRT preview unless noted.
+including code review and validation. License/dep notes are non-
+exhaustive; see `05_synthesis.md` for the full provenance.
 
-| Option | Eng cost | Achievable ΔE | Workflow disruption | Ongoing maintenance | License / deps | Fit to user workflow |
-|---|---|---|---|---|---|---|
-| **A. Adobe-match tower** | 6–8 wks (root-poly + SSF + HSV-untwist) | ~2 (D750 with SSF); ~4–6 (no SSF) | None (transparent improvement) | Per-Adobe-DNG-Converter-release; bundled-DCP-version churn | colour-science (BSD-3); SSF data CC BY-NC-SA (user computes locally, repo cannot ship); dcpTool GPL-3 (can shell out only) | **Solves a problem the user no longer cares about.** The Adobe match matters only if LRT preview = final color reference. |
-| **B. Preview substitution** | — | — | — | — | — | **DEAD.** Empirical: LRT live-computes from RAW during sliders. |
-| **C₃ₐ. dt-native, grade in LRT** | 0 wks (current state) | ~6 pre-affine / ~2 post-affine | None | Minimal | None | Loop is broken if final color happens in LRT. User has said it does not. |
-| **C₃ᵣ. dt-native, grade in Resolve** | 0 wks (current state); ~1 wk for doc rewrite | ~6 pre-affine / ~2 post-affine for first-pass (broadcast-acceptable); arbitrary for final (in Resolve) | None | Minimal | None | **Matches the user's actual workflow.** Loop closes at Resolve, not in LRT. |
-| **C₃ᵦ. dt-native, leave LRT entirely** | 4–6 wks (replace LRT's keyframe + transitions + deflicker + Holy Grail with our own) | Same as C₃ᵣ | **Large.** User loses LRT's interpolation/deflicker/HG infrastructure. | Whatever LRT improves we'd have to backport. | None | Workflow disruption is huge for marginal benefit (Resolve grade closes the loop anyway). Not justified. |
-| **D. Restricted-slider claim** | 1 wk (doc + warning enhancements) | Same as C₃ᵣ | None | Minimal | None | Strict subset of C₃ᵣ; useful framing if HSL drift complaints surface. |
+| Option | Eng cost | Achievable ΔE2000 vs LR | Maintenance | Workflow disruption | License / deps |
+|---|---|---|---|---|---|
+| A. Adobe-match | 6–8 wks for the full stack (root-poly + SSF-IDT + HSV-untwist) | ~2 mean (D750 with SSF); ~4–6 mean (no SSF, root-poly only) | Per-Adobe-DNG-Converter release | Transparent to user | colour-science (BSD-3); butcherg SSF data CC BY-NC-SA (user computes locally; not redistributable); dcpTool GPL-3 (shell out only) |
+| B. Preview substitution | — | — | — | — | — |
+| C. dt-native first-pass | 0 wks (today) to ~1 wk for doc reframe | DSC_4053 baseline: 6.05 pre-affine / 2.24 post-affine on a neutral keyframe per V04_PLAN.md. Substantially worse on perceptually-targeted LRT-stage authoring. | Minimal | None for users already in this workflow; explicit "what to expect" doc for others | None |
+| D. LRT-replacement UI | 8–16+ wks | Same as C (no color-change; UX change only) | Whatever LRT improves | Large: user retrains on a new UI; loses LRT's mature interpolation/deflicker/HG | Probably GUI framework dep (Qt / Tauri / similar) |
+| E. Raw-passthrough mode | 3–6 wks to design + implement XMP→OCIO sidecar emission | N/A — operations are not pre-baked; final ΔE is whatever Resolve produces | Resolve's OCIO behavior, CRS schema changes | Adds a render mode; Resolve project setup required | OCIO (BSD-3); CRS-to-OCIO mapping research |
 
-## Recommendation
+## Recommendations, conditional on workflow target
 
-**Ship C₃ᵣ. Retire PR #15. Document the workflow.**
+The fitness of each option depends on which users the project chooses
+to serve. The conditions below state the decision factors plainly so a
+maintainer can self-classify.
 
-Reasoning:
+### If the project targets LRT-as-primary-grader workflows
 
-1. **The cache test forecloses B.** Not opinion; empirical. LRT live-
-   computes through Adobe during slider edits and overwrites our cache.
+Description: the user makes their FINAL color decisions inside LRT,
+against the LRT preview. The deliverable is then rendered (by lrt-
+cinema or by LRT itself) and shipped without further color work, or
+with only mechanical Resolve transcoding.
 
-2. **The workflow answer forecloses the need for A.** Closing the
-   Adobe gap matters when the user is grading against the Adobe preview
-   for final color. They are not. The first-pass operations they DO
-   perform in LRT (exposure ramps, WB, transitions, deflicker, Holy
-   Grail) translate cleanly across Adobe→dt — exposure shifts and
-   chromatic adaptation are single-DOF transforms with no per-scene
-   non-stationary content. The 6 ΔE pre-affine / 2 ΔE post-affine
-   baseline on a neutral keyframe is broadcast-acceptable for the
-   first-pass content.
+Loop closure requires: the lrt-cinema render's color science must
+match LR's color science within deliverable-acceptable tolerance.
 
-3. **C₃ₐ vs C₃ᵣ resolves to C₃ᵣ on user input.** Same code, different
-   documentation. The user has surfaced the workflow they actually use.
+Recommended path: **A (Adobe-match tower).** Cost is real (6–8
+weeks for the full stack) and ongoing (Adobe DNG Converter version
+churn). Achievable ΔE caps at ~2 mean on cameras with SSF data
+available; ~4–6 mean on cameras without. The DCP/HSV
+LookTable's per-cell hue twists are the structural ceiling for any
+3×3-only solution; closing them requires the HSV residual catcher
+stage from `05_synthesis.md`. PR #15's plain 3×3 fit (post-fit 12.66
+ΔE on synthetic broad-chromaticity coverage) is the linear-baseline
+foundation for this stack — keep it merged.
 
-4. **C₃ᵦ is over-engineering.** Replacing LRT's keyframe / transition /
-   deflicker / Holy Grail infrastructure to "leave LRT" doesn't close
-   any loop the Resolve stage doesn't already close. Multi-engineer-
-   weeks for no narrative benefit.
+### If the project targets LRT-for-first-pass + Resolve-final workflows
 
-5. **D is positioning, not engineering.** If HSL-drift complaints
-   surface later, escalate to the explicit restricted-slider claim. Not
-   needed pre-emptively.
+Description: the user makes LRT-stage decisions for timelapse mechanics
+(exposure ramps, transitions, deflicker, Holy Grail). Final color
+decisions happen in Resolve against the dt-rendered TIFF.
 
-The recommendation is therefore: **the calibration tower is solving the
-wrong problem.** PR #15's documented numbers (pre-fit mean 16.50 ΔE,
-post-fit mean 12.66 ΔE, max 23.08 — measured on synthetic-ColorChecker
-patches synthesized via the bundled DCP's ColorMatrix, then fit via the
-two-engine round-trip) are the gap between *our algorithmic engine* and
-*our DCP engine* on broadly-sampled chromaticity. That measurement
-would matter if the project's job were to make the algorithmic engine
-match the DCP engine on arbitrary scenes. It is not. Our render's job
-is to produce a colorimetrically correct linear TIFF for Resolve to
-grade. The ColorChecker-against-published-patches reference is what
-matters for that claim, and is what the existing CI-gate ΔE2000 test
-methodology in [docs/VALIDATION.md](../../VALIDATION.md) is designed to
-measure.
+Loop closure between LRT-stage and Resolve-stage cannot be made
+mathematically clean by engineering — the two stages reference
+different display transforms (LRT-preview ODT-equivalent vs
+Resolve-display ODT). What CAN be made clean is the LRT-stage
+operations that translate cross-pipeline (linear exposure, chromatic
+adaptation, identity-or-near-identity tone curve, transitions); these
+preserve numerically across the gap regardless of display transform.
 
-## PR chain reframing
+Recommended path: **C (current state)**, with explicit guidance that
+LRT-stage authoring should be restricted to clean-translating
+operations and final color work should happen in Resolve. The
+current acceptance gate (DSC_4053 post-affine 2.24 ΔE) is broadcast-
+acceptable for clean-translating operations; the residual is
+recoverable in Resolve by a single per-channel grade adjustment.
 
-| PR | Branch | Recommendation | Reasoning |
+PR #15's status under this path: optional. The 12.66 ΔE residual it
+documents is on synthetic broad-chromaticity coverage relevant to
+path A; it doesn't move the needle for path C unless extended with
+root-poly + HSV-residual stages. If the project commits to path C
+exclusively, retire #15. If the project supports both paths, keep #15
+as the Tier 2 baseline for path A.
+
+### If the project targets a single-grading-stage workflow
+
+Description: the user wants all color decisions to live in one stage,
+without cross-stage display-transform discontinuity.
+
+Two routes:
+
+1. **Single-stage in LRT.** Same as the LRT-as-primary recommendation
+   above; requires path A.
+2. **Single-stage in Resolve.** Requires path E (raw-passthrough mode
+   so LRT-stage XMP intent doesn't bake into the TIFF). Multi-engineer-
+   week to design and implement; the design question is what subset of
+   LR CRS intent maps to OCIO-expressible operations.
+
+Path D (LRT replacement) achieves single-stage in lrt-cinema's own
+UI but is multi-engineer-month work and inherits a UI maintenance
+burden. Not recommended unless other constraints force it.
+
+### What is foreclosed regardless of workflow
+
+- Path B (preview substitution) is dead per the cache test.
+
+## PR chain implications
+
+Per-PR recommendations depend partly on which workflow paths the
+project decides to support. The independent baseline is:
+
+| PR | Branch | Recommendation regardless of path | Conditional notes |
 |---|---|---|---|
-| [#11](https://github.com/turgid-secretion/lrt-cinema/pull/11) | `fix/v0.4-defensive` | **Merge regardless.** | Independent audit fixes. Fate-decoupled from color work. |
-| [#12](https://github.com/turgid-secretion/lrt-cinema/pull/12) | `fix/xy-camera-neutral-iteration` | **Merge regardless.** | Audit cleanup for the existing DCP-iteration code. Fate-decoupled. |
-| [#13](https://github.com/turgid-secretion/lrt-cinema/pull/13) | `refactor/cli-resolve-profile` | **Merge regardless.** | CLI extraction refactor (audit #23). Fate-decoupled. |
-| [#14](https://github.com/turgid-secretion/lrt-cinema/pull/14) | `feat/v0.4-calibration-deterministic` | **Merge.** | Infrastructure (calibration.py save/load/lookup + synthetic DNG generator). Fate-independent of the Adobe-match narrative — the storage / lookup primitives are general-purpose and would be required by any future per-camera calibration work regardless of the chosen color path. 628 lines of new code is non-trivial maintenance, but the option value is real and there is no downside to landing it. |
-| [#15](https://github.com/turgid-secretion/lrt-cinema/pull/15) | `feat/v0.4-calibration-dt-roundtrip` | **Retire.** Close without merging. The plain 3×3 fit chases the Adobe-match objective that the workflow answer says is the wrong target. Specifically, the 12 ΔE residual it documents is on synthetic broad-chromaticity coverage — interesting as a research data point but not load-bearing for the deliverable. | If kept, it would justify itself only as a "baseline number for the V04 acceptance gate" — but the V04 gate (`mean post-fit < 2.0`) is the LRT-preview-relative number that we no longer optimize for. Better to delete it and clarify the metric we DO optimize: ColorChecker ΔE2000 of the linear TIFF against published patches. |
-| [#16](https://github.com/turgid-secretion/lrt-cinema/pull/16) | `docs/color-option-space-research` | **Merge after this doc lands.** Add this doc (`07_decision.md`) to the branch. The research + decision is self-contained and worth being in the tree. | The research informed the decision; the decision should sit next to it. |
+| [#11](https://github.com/turgid-secretion/lrt-cinema/pull/11) | `fix/v0.4-defensive` | **Merge.** | Independent defensive guards. Fate-decoupled from color narrative. |
+| [#12](https://github.com/turgid-secretion/lrt-cinema/pull/12) | `fix/xy-camera-neutral-iteration` | **Merge.** | Independent audit cleanup. Fate-decoupled. |
+| [#13](https://github.com/turgid-secretion/lrt-cinema/pull/13) | `refactor/cli-resolve-profile` | **Merge.** | Independent refactor. Fate-decoupled. |
+| [#14](https://github.com/turgid-secretion/lrt-cinema/pull/14) | `feat/v0.4-calibration-deterministic` | **Merge.** | Calibration storage infrastructure (628 lines). General-purpose; required by any per-camera calibration work (path A, future SSF work, etc.). |
+| [#15](https://github.com/turgid-secretion/lrt-cinema/pull/15) | `feat/v0.4-calibration-dt-roundtrip` | **Depends on workflow targets.** | If path A is in scope (either alone or alongside C/E): keep #15 as the Tier 2 linear baseline; document its 12.66 ΔE residual as the linear-only-fit ceiling for the full stack to build on. If only path C is in scope: retire #15; the 3×3 fit is not load-bearing for path-C users. |
+| [#16](https://github.com/turgid-secretion/lrt-cinema/pull/16) | `docs/color-option-space-research` | **Merge after this doc lands** (this commit is on the branch). | The research + decision input is self-contained and worth being in the tree under any path. |
 
-**Merge order recommendation:**
-1. #11, #12, #13 in parallel (or sequentially per CI capacity)
-2. #14 after #11–#13 land (so calibration code lands against the
-   defensive guards)
-3. #16 (this doc + the research) any time
-4. #15: close with a comment explaining the retirement
+## Open follow-up work (not load-bearing on this decision)
 
-## Documentation re-anchoring (implementation phase)
+1. **Root-polynomial drop-in for the colorimetric matrix.** Replace
+   the existing 3×3 channelmixer fit with colour-science's
+   `optimisation_factory_Oklab_15`. Halves ColorChecker ΔE on chart-
+   only fits without changing the workflow narrative. ~1 wk. Improves
+   absolute colorimetric quality of the linear TIFF; orthogonal to
+   the cross-stage control-loop conversation. Useful under paths A,
+   C, and E.
 
-After the recommendation is approved, [README.md](../../../README.md),
-[SCOPE.md](../../../SCOPE.md), and [V04_PLAN.md](../../V04_PLAN.md) need
-to be re-anchored around the two-stage workflow: lrt-cinema as
-first-pass renderer producing colorimetrically-correct linear TIFFs;
-LRT for timelapse mechanics; Resolve (or any color finishing tool) for
-final grade. The colorimetric claim moves from "matches LRT preview"
-to "ColorChecker ΔE2000 envelope vs published patches" — the figure
-dcamprof and Argyll have used for two decades. This is implementation
-work that follows sign-off, not part of this decision.
+2. **ColorChecker ΔE2000 CI gate against published patches.** The
+   existing acceptance-gate methodology in
+   `docs/VALIDATION.md` is designed for this measurement; the v0.4
+   gate phrasing in `V04_PLAN.md` ties to LRT-preview-relative ΔE
+   instead. Replace with a published-patch-relative number for the
+   colorimetric-correctness claim.
 
-## Open follow-up work (optional, post-decision)
+3. **Documented restricted-slider claim** for path C. The slider
+   subset that translates cleanly cross-pipeline (Exposure, Temperature
+   + Tint, identity-or-near-identity ToneCurvePV2012, transition-only
+   per-frame deltas) versus the subset that does not (Saturation,
+   Vibrance, Highlights2012, Shadows2012, Whites2012, HSL panel,
+   per-color curves) is already implicit in the v0.4 emit table in
+   SCOPE.md. Surface explicitly as a "what to author in LRT" guidance.
 
-These are NOT load-bearing on the recommendation. Surface for the
-user's consideration as separate work after the decision lands:
-
-1. **Root-polynomial drop-in for the colorimetric matrix.** Replace the
-   existing 3×3 channelmixer fit (in `colorin` / wherever the matrix
-   correction sits today) with
-   `colour.characterisation.optimisation_factory_Oklab_15`. Halves
-   ColorChecker ΔE on chart-only fits without changing the workflow
-   narrative. Zero new dependencies (colour-science is already in dev
-   deps). ~1 engineer-week. Improves the *absolute* colorimetric
-   quality of the linear TIFF; orthogonal to the LRT-vs-dt
-   conversation.
-
-2. **Document the post-affine number as the workflow-relevant figure.**
-   Current V04 acceptance gate names mean post-fit < 2.0 vs LRT
-   preview, which optimizes for a target the workflow doesn't use.
-   Replace with: mean ColorChecker ΔE2000 < N against published patches
-   under the renderer's chosen illuminant (the figure dcamprof and
-   Argyll have used for decades). The threshold should be 2.0 (cinema
-   reference) or 3.0 (broadcast) depending on what we can hit; current
-   baselines aren't documented in the form needed to pick a number
-   confidently — propose running the existing ColorChecker pipeline on
-   the v0.4 codebase once and using the result as the published gate.
-
-3. **Diagnostic tool reframing.** `tools/diagnose_vs_lrt_preview.py`
-   currently positions LRT preview as the reference. Keep the tool
-   (it's useful for "is my render visibly different from what the user
-   sees in LRT?" — a UX question) but reposition it: it diagnoses
-   workflow-stage handoff quality, not colorimetric correctness.
+4. **Path E feasibility study.** Map LR CRS schema → OCIO Color
+   Transform Language operations. The cleanly-mappable subset
+   (exposure as gain, WB as chromatic adaptation, tone curve as 1D
+   LUT) is small but well-defined; the per-hue HSL ops have no clean
+   OCIO mapping. A scoping doc would identify whether the cleanly-
+   mappable subset is large enough to be useful.
 
 ## Known unknowns (surfaced for the record)
 
-These would matter if the workflow were different; documented so a
-future chip can re-open them:
-
-1. **HSL-heavy grading on a Holy Grail sequence.** No data on disk; the
-   user's sample is constant-exposure with default HSL. Structural
-   argument suggests HSL-heavy grading would surface materially worse
-   Adobe→dt mismatch than first-pass operations, but the magnitude is
-   not measured. If the project later targets a user who grades HSL in
-   LRT, this becomes a measurable gap that needs the calibration-tower
-   path to close.
+1. **HSL-heavy grading on a Holy Grail sequence.** No data on disk;
+   the user's sample is constant-exposure with default HSL. Structural
+   argument (per `05_synthesis.md`) suggests HSL-heavy grading would
+   surface materially worse Adobe→dt mismatch than clean-translating
+   operations, but the magnitude is not measured.
 
 2. **LRT cache invalidation triggers beyond editor-pane sliders.**
-   Tested two: passive navigation (does not regenerate) and slider edit
-   (does regenerate, immediately). Not tested: Auto Transition,
-   Visual Previews → All Frames, Holy Grail Wizard. If LRT 7.6+ ever
-   exposes a "skip regeneration if XMP unchanged" optimization, Exit B
-   may reopen.
+   Tested two: passive navigation (does not regenerate) and slider
+   edit (does regenerate, immediately). Not tested: Auto Transition,
+   Visual Previews → All Frames, Holy Grail Wizard. If LRT ever
+   exposes a "skip regeneration if XMP unchanged" optimization, the
+   cache-side-channel uses (Visual Deflicker basis, "pink curve"
+   visualization) become more reliable. Path B remains foreclosed.
 
 3. **`colour-science`'s root-poly `optimisation_factory_Oklab_15`
-   numerical conditioning** on Nikon D750 RAW values has not been
-   verified against published reference profiles. Standard library code
-   so expected to be solid, but worth verifying when the optional
-   follow-up #1 lands.
+   numerical conditioning** on production Bayer sensor RAW values has
+   not been verified for lrt-cinema-relevant cameras. Library code
+   so expected to be solid, but worth verifying before path-A
+   commitments rely on it.
 
-## Adversarial-pass observations (from the framing-shift doc)
+## Concrete action list on sign-off
 
-The framing-shift doc raised two adversarial threads. Both deserve a
-brief noted response now that the workflow discriminator is in.
+The path-independent items are committed regardless of the workflow-
+target decision:
 
-**Thread 1: "Cinema already grades in one space and renders in others
-(ACES)."** The framing-shift doc's adversarial #1 argued the relevant
-distinction is *transform-stability,* not *spaces-differ.* Confirmed.
-Under the C₃ᵣ workflow the user has confirmed, the LRT→dt transform on
-the operations the user actually performs in LRT (exposure / WB / curve
-/ transitions) IS well-defined and reasonably stable (Robertson kelvin
-↔ xy chromatic adaptation, linear exposure shift, scalar tone-curve
-remapping). The non-stationary content (DCP per-cell hue-twist
-LookTable contributions) only bites on operations the workflow does
-NOT use in LRT. Adversarial #1 was correct as a principle; the
-workflow-stage discriminator localizes where it actually matters.
+1. Merge #11, #12, #13 in CI order (independent audit fixes).
+2. Merge #14 after #11–#13 land (calibration storage infrastructure).
+3. Add this doc to #16 and merge #16 (this commit is already on the
+   branch).
 
-**Thread 2: "Magnitude depends on grading style."** Confirmed
-structurally. Timelapse-typical operations preserve the same residual
-as the neutral keyframe (~6 ΔE pre-affine / ~2 ΔE post-affine on
-DSC_4053 per the V04 gate). HSL-heavy operations are where Adobe→dt
-becomes structurally non-bijective, and where the "broken instruments"
-metaphor would bite hardest. The user's actual workflow avoids the
-HSL panel in LRT, so the practical magnitude is dominated by the
-clean-translation regime.
+The path-dependent items depend on which workflow paths the project
+commits to supporting:
 
-## Concrete action list (on user sign-off)
+- **If path A is in scope** (alongside or instead of C): keep #15
+  merged; open follow-up PRs for the root-poly upgrade (follow-up
+  #1) and the HSV residual catcher (per `05_synthesis.md`).
+- **If only path C is in scope**: close #15 with a comment pointing
+  at this doc; open follow-up PR for the documentation re-anchoring
+  (project value proposition, slider restrictions, ColorChecker-
+  relative metric per follow-up #2).
+- **If path E is in scope**: open a feasibility-study PR for the
+  XMP→OCIO mapping per follow-up #4; defer #15's fate until the
+  feasibility study lands.
 
-If the recommendation is approved as-stated:
-
-1. **Merge #11, #12, #13** in CI order (independent audit fixes; no
-   dependencies between them).
-2. **Merge #14** after #11–#13 land (calibration infrastructure;
-   stacks cleanly on the audit fixes).
-3. **Close #15** with a comment pointing at this decision document
-   ([07_decision.md](07_decision.md) §"PR chain reframing").
-4. **Add this document to PR #16** (`docs/color-option-space-research`)
-   and **merge #16** so the research and the decision live in the tree
-   together.
-5. **Open a follow-up PR** to re-anchor README / SCOPE / V04_PLAN
-   around the two-stage workflow (per "Documentation re-anchoring"
-   above). Sequenced after #14 / #16.
-
-If the recommendation needs partial buy-in or course-correction (e.g.
-"keep PR #15 as a Tier 2 baseline" or "land the root-poly upgrade
-inline with this change"), specifics on a per-PR or per-section basis
-go through one more round of discussion before any commits land.
+Implementation along the chosen direction follows under separate PRs.
