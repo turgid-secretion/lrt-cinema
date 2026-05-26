@@ -191,16 +191,33 @@ candidates. Some have been examined (the Adobe-match tower lives in
 Pattern 6 with a partial Pattern 3 correction baked into the inverse
 direction); some have not. Listed here without ranking:
 
-- **A. Adobe-match tower** (Pattern 6, Pattern 3 inverted). Make
-  Pipeline B → Pipeline A in our render. Examined in `05_synthesis.md`.
+- **A. Adobe-match tower (per-camera)** (Pattern 6, Pattern 3
+  inverted). Make Pipeline B → Pipeline A in our render. Examined in
+  `05_synthesis.md`. Requires per-camera calibration data (DCP
+  distillation, SSF, or chart shot). Engineering cost dominated by
+  the calibration tower plus per-camera coverage.
+- **A′. Adobe-match transform (camera-agnostic)** (Pattern 6,
+  Pattern 3 inverted). Hypothesize that a meaningful fraction of the
+  "Adobe look" is *not* per-camera-specific — that the per-camera
+  variance in Adobe DCPs is small enough that a single shared
+  transform captures most of the perceptual character. If true,
+  drastically reduces the calibration-data burden and may close the
+  loop for the LRT-as-primary-grader workflow without per-camera
+  database. Open empirical question — needs measurement of DCP
+  LookTable / ProfileToneCurve / BaselineExposure variance across
+  the Adobe camera catalog. See "Measurement targets" below.
 - **B. LRT cache substitution** (Pattern 2 in a degenerate form).
   Foreclosed empirically per cache-test (`07_decision.md`).
 - **C. dt-native render + accept residual** (Pattern 5). Current
   state. Author lives with the slow iteration loop.
-- **D. LRT replacement** (Pattern 7). Costly.
+- **D. LRT replacement** (Pattern 7). Costly. Quantified below at
+  apples-to-apples scope; surfaced here because the user has
+  explicitly asked for D to be considered alongside workarounds
+  rather than dismissed.
 - **E. Raw-passthrough render** (Pattern 6 with deferred
-  application). Per user note, does not escape because temporal
-  authoring still happens against LRT-rooted reference at LRT stage.
+  application). Per user note 2026-05-26, does not escape because
+  temporal authoring still happens against LRT-rooted reference at
+  LRT stage.
 - **F. Parallel viewer** (Pattern 2). Lrt-cinema runs a side window
   showing dt-rendered output for the keyframe the user is editing
   in LRT.
@@ -231,6 +248,135 @@ direction); some have not. Listed here without ranking:
   perceptually-targeted operations defer to Resolve. Path C in the
   `07_decision.md` taxonomy, sharpened with explicit operation
   restrictions.
+
+## Measurement targets for the analysis phase
+
+Two empirical questions, surfaced explicitly here so the next research
+pass can answer them before recommending or eliminating candidates.
+
+### Q1: How much of Adobe color is per-camera vs shared?
+
+The Adobe DCP format encodes per-camera content in five places:
+ColorMatrix (per-illuminant), ForwardMatrix (per-illuminant),
+HueSatMap (per-illuminant), LookTable (per-illuminant), and
+ProfileToneCurve, plus the scalar BaselineExposure /
+BaselineExposureOffset. The first two are necessarily per-camera (they
+encode sensor SSF → reference-space). The remaining three could vary
+widely across cameras, vary little, or fall somewhere in between.
+
+The variance is directly measurable. Adobe DNG Converter ships
+profiles for ~4000+ cameras; the files are public, well-documented
+TIFF/IFDs (per `src/lrt_cinema/dcp.py`), and parseable. The
+measurement asks: for a sample of N cameras, what fraction of the
+perceptual look-character lives in the per-camera-variable HueSatMap /
+LookTable / ProfileToneCurve, vs in the camera-agnostic remainder?
+The methodology is well-defined: render a fixed reference scene
+through each camera's DCP with all develop ops zeroed, compute the
+pairwise ΔE2000 distribution, and separately the ΔE2000 distribution
+against a hypothesized "median" DCP.
+
+Outcomes determine whether A′ (camera-agnostic Adobe match) is a
+viable candidate:
+
+- **Low variance** (cross-camera mean ΔE < ~2): the per-camera
+  content is largely aesthetic noise; A′ is viable. The calibration
+  tower's per-camera scope reduces to "extract the ColorMatrix from
+  the camera's bundled DNG metadata" — a one-line operation, no
+  database needed.
+- **Medium variance** (~2–5): A′ partially viable for some camera
+  classes (e.g., one DCP per camera family); per-camera-family
+  database needed instead of per-individual-camera.
+- **High variance** (> ~5): A′ not viable; per-camera calibration
+  is essential. Falls back to A.
+
+Cost to answer Q1: rough estimate, ~1–2 engineer-weeks. The DCP
+parser and a measurement harness already exist (`src/lrt_cinema/dcp.py`,
+`tools/extract_dcp_library.py`). Adding a variance-measurement script
+is mechanical; the bottleneck is access to a sample of Adobe DCPs
+representative of the full catalog (user's local Adobe DNG Converter
+install provides this).
+
+### Q2: What is the full engineering cost of D (LRT replacement)?
+
+The previous analyses dismissed D as "multi-engineer-month, out of
+scope" without enumerating the work. Per user request 2026-05-26,
+the analysis phase should quantify D at apples-to-apples comparable
+scope to the workaround candidates (F, G, I), so the question "is a
+workaround actually cheaper than a clean rebuild?" can be answered
+with comparable numbers, not assumed.
+
+Concrete work-item enumeration for D-v1:
+
+| Component | Existing in lrt-cinema? | New work (rough estimate) |
+|---|---|---|
+| Sequence import (read RAWs, sort, surface metadata) | Partial — parser+runner read XMP, no sequence index | ~1 wk |
+| Keyframe authoring UI (select frames, edit per-frame values, save) | None | ~3–4 wks (GUI framework choice dependent) |
+| Auto Transition spline interpolation | Yes — linear + Catmull-Rom | 0 wks (existing) |
+| Visual Previews render path (real-time enough for UI) | Partial — render pipeline exists but is dt-cli-bound and slow | ~2 wks for a fast preview-quality path |
+| Visual Deflicker (luminance analysis + smoothing + writeback) | None — applied path only | ~3–4 wks (algorithm + UI + tuning) |
+| Holy Grail Wizard (EXIF-driven exposure-change detection + compensation curve) | None | ~2 wks |
+| XMP save (LRT-compatible mask-correction encoding) | Partial — emitter writes dt-shape XMP, not LRT-shape | ~1 wk |
+| GUI framework integration + packaging + cross-platform | None | ~2 wks |
+| Testing + documentation + user-onboarding | Existing CLI test infrastructure | ~2 wks |
+| **Total v1 estimate** | | **~16–18 engineer-weeks (~4 months)** |
+
+This is rough — the GUI choice (Tauri / Qt / Electron / Iced /
+native AppKit) significantly affects the GUI-component estimates;
+the Visual Deflicker algorithm choice (TLDF-style, Gunther's
+proprietary smoothing, or our own) significantly affects estimate
+quality; and the UI fidelity target (proof-of-concept that does the
+job vs. polished alternative to LRT) bounds the spread.
+
+For comparison with the workaround candidates the analysis phase
+should produce comparable estimates:
+
+| Candidate | Rough estimate (engineer-weeks) | What's in the estimate |
+|---|---|---|
+| A. Adobe-match tower (per-camera, full stack) | ~6–8 | Root-poly + SSF-IDT + HSV residual catcher per `05_synthesis.md` |
+| A′. Adobe-match (camera-agnostic) if Q1 says viable | ~2–4 | One shared transform, no calibration tower |
+| C. dt-native + doc reframe | ~1 | Documentation work only |
+| D. LRT replacement | ~16–18 | All of the above |
+| F. Parallel viewer | ~2–4 | File-watcher + fast render + viewer window |
+| G. LRT preview LUT correction | ~1–3 + ongoing fragility | Display-LUT plumbing; high risk of cross-app contamination or version churn |
+| H. Display calibration via Color Sync | ~1–2 + ongoing fragility | Custom ICC; same fragility risks as G |
+| I. JIT preview-quality dt render | ~3–5 | Fast approximate dt pipeline + viewer integration |
+| J. Reference-track A/B | ~0 (workflow, not code) | A handful of test renders the user views as anchor |
+| K. Constrained-author + Resolve-downstream | ~1 (doc) | Same as C with explicit op restrictions |
+
+These numbers are first-pass; the analysis phase should sharpen them.
+The user's point lands: F's ~2–4 weeks against D's ~16–18 weeks is a
+~4–6× ratio, not a 10–20× ratio. A combined F+G+I "polished
+parallel-display story" could approach 8–12 weeks, which is starting
+to be in shouting distance of D's full cost — at which point D's
+appeal as a clean-slate solution increases. The analysis phase
+should make these tradeoffs explicit rather than dismissing D
+preemptively.
+
+### Why "clean-slate" engenders its own challenges
+
+Per user note 2026-05-26, the clean-slate path (D) should be
+considered alongside other candidates *with its own challenges
+captured and quantified.* The challenges include:
+
+- **User retraining cost.** LRT users have years of muscle memory in
+  LRT's UI; a new UI imposes a re-learning cost not visible in the
+  engineering estimate above.
+- **LRT feature parity.** LRT has accumulated capability over a
+  decade (HDR merge, multi-pass deflicker, Optimize-feature,
+  comprehensive EXIF handling). v1 of a replacement will not match.
+- **Compatibility loss.** LRT-authored sequences from collaborators
+  who use LRT won't roundtrip cleanly; users with legacy LRT
+  projects can't easily migrate.
+- **Single-developer maintenance risk.** LRT is maintained by
+  Gunther Wegner with a paid-product business model. A clean-slate
+  replacement absorbs full maintenance burden onto whatever team
+  builds it.
+- **Workflow lock-in choice.** D replaces "LRT's Adobe-tied
+  workflow" with "lrt-cinema's dt-tied workflow." A different
+  flavor of lock-in, but lock-in nonetheless.
+
+These should be in the analysis phase's per-candidate matrix
+alongside engineering cost, not buried in narrative text.
 
 ## Hard-no constraints (need user input)
 
