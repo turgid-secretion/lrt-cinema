@@ -24,11 +24,11 @@ from the user's response.
 | `04_adjacent_fields.md` | Astronomy photometric calibration, microscopy stain normalization (Macenko/Reinhard/Vahadane), DICOM, remote sensing HLS, display ICC profiles, audio room correction (Dirac), FFCC, stain GAN |
 | `05_synthesis.md` | Cross-cutting findings, what an "academic-best" lrt-cinema would look like, the Luther/Maxwell-Ives theoretical floor explanation, the 3 paths forward (root-poly, SSF-IDT, HSV residual catcher) |
 | `06_framing_shift.md` | The user-supplied reframing that emerged from reviewing the synthesis: the problem isn't matching LR's output, it's the **control mismatch** between grade-in-LRT-preview vs render-in-dt. Includes the spawned chip's mission. |
-| `07_decision.md` | The fresh-context chip's decision deliverable. Empirical cache-behavior test + user workflow answer → recommendation: ship current state, retire PR #15, re-anchor docs around the two-stage workflow. Includes per-PR fate, option-space comparison matrix, and a concrete action list on sign-off. |
+| `07_decision.md` | Decision input. Empirical LRT preview-cache behavior test (forecloses Exit 2). Decomposition of where the control loop closes / does not close across the LRT → lrt-cinema → Resolve chain, including a correction to the framing-shift doc's use of the ACES analogy. Option-space matrix and PR-chain implications, with recommendations conditional on which workflow paths the project chooses to support. |
 
 ## Status
 
-The research input (`01`–`06`) was carried forward into the decision
-document `07`. The decision is awaiting user sign-off; the action list
-in `07_decision.md` §"Concrete action list" describes what implementation
-follows.
+The research input (`01`–`06`) plus the empirical inputs in `07` are
+the basis for the workflow-target decision the maintainer makes next.
+`07_decision.md` § "Concrete action list" describes what implementation
+follows under each branch.
