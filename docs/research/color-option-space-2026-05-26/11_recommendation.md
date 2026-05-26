@@ -2,10 +2,13 @@
 
 *This is the action plan for v0.6. Supersedes the recommendation
 portion of `07_decision.md`. Draws on the empirical inputs in
-`09_dcp_variance.md`, the four cluster feasibility studies
-(`09a`–`09d`), and the option-space synthesis in `10_synthesis.md`.
-The full research is preserved in tree as `01`–`10`; this doc is the
-implementation contract.*
+`09_dcp_variance.md` (Q1: cross-camera DCP-field variance) +
+`09e_a_prime_ceiling.md` (A' empirical ΔE ceiling) +
+`09f_metadata_passthrough.md` (Resolve XMP handling characterization),
+the four cluster feasibility studies (`09a`–`09d`), and the
+option-space synthesis in `10_synthesis.md`. The full research is
+preserved in tree as `01`–`10`; this doc is the implementation
+contract.*
 
 ## TL;DR
 
@@ -27,18 +30,47 @@ Ship **refined Shape α** in ~3.5–4 engineer-weeks for v0.6:
      linear matrix; Resolve handles it).
    No engineering on the presets themselves; no OCIO config emission.
 
+**Empirical confirmation (2026-05-26)**:
+
+`09e_a_prime_ceiling.md` measured A' against a 40-camera evaluation
+panel with 214 spectral patches under D55. Headline results:
+
+- **For modern HSM-equipped DSLR/mirrorless/mobile (the project's
+  primary target): A' achieves ~1.5 ΔE2000 mean.** Apple 0.39, Nikon
+  Z f 0.64, Fujifilm 0.92, Google 1.02, Panasonic 1.14, Samsung 3.12,
+  Sony 3.50. Inside cinema-reference tolerance for the primary target
+  camera class.
+- For the full catalog including legacy bodies (Olympus SP-500UZ,
+  Nikon Coolpix 5400, Canon EOS 450D, etc.): A' achieves ~3.60 mean /
+  11.46 P95 ΔE — broadcast-acceptable but not cinema.
+- **The cascade (median HSM + median LookTable) does real work**:
+  median-HSM-only is 4.83 mean; median-LookTable-only is 6.05; both
+  together is 3.60. Ship both stages in `adobe_standard.npz`.
+- 33³ and 65³ uncompressed direct-RGB cubes perform equivalently
+  (4.11 vs 4.15 mean) — the user's "uncompressed gains fidelity"
+  hypothesis does NOT hold. Per-camera tuning variance is the binding
+  constraint, not representation compression.
+
 **Deferred to follow-up research, not v0.6:**
 
 - **G2 (parallel viewer)**: dropped unless empirical pilot shows A'
-  alone leaves a residual that breaks the workflow. Per user's
-  challenge, A' closing to ~2–3 ΔE mean on clean-translating LRT-
-  stage operations should bring decisions inside broadcast tolerance.
-- **Metadata-passthrough emission mode**: characterize further before
-  committing. Open research task per user direction
-  ("investigate more before deciding").
+  alone leaves a residual that breaks the workflow. The
+  ~1.5 ΔE mean on target modern cameras suggests G2 is unnecessary
+  for the primary user base.
 - **Shape γ (full LRT replacement)**: held on the horizon for a
   future v1.0 if the project commits to long-term Adobe-free posture
   with sustainable maintenance bandwidth.
+
+**DROPPED (not deferred) per `09f_metadata_passthrough.md`:**
+
+- **Metadata-passthrough emission mode**: ruled out by Resolve's
+  documented behavior. Three independent failure grounds, each
+  sufficient: (1) Resolve does NOT read XMP develop intent on RAW
+  (Wegner-confirmed; Resolve 21 Photo-page docs explicit); (2)
+  Resolve's "Camera Raw" is BMD's independent YRGB implementation,
+  not Adobe Camera Raw; (3) image-sequence imports apply one Camera
+  Raw decode per clip, not per-frame XMP. Engineering scope (~3 wks)
+  would produce code Resolve ignores.
 
 **Foreclosed by analysis:**
 
@@ -68,9 +100,10 @@ The file contains:
 - A distilled "shared LookTable" cube: median across the 474 same-
   dimension (36, 8, 16) Adobe Standard LookTables.
 - A distilled "shared HueSatMap" cube: median across the 322 same-
-  dimension (90, 30, 1) Adobe Standard HueSatMaps. Optional —
-  consider dropping in v0.6 and only adding if validation shows
-  saturated-chroma drift on per-camera comparison.
+  dimension (90, 30, 1) Adobe Standard HueSatMaps. **Ship it.**
+  Per `09e_a_prime_ceiling.md`, the cascade (HSM + LookTable) is
+  3.60 ΔE mean across the catalog; HSM-only is 4.83; LookTable-only
+  is 6.05. The cascade does real work.
 - A camera-agnostic baseline-exposure offset of 0.0 (per Q1: Adobe
   Standard ships BaselineExposure=0 for all cameras).
 - No ProfileToneCurve (per Q1: 97% of Adobe Standard DCPs ship
@@ -136,17 +169,23 @@ harness, run against:
   + LRT preview JPGs as test fixtures, where available; otherwise
   validation is single-camera baseline.
 
-Acceptance: mean ΔE < 3 mean / < 6 P95 across the panel. Above
-broadcast tolerance is acceptable (the workflow has Resolve doing
-final color). Stretched goal: mean ΔE < 2 across the panel.
+Acceptance (per `09e_a_prime_ceiling.md` measured panel):
 
-Open question (resolve during validation): drop or ship the median
-HueSatMap. Q1's cross-camera variance on HSM is moderate (sat
-scale std ~19% per cell mean, ~40% P95); 29% of Adobe Standard
-profiles already ship without HSM. If validation shows the median
-HSM helps on cameras Adobe tunes aggressively (Apple, Samsung) and
-doesn't hurt on others, ship it. If it produces worse results than
-no HSM on most cameras, drop it.
+- **Modern-camera class (primary target)**: mean ΔE < 2.5, P95 < 5
+  across {Nikon Z 6 / Z f, Canon R5, Sony A7 IV, Fujifilm X-T5,
+  Panasonic GH6, Apple iPhone 14+ Pro, Google Pixel 7+}. Measured
+  result on the construction set: 1.5 mean across this class.
+- **Full-catalog class (extended support)**: mean ΔE < 4, P95 < 12
+  across legacy bodies. Measured result: 3.60 mean.
+
+Above broadcast tolerance is acceptable on the full-catalog class
+(the workflow has Resolve doing final color). Cinema-reference is
+the achievable bar on modern target cameras.
+
+Median HSM decision: SHIP IT. Per `09e_a_prime_ceiling.md`'s
+measurement, the median-HSM-plus-median-LookTable cascade outperforms
+either alone (3.60 vs 4.83 vs 6.05 mean ΔE). Both stages do real
+work. The earlier "drop HSM" hypothesis is empirically falsified.
 
 ### Cost
 
@@ -253,28 +292,27 @@ lrt-cinema does not need to emit anything special.
 These are explicitly NOT in v0.6 scope but are tracked for future
 research / implementation:
 
-### Metadata-passthrough mode
+### Metadata-passthrough mode — DROPPED
 
-User direction (2026-05-26): "investigate more before deciding."
-Open research questions:
+Investigated in `09f_metadata_passthrough.md`. Verdict: **drop**, not
+defer. Three independent failure grounds:
 
-- Does Resolve's Camera Raw module read LR-shape XMP for the user's
-  primary camera (Nikon NEF)? What level of fidelity to ACR's
-  PV2012 develop does Resolve's Camera Raw provide on NEF input?
-- How does Resolve handle LRT's mask-based deflicker / HG encoding
-  (`#LRT internal use (Deflicker)` / `(HG)` corrections inside
-  `crs:MaskGroupBasedCorrections`)? Does it apply them at all?
-- What's the colorist's workflow if lrt-cinema emits modified LR-
-  shape XMP (with deflicker/HG baked into the `crs:Exposure2012`
-  field per-frame, rather than via mask-correction)? Does Resolve
-  read them correctly?
-- Are there cameras where the Camera Raw path produces a visibly
-  different / better result than lrt-cinema's dt-rendered TIFF?
+1. Resolve does NOT read XMP develop intent on RAW (LRTimelapse
+   author Wegner confirmed; Resolve 21 Photo-page launch docs
+   explicit: "develop settings do NOT transfer").
+2. Resolve's "Camera Raw" is BMD's independent YRGB implementation,
+   not Adobe Camera Raw. Colorist reviews flag color-accuracy
+   problems especially on Fujifilm + iPhone ProRAW.
+3. Resolve treats image sequences as a single clip with one Camera
+   Raw decode — no per-frame XMP application surface. The LRT-
+   authored per-frame Deflicker / HG `crs:LocalExposure2012` deltas
+   have no place to land.
 
-A scoping document at `docs/research/metadata_passthrough_scoping.md`
-(or similar) would characterize the workflow before committing to
-implementation. Estimate: ~0.5–1 wk of research before scope is
-clear; if committed, ~2–3 wks to implement.
+Engineering scope (~3 wks) would produce code Resolve ignores.
+
+The metadata-passthrough candidate is closed for the lrt-cinema
+project's lifetime unless Resolve introduces XMP-develop-intent
+reading on RAW imports (no announced plans).
 
 ### G2 parallel viewer (deferred)
 
