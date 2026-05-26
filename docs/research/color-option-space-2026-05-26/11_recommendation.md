@@ -314,6 +314,36 @@ The metadata-passthrough candidate is closed for the lrt-cinema
 project's lifetime unless Resolve introduces XMP-develop-intent
 reading on RAW imports (no announced plans).
 
+### CinemaDNG emission mode (v0.7+ candidate)
+
+Per user direction 2026-05-26 ("Add CinemaDNG as a v0.7 candidate"):
+characterize whether emitting per-frame CinemaDNG (linear sensor RGB
++ per-frame metadata) gives the colorist meaningfully more flexibility
+than the existing cinema-aces OpenEXR preset.
+
+Open questions:
+
+- Can Resolve's CinemaDNG decoder honor per-frame metadata
+  (BaselineExposure delta, ProfileToneCurve, white-balance) reliably?
+  Empirical testing needed; documented behavior is uncertain.
+- Does encoding LRT-stage temporal operations (deflicker + Holy Grail
+  exposure deltas) into per-frame CinemaDNG metadata produce the
+  same downstream effect as baking them into cinema-aces EXR?
+- Does Resolve's CinemaDNG RAW decoder produce visibly different
+  results from its OpenEXR / TIFF decoder? Is there a color-science
+  reason a colorist would prefer one over the other?
+- What's the lrt-cinema engineering scope? darktable does not emit
+  DNG natively; a custom DNG writer (rawpy + tifffile, or Adobe DNG
+  SDK at install time) would be required. Per-frame metadata
+  encoding adds complexity.
+- Coverage: does emitting CinemaDNG provide value for non-Bayer
+  sensors (Fujifilm X-Trans, Sigma Foveon)?
+
+A scoping document `docs/research/cinema_dng_scoping.md` (or similar
+in a future research pass) would close these questions. Rough
+estimate: ~1-2 wks of research before scope is clear; if committed,
+~2-3 wks to implement. Track as v0.7+ candidate; not in v0.6 scope.
+
 ### G2 parallel viewer (deferred)
 
 If post-A' validation reveals the cross-stage gap is materially
