@@ -112,6 +112,90 @@ def make_exposure_ramp(exposure: float, shadows: float = 5.0,
     return eval_ramp
 
 
+class DngSplineSolver:
+    """Direct port of dng_spline_solver from dng_spline.cpp.
+
+    C0, C1, C2 continuous cubic Hermite spline with second-derivative-zero
+    boundary conditions. Slopes solved via tridiagonal LU (per the SDK's
+    Solve() method, lines 57-145 of dng_spline.cpp).
+
+    Tone-curve usage: applies the ProfileToneCurve's control points exactly
+    as dng_render.cpp does (line 2164: `fProfileToneCurve.Reset(new
+    dng_spline_solver); profile.ToneCurve().Solve(*fProfileToneCurve.Get())`).
+    """
+
+    def __init__(self, x_coords, y_coords):
+        self.X = np.asarray(x_coords, dtype=np.float64)
+        self.Y = np.asarray(y_coords, dtype=np.float64)
+        self.S = self._solve()
+
+    def _solve(self):
+        X, Y = self.X, self.Y
+        count = len(X)
+        if count < 2:
+            raise ValueError("Need at least 2 points")
+        start, end = 0, count
+        A = X[start + 1] - X[start]
+        B = (Y[start + 1] - Y[start]) / A
+        S = np.zeros(count, dtype=np.float64)
+        S[start] = B
+        for j in range(start + 2, end):
+            C = X[j] - X[j - 1]
+            D = (Y[j] - Y[j - 1]) / C
+            S[j - 1] = (B * C + D * A) / (A + C)
+            A, B = C, D
+        S[end - 1] = 2.0 * B - S[end - 2]
+        S[start] = 2.0 * S[start] - S[start + 1]
+        if (end - start) > 2:
+            E = np.zeros(count, dtype=np.float64)
+            F = np.zeros(count, dtype=np.float64)
+            G = np.zeros(count, dtype=np.float64)
+            F[start] = 0.5
+            E[end - 1] = 0.5
+            G[start] = 0.75 * (S[start] + S[start + 1])
+            G[end - 1] = 0.75 * (S[end - 2] + S[end - 1])
+            for j in range(start + 1, end - 1):
+                A_j = (X[j + 1] - X[j - 1]) * 2.0
+                E[j] = (X[j + 1] - X[j]) / A_j
+                F[j] = (X[j] - X[j - 1]) / A_j
+                G[j] = 1.5 * S[j]
+            for j in range(start + 1, end):
+                A_j = 1.0 - F[j - 1] * E[j]
+                if j != end - 1:
+                    F[j] /= A_j
+                G[j] = (G[j] - G[j - 1] * E[j]) / A_j
+            for j in range(end - 2, start - 1, -1):
+                G[j] = G[j] - F[j] * G[j + 1]
+            S = G.copy()
+        return S
+
+    def evaluate(self, x):
+        """Vectorized evaluation. x is a numpy array (any shape)."""
+        X, Y, S = self.X, self.Y, self.S
+        count = len(X)
+        x_arr = np.asarray(x, dtype=np.float64)
+        flat = x_arr.flatten()
+        j = np.searchsorted(X, flat, side='left')
+        j = np.clip(j, 1, count - 1)
+        below = flat <= X[0]
+        above = flat >= X[-1]
+        inside = ~(below | above)
+        j_in = j[inside]
+        x0 = X[j_in - 1]; y0 = Y[j_in - 1]; s0 = S[j_in - 1]
+        x1 = X[j_in    ]; y1 = Y[j_in    ]; s1 = S[j_in    ]
+        x_in = flat[inside]
+        A = x1 - x0
+        B = (x_in - x0) / A
+        C = (x1 - x_in) / A
+        D = ((y0 * (2.0 - C + B) + (s0 * A * B)) * (C * C)) + \
+            ((y1 * (2.0 - B + C) - (s1 * A * C)) * (B * B))
+        out = np.empty_like(flat)
+        out[below] = Y[0]
+        out[above] = Y[-1]
+        out[inside] = D
+        return out.reshape(x_arr.shape)
+
+
 def read_dcp_default_black_render(dcp_path) -> int:
     """Read DefaultBlackRender tag from a DCP file. Returns 0 (Auto) by default.
     Tag 51110 per DNG 1.7.1. Value 1 = None (no shadow lifting); 0 = Auto.
@@ -162,6 +246,42 @@ from lrt_cinema.dcp import (
     parse_dcp, interpolate_color_matrix, interpolate_hsv_cube,
     kelvin_tint_to_xy, xy_to_uv, uv_to_kelvin,
 )
+
+
+def neutral_to_kelvin(profile, as_shot_neutral, max_passes: int = 30) -> float:
+    """Adobe SDK dng_color_spec::NeutralToXY iteration → kelvin.
+
+    Iterates: at the current kelvin estimate, compute xyzToCamera = interpolated
+    ColorMatrix; back-solve neutral_xyz = inverse(xyzToCamera) * AsShotNeutral;
+    convert XYZ → xy → kelvin via Robertson; repeat. Converges typically in
+    3-10 passes.
+    """
+    asn = np.asarray(as_shot_neutral, dtype=np.float64)
+    # Start at D50 (0.34567, 0.35850) ~= 5003K.
+    last_xy = (0.34567, 0.35850)
+    for _ in range(max_passes):
+        x_, y_ = last_xy
+        u, v = xy_to_uv(x_, y_)
+        k = uv_to_kelvin(u, v)
+        cm = interpolate_color_matrix(profile, k)  # XYZ_D50 → camera RGB
+        # Solve XYZ_D50 such that cm @ xyz = asn  →  xyz = inv(cm) @ asn
+        try:
+            cm_inv = np.linalg.inv(cm)
+        except np.linalg.LinAlgError:
+            return k
+        xyz = cm_inv @ asn
+        # XYZ → xy
+        s = xyz.sum()
+        if s == 0:
+            return k
+        next_x = xyz[0] / s
+        next_y = xyz[1] / s
+        if abs(next_x - last_xy[0]) + abs(next_y - last_xy[1]) < 1e-7:
+            last_xy = (next_x, next_y)
+            break
+        last_xy = (next_x, next_y)
+    u, v = xy_to_uv(*last_xy)
+    return uv_to_kelvin(u, v)
 from lrt_cinema.lut3d_baker import (
     _rgb_to_hsv_dcp, _hsv_to_rgb_dcp, _apply_hsv_cube,
 )
@@ -369,13 +489,13 @@ def apply_adobe_pipeline(
     if globals().get("APPLY_TONECURVE", True):
         if profile.profile_tone_curve is not None:
             curve = profile.profile_tone_curve
-            from scipy.interpolate import PchipInterpolator
-            # PCHIP = monotone cubic Hermite. Closest to dng_spline_solver's
-            # tangent-clamped Hermite spline used by Adobe DNG SDK.
-            pchip = PchipInterpolator(curve[:, 0], curve[:, 1], extrapolate=True)
+            # Direct port of Adobe's dng_spline_solver (C2-continuous Hermite
+            # spline with second-derivative-zero boundary). Replaces scipy
+            # PCHIP; matches dng_render.cpp:2164 ProfileToneCurve handling.
+            solver = DngSplineSolver(curve[:, 0], curve[:, 1])
             clipped = np.clip(prophoto_out, 0.0, 1.0)
             for ch in range(3):
-                prophoto_out[..., ch] = np.clip(pchip(clipped[..., ch]), 0.0, 1.0).astype(np.float32)
+                prophoto_out[..., ch] = np.clip(solver.evaluate(clipped[..., ch]), 0.0, 1.0).astype(np.float32)
         elif _ACR3_DEFAULT is not None:
             # Profile has no ProfileToneCurve — apply Adobe SDK's ACR3 default.
             clipped = np.clip(prophoto_out, 0.0, 1.0)

@@ -37,8 +37,12 @@ camera_rgb = ap.demosaic_camera_rgb(DNG)
 ap.APPLY_LOOKTABLE = True; ap.APPLY_TONECURVE = True
 dng_be = ap.read_dng_baseline_exposure(DNG)
 dbr = ap.read_dcp_default_black_render(DCP)
-print(f'DNG.BaselineExposure = {dng_be}, DCP.DefaultBlackRender = {dbr}')
-prophoto = ap.apply_adobe_pipeline(camera_rgb, profile, asn, 5500.0,
+# Note: NeutralToXY-derived kelvin matches Adobe's algorithm in principle
+# but empirically diverges for some profiles. For now use fixed 5500K
+# (manual EXIF setting on the gym NEF) until the residual is understood.
+scene_k = 5500.0
+print(f'DNG.BE = {dng_be}, DBR = {dbr}, scene_K = {scene_k:.0f}')
+prophoto = ap.apply_adobe_pipeline(camera_rgb, profile, asn, scene_k,
                                     dng_baseline_exposure=dng_be,
                                     default_black_render=dbr)
 srgb = ap.prophoto_to_srgb(prophoto)
