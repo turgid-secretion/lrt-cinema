@@ -77,6 +77,29 @@ def test_tiff_rejects_invalid_bit_depth(tmp_path):
         write_tiff_linear_rec2020(x, tmp_path / "x.tif", bit_depth=12)
 
 
+def test_tiff_32bit_float_preserves_overrange(tmp_path):
+    """32-bit float TIFF is the cinema-linear default. Must preserve
+    overrange (>1) signal — Resolve grade needs it. 16-bit int clips."""
+    tifffile = pytest.importorskip("tifffile")
+    x = np.full((4, 4, 3), 1.7, dtype=np.float32)  # overrange
+    dst = tmp_path / "linear.tif"
+    write_tiff_linear_rec2020(x, dst, bit_depth=32)
+    rt = tifffile.imread(str(dst))
+    assert rt.dtype == np.float32
+    # Overrange survives — round-tripped through Rec.2020 matrix.
+    assert rt.max() > 1.0
+
+
+def test_cinema_linear_default_is_float(tmp_path):
+    """Default bit_depth (no kwarg) is 32-bit float for cinema-linear use."""
+    tifffile = pytest.importorskip("tifffile")
+    x = np.full((2, 2, 3), 0.5, dtype=np.float32)
+    dst = tmp_path / "default.tif"
+    write_tiff_linear_rec2020(x, dst)  # no bit_depth kwarg
+    rt = tifffile.imread(str(dst))
+    assert rt.dtype == np.float32
+
+
 def test_tiff_clips_overrange(tmp_path):
     tifffile = pytest.importorskip("tifffile")
     x = np.full((2, 2, 3), 1.5, dtype=np.float32)  # overrange
