@@ -29,6 +29,7 @@ Implements the pipeline from DNG 1.7.1 §"Mapping Camera Color Space":
 Output: an sRGB PNG/JPEG that should match the LRT preview within ~1 ΔE
 if the pipeline is correctly implemented.
 """
+import json
 import sys
 import warnings
 from pathlib import Path
@@ -41,6 +42,121 @@ sys.path.insert(0, "/Users/dylan/Documents/001_CODE/lrt-cinema/src")
 import rawpy
 import colour
 from PIL import Image
+
+
+# Adobe DNG SDK ACR3 default tone curve (dng_render.cpp:164-423).
+# 1025-entry table mapping [0, 1] → [0, 1]. Applied when the camera profile
+# has no embedded ProfileToneCurve (per dng_render.cpp:2124 default).
+_ACR3_TABLE_PATH = Path(__file__).parent / "acr3_default_curve.json"
+if _ACR3_TABLE_PATH.exists():
+    _ACR3_DEFAULT = np.array(json.loads(_ACR3_TABLE_PATH.read_text()), dtype=np.float32)
+else:
+    _ACR3_DEFAULT = None
+
+
+def apply_acr3_default(x: np.ndarray) -> np.ndarray:
+    """Apply Adobe ACR3 default tone curve via linear interpolation between
+    1025 sample points. Matches dng_render.cpp::dng_tone_curve_acr3_default::Evaluate.
+    """
+    if _ACR3_DEFAULT is None:
+        return x
+    n = len(_ACR3_DEFAULT)  # 1025
+    y = np.clip(x, 0.0, 1.0) * (n - 1)
+    idx = np.clip(y.astype(np.int32), 0, n - 2)
+    frac = y - idx
+    return _ACR3_DEFAULT[idx] * (1.0 - frac) + _ACR3_DEFAULT[idx + 1] * frac
+
+
+def make_exposure_ramp(exposure: float, shadows: float = 5.0,
+                       shadow_scale: float = 1.0, stage3_gain: float = 1.0,
+                       support_overrange: bool = False):
+    """Build Adobe dng_function_exposure_ramp closure.
+
+    Per dng_render.cpp::dng_function_exposure_ramp:
+      slope = 1 / (white - black)
+      white = 1 / 2^max(0, exposure)
+      black = shadows * shadow_scale * stage3_gain * 0.001
+      radius = min(0.5 * black, 1/16 / slope)
+      qscale = slope / (4 * radius)  (if radius > 0)
+
+    Evaluate(x):
+      x <= black - radius      → 0
+      x >= black + radius      → (x - black) * slope  (clipped to 1.0 unless overrange)
+      x in [black-rad, black+rad] → qscale * (x - (black-radius))^2
+
+    Per-channel application with same params (matches DoBaseline1DFunction loop
+    in dng_render.cpp lines 1915-1936).
+    """
+    white = 1.0 / pow(2.0, max(0.0, exposure))
+    black = shadows * shadow_scale * stage3_gain * 0.001
+    black = min(black, 0.99 * white)
+    slope = 1.0 / (white - black) if white > black else 1.0
+    k_max_x = 0.5
+    k_max_y = 1.0 / 16.0
+    radius = min(k_max_x * black, k_max_y / slope) if slope > 0 else 0.0
+    qscale = slope / (4.0 * radius) if radius > 0.0 else 0.0
+    floor_thresh = black - radius
+    ceil_thresh = black + radius
+
+    def eval_ramp(x: np.ndarray) -> np.ndarray:
+        # Three-region piecewise: 0, quadratic, linear.
+        linear = (x - black) * slope
+        if not support_overrange:
+            linear = np.minimum(linear, 1.0)
+        delta = x - floor_thresh
+        quad = qscale * delta * delta
+        out = np.where(x >= ceil_thresh, linear,
+                       np.where(x <= floor_thresh, 0.0, quad))
+        return out.astype(x.dtype)
+
+    return eval_ramp
+
+
+def read_dcp_default_black_render(dcp_path) -> int:
+    """Read DefaultBlackRender tag from a DCP file. Returns 0 (Auto) by default.
+    Tag 51110 per DNG 1.7.1. Value 1 = None (no shadow lifting); 0 = Auto.
+    """
+    import struct
+    try:
+        with open(str(dcp_path), 'rb') as f:
+            data = f.read()
+        if data[:4] == b'\xff\xd8\xff\xe0' or data[:2] not in (b'II', b'MM'):
+            return 0
+        bo = '<' if data[:2] == b'II' else '>'
+        ifd_offset = struct.unpack(bo + 'I', data[4:8])[0]
+        n_entries = struct.unpack(bo + 'H', data[ifd_offset:ifd_offset+2])[0]
+        for i in range(n_entries):
+            entry = ifd_offset + 2 + i * 12
+            tag_id = struct.unpack(bo + 'H', data[entry:entry+2])[0]
+            if tag_id == 51110:  # DefaultBlackRender
+                tag_type = struct.unpack(bo + 'H', data[entry+2:entry+4])[0]
+                # Type 4 = LONG
+                if tag_type == 4:
+                    return struct.unpack(bo + 'I', data[entry+8:entry+12])[0]
+                elif tag_type == 3:  # SHORT
+                    return struct.unpack(bo + 'H', data[entry+8:entry+10])[0]
+        return 0
+    except Exception:
+        return 0
+
+
+def read_dng_baseline_exposure(dng_path) -> float:
+    """Read DNG BaselineExposure (tag 50730) from a DNG file. Returns float.
+
+    Per DNG 1.7.1: SRATIONAL (signed rational). tifffile returns this as
+    a tuple (num, den), an integer, or already a float depending on TIFF
+    encoding. Handle each case.
+    """
+    import tifffile
+    with tifffile.TiffFile(str(dng_path)) as tif:
+        for page in tif.pages:
+            tag = page.tags.get(50730)
+            if tag is not None:
+                v = tag.value
+                if isinstance(v, tuple) and len(v) == 2:
+                    return float(v[0]) / float(v[1])
+                return float(v)
+    return 0.0
 
 from lrt_cinema.dcp import (
     parse_dcp, interpolate_color_matrix, interpolate_hsv_cube,
@@ -122,6 +238,8 @@ def apply_adobe_pipeline(
     profile,
     as_shot_neutral: np.ndarray,
     scene_kelvin: float,
+    dng_baseline_exposure: float = 0.0,
+    default_black_render: int = 0,  # 0 = Auto (shadows=5.0); 1 = None (shadows=0)
 ) -> np.ndarray:
     """Apply DNG 1.7.1 reference pipeline. Input: linear camera RGB
     [0, 1]. Output: linear ProPhoto RGB (D50) [0, 1+].
@@ -196,11 +314,11 @@ def apply_adobe_pipeline(
     prophoto = xyz.reshape(-1, 3) @ M_XYZ_D50_TO_PROPHOTO_D50.T
     prophoto = prophoto.reshape(h, w, 3).astype(np.float32)
 
-    # --- Step 4: RGB → HSV (Adobe hexcone variant) ---
-    h_arr, s_arr, v_arr, valid = _rgb_to_hsv_dcp(prophoto)
-
-    # --- Step 5: Apply HueSatMap if present ---
+    # --- Step 4: Apply HueSatMap if present (HSV decomp + apply + recompose) ---
+    # Match dng_render.cpp order: HSM applied immediately after camera→ProPhoto.
+    rgb = prophoto
     if profile.hue_sat_map is not None:
+        h_arr, s_arr, v_arr, valid = _rgb_to_hsv_dcp(rgb)
         hsm_blended = interpolate_hsv_cube(
             profile.hue_sat_map, scene_kelvin,
             profile.kelvin_1, profile.kelvin_2,
@@ -208,37 +326,61 @@ def apply_adobe_pipeline(
         h_arr, s_arr, v_arr = _apply_hsv_cube(
             h_arr, s_arr, v_arr, hsm_blended, profile.hue_sat_map,
         )
+        rgb_post_hsm = _hsv_to_rgb_dcp(h_arr, s_arr, v_arr)
+        rgb = np.where(valid[..., None], rgb_post_hsm, rgb)
 
-    # --- Step 6: BaselineExposureOffset on V (multiplicative, EV → linear) ---
-    if profile.baseline_exposure_offset != 0.0:
-        v_arr = v_arr * (2.0 ** profile.baseline_exposure_offset)
+    # --- Step 5: ExposureRamp per-channel in linear ProPhoto ---
+    # Per dng_render.cpp lines 977-998, 1915-1936:
+    #   exposure = fParams.Exposure() + fBaselineExposure
+    #   fBaselineExposure = TotalBaselineExposure - log2(Stage3Gain)
+    #   Stage3Gain = 1.0 in standard CFA path → fBaselineExposure = TotalBaselineExposure
+    #   TotalBaselineExposure = DNG.BaselineExposure + DCP.BaselineExposureOffset
+    # Then ExposureRamp uses white = 1/2^max(0, exposure), black = 0.005, with
+    # quadratic shadow rolloff in [black - radius, black + radius].
+    total_baseline_exposure = dng_baseline_exposure + profile.baseline_exposure_offset
+    exposure_value = total_baseline_exposure + profile.baseline_exposure
+    # Per dng_render.cpp:2174-2179: if profile.DefaultBlackRender == None,
+    # Shadows is set to 0 (= no shadow-point lifting in the ExposureRamp).
+    shadows = 0.0 if default_black_render == 1 else 5.0
+    ramp = make_exposure_ramp(exposure=exposure_value, shadows=shadows,
+                              shadow_scale=1.0, stage3_gain=1.0,
+                              support_overrange=False)
+    rgb = ramp(rgb)
 
-    # --- Step 7: Apply LookTable if present ---
+    # --- Step 6: Apply LookTable if present (HSV decomp + apply + recompose) ---
     if profile.look_table is not None and globals().get("APPLY_LOOKTABLE", True):
+        h_arr, s_arr, v_arr, valid = _rgb_to_hsv_dcp(rgb)
         h_arr, s_arr, v_arr = _apply_hsv_cube(
             h_arr, s_arr, v_arr, profile.look_table.data_1, profile.look_table,
         )
+        rgb_post_lt = _hsv_to_rgb_dcp(h_arr, s_arr, v_arr)
+        rgb = np.where(valid[..., None], rgb_post_lt, rgb)
 
-    # --- Step 8: HSV → RGB (no ProfileToneCurve on V — Adobe SDK applies per-channel later) ---
-    prophoto_out = _hsv_to_rgb_dcp(h_arr, s_arr, v_arr)
-    # For pixels with negative input (matrix-only fallback), pass through.
-    prophoto_out = np.where(valid[..., None], prophoto_out, prophoto)
+    prophoto_out = rgb
 
     # --- Step 9: ProfileToneCurve applied PER-CHANNEL in linear ProPhoto ---
     # Per dng_render.cpp::DoBaselineRGBTone: Adobe SDK applies the
     # ProfileToneCurve per R,G,B channel independently — NOT on V as the
     # DNG 1.7.1 spec text suggests. SDK behavior is the ground truth.
     # The curve is solved as a (monotone) cubic spline before per-channel
-    # application (dng_render.cpp::Solve via dng_spline_solver).
-    if profile.profile_tone_curve is not None and globals().get("APPLY_TONECURVE", True):
-        curve = profile.profile_tone_curve
-        from scipy.interpolate import PchipInterpolator
-        # PCHIP = monotone cubic Hermite. Closest to dng_spline_solver's
-        # tangent-clamped Hermite spline used by Adobe DNG SDK.
-        pchip = PchipInterpolator(curve[:, 0], curve[:, 1], extrapolate=True)
-        clipped = np.clip(prophoto_out, 0.0, 1.0)
-        for ch in range(3):
-            prophoto_out[..., ch] = np.clip(pchip(clipped[..., ch]), 0.0, 1.0).astype(np.float32)
+    # application (dng_render.cpp::Solve via dng_spline_solver). When the
+    # profile has no ProfileToneCurve, dng_render falls back to the ACR3
+    # default tone curve (dng_render.cpp:2124).
+    if globals().get("APPLY_TONECURVE", True):
+        if profile.profile_tone_curve is not None:
+            curve = profile.profile_tone_curve
+            from scipy.interpolate import PchipInterpolator
+            # PCHIP = monotone cubic Hermite. Closest to dng_spline_solver's
+            # tangent-clamped Hermite spline used by Adobe DNG SDK.
+            pchip = PchipInterpolator(curve[:, 0], curve[:, 1], extrapolate=True)
+            clipped = np.clip(prophoto_out, 0.0, 1.0)
+            for ch in range(3):
+                prophoto_out[..., ch] = np.clip(pchip(clipped[..., ch]), 0.0, 1.0).astype(np.float32)
+        elif _ACR3_DEFAULT is not None:
+            # Profile has no ProfileToneCurve — apply Adobe SDK's ACR3 default.
+            clipped = np.clip(prophoto_out, 0.0, 1.0)
+            for ch in range(3):
+                prophoto_out[..., ch] = apply_acr3_default(clipped[..., ch]).astype(np.float32)
 
     # Apply BaselineExposure (scalar EV, on top of all above).
     if profile.baseline_exposure != 0.0:

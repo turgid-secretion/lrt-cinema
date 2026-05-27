@@ -31,9 +31,16 @@ print(f'dng_validate output: {dng_val.shape} dtype={dng_val.dtype}')
 profile = parse_dcp('/Library/Application Support/Adobe/CameraRaw/CameraProfiles/Camera/Nikon D750/Nikon D750 Camera Standard.dcp')
 with rawpy.imread('/tmp/v04_test_input/DSC_4053.NEF') as raw:
     asn = 1.0 / np.array(raw.camera_whitebalance[:3], dtype=np.float32); asn = asn / asn[1]
-camera_rgb = ap.demosaic_camera_rgb('/tmp/dng_out/DSC_4053.dng')
+DNG = '/tmp/dng_out/DSC_4053.dng'
+DCP = '/Library/Application Support/Adobe/CameraRaw/CameraProfiles/Camera/Nikon D750/Nikon D750 Camera Standard.dcp'
+camera_rgb = ap.demosaic_camera_rgb(DNG)
 ap.APPLY_LOOKTABLE = True; ap.APPLY_TONECURVE = True
-prophoto = ap.apply_adobe_pipeline(camera_rgb, profile, asn, 5500.0)
+dng_be = ap.read_dng_baseline_exposure(DNG)
+dbr = ap.read_dcp_default_black_render(DCP)
+print(f'DNG.BaselineExposure = {dng_be}, DCP.DefaultBlackRender = {dbr}')
+prophoto = ap.apply_adobe_pipeline(camera_rgb, profile, asn, 5500.0,
+                                    dng_baseline_exposure=dng_be,
+                                    default_black_render=dbr)
 srgb = ap.prophoto_to_srgb(prophoto)
 print(f'ours: {srgb.shape}')
 

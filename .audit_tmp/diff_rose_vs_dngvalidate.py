@@ -22,9 +22,10 @@ def to_lab(arr):
     return colour.XYZ_to_Lab(xyz, illuminant=D65_xy)
 
 RAW = '/tmp/dng_out/rose.dng'  # use DNG for LinearizationTable + WhiteLevel
-DCP = '/Library/Application Support/Adobe/CameraRaw/CameraProfiles/Camera/Nikon D750/Nikon D750 Camera Standard.dcp'
-REF = '/tmp/dng_out/rose_dngval_Camera_Standard.tif'
-NEF_FOR_WB = '/tmp/d750_sample.NEF'  # rawpy camera_whitebalance from DNG ≡ NEF
+# Rose DNG has Adobe Standard EMBEDDED — dng_validate uses embedded profile
+# regardless of -profile flag, so we must use the matching system DCP.
+DCP = '/Library/Application Support/Adobe/CameraRaw/CameraProfiles/Adobe Standard/Nikon D750 Adobe Standard.dcp'
+REF = '/tmp/dng_out/rose_dngval_Camera_Standard.tif'  # actually rendered with Adobe Std
 
 dng_val = tifffile.imread(REF)
 dng_val_8 = (dng_val.astype(np.float32) / 65535.0 * 255).astype(np.uint8)
@@ -34,8 +35,14 @@ profile = parse_dcp(DCP)
 with rawpy.imread(RAW) as raw:
     asn = 1.0 / np.array(raw.camera_whitebalance[:3], dtype=np.float32); asn = asn / asn[1]
 camera_rgb = ap.demosaic_camera_rgb(RAW)
+dng_be = ap.read_dng_baseline_exposure(RAW)
+print(f'DNG.BaselineExposure = {dng_be}')
 ap.APPLY_LOOKTABLE = True; ap.APPLY_TONECURVE = True
-prophoto = ap.apply_adobe_pipeline(camera_rgb, profile, asn, 5500.0)
+dbr = ap.read_dcp_default_black_render(DCP)
+print(f'DCP.DefaultBlackRender = {dbr}')
+prophoto = ap.apply_adobe_pipeline(camera_rgb, profile, asn, 5500.0,
+                                    dng_baseline_exposure=dng_be,
+                                    default_black_render=dbr)
 srgb = ap.prophoto_to_srgb(prophoto)
 print(f'ours: {srgb.shape}')
 
