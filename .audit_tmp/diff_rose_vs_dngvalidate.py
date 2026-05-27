@@ -36,11 +36,11 @@ with rawpy.imread(RAW) as raw:
     asn = 1.0 / np.array(raw.camera_whitebalance[:3], dtype=np.float32); asn = asn / asn[1]
 camera_rgb = ap.demosaic_camera_rgb(RAW)
 dng_be = ap.read_dng_baseline_exposure(RAW)
-print(f'DNG.BaselineExposure = {dng_be}')
 ap.APPLY_LOOKTABLE = True; ap.APPLY_TONECURVE = True
 dbr = ap.read_dcp_default_black_render(DCP)
-print(f'DCP.DefaultBlackRender = {dbr}')
-prophoto = ap.apply_adobe_pipeline(camera_rgb, profile, asn, 5500.0,
+scene_k = 5500.0  # see diff_vs_dngvalidate.py for note on NeutralToXY residual
+print(f'DNG.BE = {dng_be}, DBR = {dbr}, scene_K = {scene_k:.0f}')
+prophoto = ap.apply_adobe_pipeline(camera_rgb, profile, asn, scene_k,
                                     dng_baseline_exposure=dng_be,
                                     default_black_render=dbr)
 srgb = ap.prophoto_to_srgb(prophoto)

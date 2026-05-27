@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
-"""Sweep scene kelvin for rose to find best ΔE vs dng_validate."""
+"""Sweep scene kelvin for gym to find best ΔE vs dng_validate."""
 import sys, warnings
 import numpy as np
 warnings.filterwarnings("ignore")
 sys.path.insert(0, "/Users/dylan/Documents/001_CODE/lrt-cinema/src")
 sys.path.insert(0, "/Users/dylan/Documents/001_CODE/lrt-cinema/.audit_tmp")
-import rawpy
-import tifffile
-import colour
-from PIL import Image
+import rawpy, tifffile, colour
 import adobe_pipeline as ap
 from lrt_cinema.dcp import parse_dcp
 
@@ -19,9 +16,9 @@ def to_lab(arr):
     xyz = colour.RGB_to_XYZ(linear, "sRGB", apply_cctf_decoding=False)
     return colour.XYZ_to_Lab(xyz, illuminant=D65_xy)
 
-RAW = '/tmp/dng_out/rose.dng'
-DCP = '/Library/Application Support/Adobe/CameraRaw/CameraProfiles/Adobe Standard/Nikon D750 Adobe Standard.dcp'
-REF = '/tmp/dng_out/rose_dngval_Camera_Standard.tif'
+RAW = '/tmp/dng_out/DSC_4053.dng'
+DCP = '/Library/Application Support/Adobe/CameraRaw/CameraProfiles/Camera/Nikon D750/Nikon D750 Camera Standard.dcp'
+REF = '/tmp/dng_out/DSC_4053_dngvalidate.tif'
 
 dng_val = tifffile.imread(REF)
 dng_val_8 = (dng_val.astype(np.float32) / 65535.0 * 255).astype(np.uint8)
@@ -36,8 +33,8 @@ dbr = ap.read_dcp_default_black_render(DCP)
 
 ap.APPLY_LOOKTABLE = True; ap.APPLY_TONECURVE = True
 
-print(f"{'Kelvin':>8} {'mean':>6} {'P50':>6} {'P95':>6} {'dL*':>6} {'da*':>6} {'db*':>6}")
-print("-" * 60)
+print(f"{'Kelvin':>8} {'mean':>6} {'P50':>6} {'dL*':>6} {'da*':>6} {'db*':>6}")
+print("-" * 55)
 for k in [2856, 3500, 4000, 4500, 5000, 5500, 6500, 7000]:
     prophoto = ap.apply_adobe_pipeline(camera_rgb, profile, asn, float(k),
                                        dng_baseline_exposure=dng_be,
@@ -52,4 +49,4 @@ for k in [2856, 3500, 4000, 4500, 5000, 5500, 6500, 7000]:
     dL = (ours_lab[..., 0] - dng_lab[..., 0]).mean()
     da = (ours_lab[..., 1] - dng_lab[..., 1]).mean()
     db = (ours_lab[..., 2] - dng_lab[..., 2]).mean()
-    print(f"{k:>8} {de.mean():>6.2f} {np.percentile(de, 50):>6.2f} {np.percentile(de, 95):>6.2f} {dL:>+6.2f} {da:>+6.2f} {db:>+6.2f}")
+    print(f"{k:>8} {de.mean():>6.2f} {np.percentile(de, 50):>6.2f} {dL:>+6.2f} {da:>+6.2f} {db:>+6.2f}")
