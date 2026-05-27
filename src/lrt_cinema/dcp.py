@@ -92,7 +92,7 @@ _TAG_PROFILE_NAME = 50936
 _TAG_PROFILE_TONE_CURVE = 50940
 _TAG_FORWARD_MATRIX_1 = 50964
 _TAG_FORWARD_MATRIX_2 = 50965
-_TAG_BASELINE_EXPOSURE_OFFSET = 50970
+_TAG_BASELINE_EXPOSURE_OFFSET = 51109
 
 # DCP HueSatMap (DNG 1.7.1 §"Hue Sat Map"). Applied BEFORE
 # BaselineExposureOffset in Adobe's pipeline. Two cubes (per-illuminant); the
@@ -779,38 +779,6 @@ def xy_to_camera_neutral(profile: DCPProfile, x: float, y: float) -> np.ndarray:
     kelvin = uv_to_kelvin(u, v)
     matrix = interpolate_color_matrix(profile, kelvin)
     return matrix @ _xy_to_xyz(x, y)
-
-
-def kelvin_tint_to_dt_multipliers(
-    profile: DCPProfile,
-    kelvin: float,
-    tint: float = 0.0,
-) -> tuple[float, float, float, float]:
-    """Compute darktable temperature-module RGGB multipliers.
-
-    Returns (red, green, blue, various) where `various` is the second
-    green channel for Bayer/X-Trans-G2 cameras — for the consumer
-    Bayer cameras lrt-cinema targets, G1 == G2. Multipliers are
-    normalized so green = 1.
-
-    The math:
-      1. Target (kelvin, tint) → (x, y) via Robertson.
-      2. Iteratively solve camera-RGB-at-white using interpolated
-         ColorMatrix.
-      3. Per-channel multiplier = 1 / camera-RGB-at-white, normalized so
-         green channel multiplier = 1 (darktable convention — green is
-         the reference). This way a 5500K-calibrated render through dt's
-         temperature module produces the expected neutral output for
-         the DCP's camera-RGB definition.
-    """
-    x, y = kelvin_tint_to_xy(kelvin, tint)
-    neutral = xy_to_camera_neutral(profile, x, y)
-    # Normalize so green = 1; dt's GUI does the same.
-    green = neutral[1] if abs(neutral[1]) > 1e-9 else 1.0
-    r_mul = green / neutral[0] if abs(neutral[0]) > 1e-9 else 1.0
-    g_mul = 1.0
-    b_mul = green / neutral[2] if abs(neutral[2]) > 1e-9 else 1.0
-    return float(r_mul), float(g_mul), float(b_mul), float(g_mul)
 
 
 # ---------------------------------------------------------------------------

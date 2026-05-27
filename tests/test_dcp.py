@@ -32,7 +32,6 @@ from lrt_cinema.dcp import (
     illuminant_code_to_kelvin,
     interpolate_color_matrix,
     interpolate_hsv_cube,
-    kelvin_tint_to_dt_multipliers,
     kelvin_tint_to_xy,
     load_profile,
     parse_dcp,
@@ -334,23 +333,6 @@ def test_xy_to_camera_neutral_identity_matrix():
     )
 
 
-def test_kelvin_tint_to_dt_multipliers_green_is_one():
-    # By convention dt's GUI normalizes multipliers so green = 1.
-    p = DCPProfile(
-        color_matrix_1=np.array([
-            [1.0, -0.4, -0.1],
-            [-0.5, 1.3, 0.3],
-            [-0.1, 0.2, 0.8],
-        ]),
-        kelvin_1=5500.0,
-    )
-    r, g1, b, g2 = kelvin_tint_to_dt_multipliers(p, 5500, 0)
-    assert g1 == pytest.approx(1.0, abs=1e-9)
-    assert g2 == g1  # Bayer convention: G1 = G2.
-    assert 0.1 < r < 10.0  # sane range for a real camera matrix
-    assert 0.1 < b < 10.0
-
-
 # ---------------------------------------------------------------------------
 # Real-Adobe-DCP smoke test (skipped when ACR not installed)
 # ---------------------------------------------------------------------------
@@ -577,17 +559,18 @@ def test_find_dcp_for_camera_real_d750():
     not _REAL_DCP.exists(),
     reason="real Adobe DCP not installed at standard macOS path",
 )
-def test_real_adobe_dcp_multipliers_match_lr_expected_range():
-    # Sanity test: at typical daylight kelvins (5500-6500), Nikon's
-    # neutral multipliers should be R≈1.8-2.2, G=1.0, B≈1.1-1.3. These
-    # are the well-known empirical multiplier ranges for Nikon Bayer
-    # sensors under D65; we confirm DCP-derived multipliers fall in
-    # that range (not off by 10x or sign-flipped).
+def test_real_adobe_dcp_camera_neutral_in_expected_range():
+    # Sanity test: at typical daylight (5500K), Nikon's camera-RGB neutral
+    # ratios should put R/G around 0.45-0.55 and B/G around 0.75-0.95 —
+    # the well-known empirical range for Nikon Bayer sensors. Confirms
+    # the DCP-derived camera-neutral solve is not off by 10× or sign-flipped.
     p = parse_dcp(_REAL_DCP)
-    r, g, b, _ = kelvin_tint_to_dt_multipliers(p, 5500, 0)
-    assert 1.5 < r < 2.5, f"R multiplier {r} outside expected Nikon range"
-    assert g == pytest.approx(1.0)
-    assert 1.0 < b < 1.6, f"B multiplier {b} outside expected Nikon range"
+    x, y = kelvin_tint_to_xy(5500, 0)
+    asn = xy_to_camera_neutral(p, x, y)
+    asn = asn / asn[1]
+    assert 0.35 < asn[0] < 0.6, f"R/G neutral {asn[0]} outside expected Nikon range"
+    assert asn[1] == pytest.approx(1.0)
+    assert 0.7 < asn[2] < 1.0, f"B/G neutral {asn[2]} outside expected Nikon range"
 
 
 # ---------------------------------------------------------------------------
