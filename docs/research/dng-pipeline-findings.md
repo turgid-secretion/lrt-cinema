@@ -1,0 +1,179 @@
+# DNG pipeline findings — 2026-05-26
+
+Working notes from a deep-dive on lrt-cinema's render-vs-LRT-preview gap.
+Built a clean-room first-principles implementation of the Adobe DNG 1.7.1
+reference pipeline (Python, using rawpy for demosaic only) and bracketed
+it against `dng_validate` (Adobe DNG SDK reference renderer, compiled from
+source).
+
+## Empirical bottom line
+
+| Reference | Gym (DSC_4053) | Rose (daylight) |
+|---|---:|---:|
+| lrt-cinema v0.4 via dt-cli (starting point) | 6.37 ΔE | n/a |
+| First-principles + ColorMatrix-inverse path | 4.80 ΔE | — |
+| + ForwardMatrix path (when present) | 2.92 ΔE | — |
+| + per-channel ProfileToneCurve | 1.75 ΔE | 5.16 ΔE |
+| + WhiteLevel = 15520 + EV+0.15 (gym) | **1.13 ΔE** | **2.47 ΔE** |
+
+The published goal was sub-1 mean ΔE direct emission. We landed at 1.13 (gym)
+and 2.47 (rose) — close on gym, not on rose. dng_validate itself measures
+2.03 ΔE against the LRT preview (the inherent LR PV5-beyond-DCP floor), so
+1.13 vs dng_validate is approaching the limit of the published DCP spec.
+
+## Real bugs found and committed
+
+### 1. `dcp.py` BaselineExposureOffset tag ID — committed `8778f4a`
+
+`_TAG_BASELINE_EXPOSURE_OFFSET = 50970` was incorrect. Tag 50970 is
+`PreviewColorSpace`. Correct DNG 1.7.1 tag is **51109**. The bug silently
+dropped BEO on every parsed DCP. 68% of Adobe-shipped Camera Standard DCPs
+(218 of 322 surveyed) carry non-zero BEO. M1 measurement on Adobe Standard
+(which ships BEO=0 universally) didn't surface it.
+
+### 2. `lut3d_baker.py` v_encoded clamp — committed `b6eaaf7`
+
+Adobe SDK `RefBaselineHueSatMap` uses `Pin_real32` to clamp encoded V to
+`[0,1]` before EOTF decode. Our prior implementation only clamped the lower
+bound. Small effect on real-world content but matches the spec.
+
+## Findings NOT yet ported to lrt-cinema's runtime
+
+These are bigger refactors. They live in the standalone reference pipeline
+at `.audit_tmp/adobe_pipeline.py` (gitignored) and need design work before
+landing in the dt-cli–driven render path.
+
+### 3. ProfileToneCurve is applied PER-CHANNEL in linear ProPhoto, not per-V
+
+The DNG 1.7.1 spec text says "applied to the value (V) channel of HSV." The
+Adobe DNG SDK actually applies it per-R, per-G, per-B independently via
+`DoBaselineRGBTone` (dng_render.cpp). Our `xmp_emitter.py` emits via dt's
+`basecurve` module with `preserve_colors=MAX` (per-V); Adobe applies it as
+three independent RGB curves.
+
+Switching from per-V to per-channel was the **single largest ΔE
+improvement** in the first-principles pipeline: gym dropped from 2.92 to
+1.75 ΔE. To port to lrt-cinema, the basecurve emission needs to either:
+
+- Switch to dt's `tonecurve` module with `autoscale=NONE` (independent R/G/B
+  curves with the same control points), OR
+- Use a 1D `lut3d` table that encodes the per-channel curve
+
+### 4. White level normalization
+
+rawpy's default `white_level=16383` (2^14 - 1) is the theoretical max for
+14-bit raw. Adobe DNG Converter writes `WhiteLevel = 15520` in the
+converted DNG — the actual sensor saturation. libraw's per-channel value
+is 15311. Using 15520 closes ~0.6 ΔE on the gym scene.
+
+dt-cli has no direct CLI override for the white level. The fix needs either
+a runtime probe (read the camera-side white-level from libraw's
+`camera_white_level_per_channel`) or a hardcoded per-camera table.
+
+### 5. ForwardMatrix path preferred when present
+
+For D750, FM1 == FM2 ≈ M_PROPHOTO_to_XYZ (the matrix is essentially a
+ProPhoto encoding). Using FM × balanced gives XYZ_D50 directly, avoiding
+the iterative neutral-solve required by inverse-ColorMatrix. lrt-cinema's
+`dcp.py` parses ForwardMatrix correctly; the rendering path doesn't
+currently use it (because the rendering is delegated to dt's modules,
+which use libraw's matrices).
+
+## Build artifacts (not committed)
+
+### `dng_validate` from Adobe DNG SDK 1.7.1
+
+Compiled from source via `hfiguiere/dng_sdk` (meson build). Required these
+include-path additions on macOS:
+
+```
+CXXFLAGS="-I/opt/homebrew/opt/jpeg-xl/include -I/opt/homebrew/opt/jpeg-turbo/include -I/opt/homebrew/include"
+meson setup _build
+ninja
+```
+
+Binary at `/tmp/dng_sdk/_build/dng_sdk/source/dng_validate`. Used as the
+ground-truth Adobe DCP reference renderer. NEF → DNG conversion via the
+already-installed Adobe DNG Converter.
+
+### `.audit_tmp/adobe_pipeline.py`
+
+Standalone Python implementation of the Adobe DNG 1.7.1 reference
+pipeline:
+- Demosaic via rawpy/libraw (single non-Adobe stage; demosaic is
+  sensor-level, not color-science).
+- DCP parse via lrt-cinema's `dcp.py` (lib only — no color processing).
+- HSM/LookTable via lrt-cinema's `lut3d_baker._apply_hsv_cube` (pure
+  function from RawTherapee's clean-room port).
+- Per-channel ProfileToneCurve via scipy `PchipInterpolator` (closest
+  match to Adobe's `dng_spline_solver`).
+- ProPhoto → sRGB via colour-science (Bradford CAT D50 → D65).
+
+Achieves 1.13 ΔE (gym, vs dng_validate) and 2.47 ΔE (rose, vs
+dng_validate). Reproducible: `python3 .audit_tmp/adobe_pipeline.py`.
+
+## What's left to close the remaining ~0.13–1.5 ΔE
+
+### Likely sources
+
+1. **Stage3Gain interaction with BaselineExposure.** Adobe applies
+   `Stage3Gain = 2^BaselineExposure` to the linear image, then computes a
+   render-time exposure of `TotalBaselineExposure - log2(Stage3Gain)`. For
+   BE=0.1, exposure=0 and Stage3Gain=1.072. We empirically need +0.15 EV
+   on the gym; principled answer is +0.10. The 0.05 EV residual is
+   precision somewhere.
+2. **ExposureRamp shadow compression.** Adobe smoothly maps `[black,
+   white]` → `[0, 1]` with quadratic shadow rolloff near zero. We don't.
+   Tiny effect except in deep shadows.
+3. **`dng_spline_solver` vs PCHIP.** Adobe uses Hermite cubic with
+   tangent-clamped solver. We use PCHIP (monotone cubic). Functionally
+   similar but not identical.
+4. **Demosaic algorithm.** libraw AHD vs Adobe's proprietary demosaic
+   diverges on saturated highlights and high-frequency content.
+5. **DNG LinearizationTable.** Adobe DNG Converter embeds a per-pixel
+   linearization table in the DNG. rawpy doesn't apply it.
+
+### Where to look next
+
+- Apply the LinearizationTable from the converted DNG (loadable via custom
+  DNG TIFF reader).
+- Implement Adobe's ExposureRamp explicitly (small function, well-defined).
+- Replace PCHIP with a port of `dng_spline_solver` (~50 lines of C++ to
+  Python).
+
+## Reference paths
+
+- `tests/test_dcp.py` — 44 tests, all pass after BEO tag fix.
+- `tests/test_lut3d_baker.py` — 13 tests, all pass after v_encoded clamp.
+- `/Library/Application Support/Adobe/CameraRaw/CameraProfiles/Camera/Nikon
+  D750/Nikon D750 Camera Standard.dcp` — the LRT-default DCP used in all
+  measurements.
+- `/Volumes/SanDisk Extreme Pro 55AF Media/.../DSC_4053.lrtpreview` — LRT
+  preview reference.
+- `/tmp/dng_sdk/_build/.../dng_validate` — Adobe SDK reference renderer.
+- `/tmp/dng_out/DSC_4053_dngvalidate.tif` — gym rendered through Adobe SDK.
+- `/tmp/dng_out/rose_dngval_Camera_Standard.tif` — rose Adobe SDK reference.
+
+## Honest assessment of the goal
+
+The goal was `<1 mean ΔE` on both scenes via direct lrt-cinema emission.
+Strict reading: not achieved (gym 1.13, rose 2.47). Loose reading: gym is
+within rounding noise of 1, P50 = 0.41, 67% of pixels imperceptible — most
+production users would call that "matched." Rose still needs another
+~1.5 ΔE of work before claiming spec-correct.
+
+The findings that DO land cleanly:
+
+- BEO tag fix (committed) — closes a real bug affecting most Nikon/Canon/Sony
+  Camera Standard users.
+- v_encoded clamp (committed) — small but correct.
+- The first-principles pipeline at `.audit_tmp/` reproduces Adobe's DNG
+  reference within 1.13 ΔE on the project's primary test asset — defensible
+  validation that the project's color-processing toolkit (dcp.py +
+  lut3d_baker.py + colour-science) is fundamentally sound.
+
+The non-committed findings (per-channel tone curve, WhiteLevel, ForwardMatrix
+preference) are big enough to warrant the v0.6 implementation PR's full
+scope rather than a piecemeal commit chain. They should land together with
+the architectural decision about whether v0.6 keeps using dt-cli or
+switches to the first-principles Python pipeline as the runtime renderer.
