@@ -1,213 +1,231 @@
-"""Command-line interface for lrt-cinema."""
+"""Command-line interface for lrt-cinema v0.6.
+
+Render path is the in-process Python Adobe DNG 1.7.1 pipeline
+(`lrt_cinema.pipeline`); the dt-cli subprocess machinery is gone. See
+`docs/research/v06-architecture.md` for the full design.
+
+Flag surface (9 flags, down from 12):
+  required:  --input  --output  --preset
+  range:     --from-frame  --to-frame
+  io:        --dry-run  --quiet
+  ops:       --apply-lrt-offsets / --no-lrt-offsets
+  profile:   --dcp PATH
+  perf:      --workers N
+  fallback:  --no-dng-convert
+
+Heavy imports (rawpy, OpenEXR, colour) are deferred to inside the worker
+function so `--dry-run` works on a minimal install with no render-time
+deps. The `inspect` subcommand is render-independent and likewise touches
+only `xmp_parser` + `dcp` (auto-detect path).
+"""
 
 from __future__ import annotations
 
 import argparse
+import os
 import struct
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 
 from lrt_cinema import __version__
-from lrt_cinema.dcp import auto_detect_profile, parse_dcp, read_raw_make_model
+from lrt_cinema.dcp import (
+    DCPProfile,
+    auto_detect_profile,
+    parse_dcp,
+    read_raw_make_model,
+)
 from lrt_cinema.interpolation import (
     apply_deflicker,
     apply_lrt_mask_offsets,
     materialize_all_frames,
 )
-from lrt_cinema.presets import PRESETS, get_preset
-from lrt_cinema.runner import DarktableCliNotFound, render_sequence
+from lrt_cinema.ir import DevelopOps
+from lrt_cinema.presets import PRESETS
 from lrt_cinema.xmp_parser import parse_sequence
+
+# ---------------------------------------------------------------------------
+# argparse
+# ---------------------------------------------------------------------------
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="lrt-cinema",
         description=(
-            "Translate LRTimelapse XMP develop instructions into darktable "
-            "history-stack XMP sidecars; render cinema-native intermediates "
-            "via darktable-cli."
+            "Translate LRTimelapse XMP develop intent into cinema-native "
+            "intermediates via an in-process Adobe DNG 1.7.1 render pipeline. "
+            "No darktable required."
         ),
     )
-    parser.add_argument("--version", action="version", version=f"lrt-cinema {__version__}")
-
+    parser.add_argument(
+        "--version", action="version", version=f"lrt-cinema {__version__}",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     inspect = sub.add_parser(
         "inspect",
         help=(
-            "Parse an LRT folder and print what we saw — no rendering. "
-            "Use this as a parser-validation pass before render."
+            "Parse an LRT folder and print what we saw — no rendering. Use "
+            "as a parser-validation pass before render."
         ),
     )
-    inspect.add_argument("--input", required=True, type=Path,
-                         help="Folder containing source RAW frames + LRT XMP sidecars.")
-    inspect.add_argument("--show-fields", action="store_true",
-                         help="Print every parsed crs field per keyframe (verbose).")
+    inspect.add_argument("--input", required=True, type=Path)
+    inspect.add_argument("--show-fields", action="store_true")
 
     render = sub.add_parser("render", help="Render an LRT sequence.")
-    render.add_argument("--input", required=True, type=Path,
-                        help="Folder containing source RAW frames + LRT XMP sidecars.")
-    render.add_argument("--output", required=True, type=Path,
-                        help="Folder to write rendered frames into.")
-    render.add_argument("--preset", required=True, choices=sorted(PRESETS),
-                        help="Output preset.")
-    render.add_argument("--style", type=Path, default=None,
-                        help="Optional custom darktable .style overriding the bundled preset style.")
-    render.add_argument("--deflicker", choices=("none", "apply-lrt-offsets"),
-                        default="apply-lrt-offsets",
-                        help="Deflicker mode. 'apply-lrt-offsets' uses the per-frame "
-                             "deltas LRT wrote into the XMPs (no measurement pass).")
-    render.add_argument("--lrt-mask-offsets",
-                        choices=("none", "hg", "deflicker", "global", "all"),
-                        default="all",
-                        help="Apply real-LRT mask-correction per-frame exposure deltas. "
-                             "'all' = HG + Deflicker + Global (default). 'none' = ignore. "
-                             "'hg' / 'deflicker' / 'global' = single source. See "
-                             "docs/reference/lrtimelapse/XMP_SCHEMA.md for schema.")
-    render.add_argument("--dcp", type=Path, default=None,
-                        help="Explicit path to a DCP profile. Accepts either Adobe "
-                             "DNG Converter `.dcp` files or lrt-cinema's `.npz` "
-                             "extracted profile format (per "
-                             "`tools/extract_dcp.py`). Without --dcp the renderer "
-                             "AUTO-DETECTS by reading the source RAW's EXIF "
-                             "Make/Model and searching, in order: "
-                             "(1) $LRT_CINEMA_PROFILES env var, "
-                             "(2) ~/.config/lrt-cinema/profiles/ (or "
-                             "%%APPDATA%%/lrt-cinema/profiles/ on Windows), "
-                             "(3) Adobe DNG Converter install paths "
-                             "(/Library/Application Support/Adobe/CameraRaw/"
-                             "CameraProfiles/ on macOS; %%ProgramData%%\\Adobe\\"
-                             "CameraRaw\\CameraProfiles\\ on Windows). The first "
-                             "two roots hold lrt-cinema's `.npz` extracted profiles "
-                             "(populated via `tools/extract_dcp_library.py` or by "
-                             "cloning a sister `lrt-cinema-profiles` repo); the "
-                             "Adobe path is the fallback for users who still have "
-                             "the Adobe DCP install. Auto-detect is suppressed by "
-                             "--no-auto-dcp. When nothing is found, the renderer "
-                             "falls back to darktable's libraw-derived defaults — "
-                             "the output will diverge from LR's by the DCP-"
-                             "application gap (typically ΔE2000 mean 5-10).")
-    render.add_argument("--no-auto-dcp", dest="auto_dcp",
-                        action="store_false", default=True,
-                        help="Suppress the auto-detect-DCP fallback when --dcp is not "
-                             "supplied. Useful for reproducible 'no DCP' renders or "
-                             "when the bundled DCP for a camera is known to produce "
-                             "a worse result than dt's libraw default.")
-    render.add_argument("--no-dcp-tone-curve", dest="apply_dcp_tone_curve",
-                        action="store_false", default=True,
-                        help="When --dcp is supplied, suppress emission of the "
-                             "DCP-bundled ProfileToneCurve into dt's basecurve "
-                             "module. The cinema-linear preset's output stays "
-                             "truly linear (consumable by ACES timelines / OCIO "
-                             "chains that expect linear input); the trade-off is "
-                             "the LR-look midtone lift is not applied. "
-                             "BaselineExposure and (when explicit kelvin is set) "
-                             "temperature multipliers from the DCP still emit.")
-    render.add_argument("--no-dcp-hsv-cubes", dest="apply_dcp_hsv_cubes",
-                        action="store_false", default=True,
-                        help="Suppress emission of the DCP's HueSatMap and/or "
-                             "LookTable cubes into dt's lut3d module. The cubes "
-                             "encode Adobe's per-hue-sat-val color shaping; "
-                             "skipping them produces a 'cleaner' truly-linear "
-                             "render at the cost of a larger ΔE2000 vs LR's "
-                             "preview (typical +1.5-2.5 ΔE on real footage). "
-                             "BaselineExposureOffset still rolls into the "
-                             "exposure module's bias when the cubes are off.")
-    render.add_argument("--engine", choices=("dcp", "algorithmic"),
-                        default="dcp",
-                        help="Color-engine pipeline. 'dcp' (default): Adobe-DCP-"
-                             "driven — emits temperature, basecurve, lut3d from "
-                             "the camera's DCP profile (auto-detected or via "
-                             "--dcp). 'algorithmic': suppress all DCP-derived "
-                             "module emissions; the render uses darktable's "
-                             "libraw-derived defaults for white-balance and "
-                             "input-color, plus the LR-authored "
-                             "exposure/blacks/tonecurve/sharpen/colorbalancergb "
-                             "ops only. Use 'algorithmic' for a DCP-free "
-                             "baseline or when a per-camera calibration matrix "
-                             "is fitted separately (see "
-                             "tools/calibrate_camera.py). Implies --no-auto-dcp "
-                             "and ignores --dcp.")
-    render.add_argument("--from-frame", type=int, default=0,
-                        help="First frame index to render (inclusive).")
-    render.add_argument("--to-frame", type=int, default=None,
-                        help="Last frame index to render (exclusive). Default: end of sequence.")
-    render.add_argument("--dry-run", action="store_true",
-                        help="Emit XMPs but skip the darktable-cli invocation.")
-    render.add_argument("--quiet", action="store_true",
-                        help="Suppress per-frame progress output.")
+    render.add_argument(
+        "--input", required=True, type=Path,
+        help="Folder containing source RAW frames + LRT XMP sidecars.",
+    )
+    render.add_argument(
+        "--output", required=True, type=Path,
+        help="Folder to write rendered frames into.",
+    )
+    render.add_argument(
+        "--preset", required=True, choices=sorted(PRESETS),
+        help="Output preset (cinema-linear | cinema-aces | stills-finished).",
+    )
+    render.add_argument(
+        "--from-frame", type=int, default=0,
+        help="First frame index to render (inclusive).",
+    )
+    render.add_argument(
+        "--to-frame", type=int, default=None,
+        help="Last frame index (exclusive). Default: end of sequence.",
+    )
+    render.add_argument(
+        "--dry-run", action="store_true",
+        help="Skip the actual render; print what would happen.",
+    )
+    render.add_argument(
+        "--quiet", action="store_true",
+        help="Suppress per-frame progress output.",
+    )
+    render.add_argument(
+        "--apply-lrt-offsets", dest="apply_lrt_offsets",
+        action="store_true", default=True,
+        help=(
+            "Apply LRT-authored per-frame exposure deltas — Holy Grail, "
+            "Visual Deflicker, and Global mask corrections (default on)."
+        ),
+    )
+    render.add_argument(
+        "--no-lrt-offsets", dest="apply_lrt_offsets", action="store_false",
+        help="Render keyframe-only ops; ignore LRT-authored per-frame deltas.",
+    )
+    render.add_argument(
+        "--dcp", type=Path, default=None,
+        help=(
+            "Explicit DCP path. Accepts Adobe `.dcp` or lrt-cinema's `.npz` "
+            "extracted profile. Auto-detected from $LRT_CINEMA_PROFILES / "
+            "~/.config/lrt-cinema/profiles / Adobe DNG Converter install "
+            "when not supplied."
+        ),
+    )
+    render.add_argument(
+        "--workers", type=int, default=max(1, (os.cpu_count() or 2) // 2),
+        help=(
+            "Parallel worker processes (default = os.cpu_count() // 2). "
+            "Use 1 for sequential debugging."
+        ),
+    )
+    render.add_argument(
+        "--no-dng-convert", dest="no_dng_convert",
+        action="store_true", default=False,
+        help=(
+            "Skip Adobe DNG Converter preprocessing — read NEFs directly "
+            "via libraw. Expect ~0.5 ΔE regression vs default (libraw "
+            "lacks the DNG's embedded LinearizationTable + correct "
+            "WhiteLevel). Required on Linux where Adobe DNG Converter "
+            "has no official build."
+        ),
+    )
 
     return parser
 
 
-def _emit_progress(idx: int, total: int, ok: bool, stream=sys.stdout) -> None:
-    marker = "ok" if ok else "FAIL"
-    stream.write(f"[{idx + 1}/{total}] {marker}\n")
-    stream.flush()
+# ---------------------------------------------------------------------------
+# Worker-side render — runs in ProcessPoolExecutor child
+# ---------------------------------------------------------------------------
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = _build_parser()
-    args = parser.parse_args(argv)
-
-    if args.command == "render":
-        return _cmd_render(args)
-    if args.command == "inspect":
-        return _cmd_inspect(args)
-    parser.error(f"Unknown command: {args.command}")
-    return 2
-
-
-# Truly dropped at emit — dt's lightroom.c has dropped these since 2013 and
-# the underlying PV2012 parametric tone math is closed-source. See SCOPE.md.
-# Other PV2012 fields (contrast / blacks / saturation / vibrance / sharpness)
-# DO emit in v0.4 via colorbalancergb / exposure.black / sharpen.
-_DROPPED_AT_EMIT_FIELDS = ("highlights", "shadows", "whites")
+@dataclass
+class _RenderJob:
+    """Single-frame render unit, must be picklable for ProcessPoolExecutor."""
+    frame_index: int
+    src_raw: Path
+    dst_stem: Path
+    ops: DevelopOps
+    dcp_path: Path | None
+    preset: str
+    no_dng_convert: bool
+    dng_cache_dir: Path
 
 
-def _emit_dropped_field_warnings(seq, stream, dcp_loaded: bool) -> None:
-    """Render-time stderr warning for fields LRT carried that we don't propagate.
+@dataclass
+class _RenderResult:
+    frame_index: int
+    src_raw: Path
+    ok: bool
+    error: str | None = None
 
-    Two categories surface:
-      * Unconditionally dropped — highlights / shadows / whites. dt's own
-        lightroom.c has dropped these since 2013 (PV2012 parametric tone
-        math is closed-source).
-      * Conditionally dropped — tint / temperature_k. These emit only
-        when a DCP profile is loaded (auto-detected or via --dcp); without
-        one, they drop and dt falls back to as-shot WB. `dcp_loaded`
-        suppresses this category when the DCP path is active.
-    """
-    if not seq.keyframes:
-        return
-    kf_count = len(seq.keyframes)
-    dropped: list[str] = []
-    for name in _DROPPED_AT_EMIT_FIELDS:
-        count = sum(1 for kf in seq.keyframes if getattr(kf.ops, name) != 0.0)
-        if count:
-            dropped.append(f"{name} ({count}/{kf_count})")
-    if not dcp_loaded:
-        t_count = sum(1 for kf in seq.keyframes if kf.ops.tint is not None)
-        if t_count:
-            dropped.append(f"tint ({t_count}/{kf_count}, no DCP)")
-        k_count = sum(1 for kf in seq.keyframes if kf.ops.temperature_k is not None)
-        if k_count:
-            dropped.append(f"temperature_k ({k_count}/{kf_count}, no DCP)")
-    if dropped:
-        stream.write(
-            f"warning: dropped at emit: {', '.join(dropped)}\n"
+
+def _render_one_frame(job: _RenderJob) -> _RenderResult:
+    """Subprocess-side render: NEF → DNG (cached) → pipeline → develop_ops →
+    output writer. Heavy imports (rawpy, OpenEXR, colour) deferred to here
+    so the parent process — and `--dry-run` — stays slim."""
+    try:
+        # Lazy imports — these are only needed inside the worker.
+        from lrt_cinema.develop_ops import apply_develop_ops
+        from lrt_cinema.dng_convert import resolve_render_input
+        from lrt_cinema.output import write_preset_output
+        from lrt_cinema.pipeline import render_frame
+
+        if job.dcp_path is not None:
+            profile = (
+                _load_dcp_dispatch(job.dcp_path)
+                if job.dcp_path.suffix.lower() == ".npz"
+                else parse_dcp(job.dcp_path)
+            )
+        else:
+            return _RenderResult(
+                job.frame_index, job.src_raw, ok=False,
+                error="No DCP profile available; pass --dcp or populate auto-detect roots.",
+            )
+
+        dng_path = resolve_render_input(
+            job.src_raw, job.dng_cache_dir, no_convert=job.no_dng_convert,
+        )
+        result = render_frame(
+            dng_path, profile, dcp_path=job.dcp_path, develop_ops=job.ops,
+        )
+        with_dev_ops = apply_develop_ops(result.prophoto, job.ops)
+        write_preset_output(with_dev_ops, job.dst_stem, job.preset)
+        return _RenderResult(job.frame_index, job.src_raw, ok=True)
+    except Exception as exc:
+        return _RenderResult(
+            job.frame_index, job.src_raw, ok=False, error=f"{type(exc).__name__}: {exc}",
         )
 
 
-def _cmd_inspect(args: argparse.Namespace) -> int:
-    """Parse the input folder and print a human-readable diagnostic.
+def _load_dcp_dispatch(path: Path) -> DCPProfile:
+    """Imported lazily; supports both .dcp (Adobe) + .npz (lrt-cinema's
+    extracted format)."""
+    from lrt_cinema.dcp import load_profile
+    return load_profile(path)
 
-    Side-effect-free: does not write any files and does not invoke
-    darktable. Intended to validate parser behavior against real LRT
-    XMP before committing to a render — schemas like the LRT keyframe
-    marker and the Holy Grail ramp container are calibration items
-    (see SCOPE.md), so seeing what the parser actually extracted is
-    the cheapest way to catch a schema drift.
-    """
+
+# ---------------------------------------------------------------------------
+# `inspect` subcommand (unchanged from v0.4)
+# ---------------------------------------------------------------------------
+
+
+_DROPPED_AT_EMIT_FIELDS = ("highlights", "shadows", "whites")
+
+
+def _cmd_inspect(args: argparse.Namespace) -> int:
     out = sys.stdout
     try:
         seq = parse_sequence(args.input)
@@ -229,15 +247,6 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
         f"  flagged authoritatively (xmp:Rating or lrt:keyframe): "
         f"{lrt_flagged} of {kf_count}\n"
     )
-    if kf_count and lrt_flagged == 0:
-        out.write(
-            "  note: no authoritative keyframe markers found. All keyframes\n"
-            "        were inferred from XMPs carrying non-default develop\n"
-            "        intent. Either LRT is not flagging keyframes in this\n"
-            "        sequence or the schema differs from what we expect\n"
-            "        (xmp:Rating>=1 is real LRT's primary marker; see\n"
-            "        SCOPE.md calibration items).\n"
-        )
 
     if args.show_fields and seq.keyframes:
         out.write("\nPer-keyframe parsed develop ops:\n")
@@ -248,104 +257,66 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
                 f"lrt_kf={kf.is_lrt_keyframe} "
                 f"ev={ops.exposure_ev:+.2f} "
                 f"k={ops.temperature_k} tint={ops.tint} "
-                f"c={ops.contrast:+.0f} h={ops.highlights:+.0f} "
-                f"s={ops.shadows:+.0f} w={ops.whites:+.0f} "
-                f"b={ops.blacks:+.0f} sat={ops.saturation:+.0f} "
-                f"vib={ops.vibrance:+.0f} sharp={ops.sharpness:.0f} "
-                f"curve_pts={len(ops.tone_curve)}\n"
-            )
-
-    out.write(f"\nDeflicker offsets (synthetic schema): {len(seq.deflicker_offsets)}\n")
-    if seq.deflicker_offsets:
-        evs = [d.exposure_delta_ev for d in seq.deflicker_offsets]
-        out.write(
-            f"  range: {min(evs):+.3f} EV to {max(evs):+.3f} EV "
-            f"(mean abs: {sum(abs(e) for e in evs) / len(evs):.3f} EV)\n"
-        )
-
-    # Real-LRT mask-correction per-frame deltas (HG/Deflicker/Global).
-    # Audit HIGH-2 (2026-05-23) added this section.
-    out.write(f"\nLRT mask-correction offsets (real LRT schema): {len(seq.lrt_mask_offsets)}\n")
-    if seq.lrt_mask_offsets:
-        by_kind: dict[str, list[float]] = {}
-        for off in seq.lrt_mask_offsets:
-            by_kind.setdefault(off.kind, []).append(off.exposure_delta_ev)
-        for kind in ("hg", "deflicker", "global"):
-            entries = by_kind.get(kind, [])
-            if entries:
-                out.write(
-                    f"  {kind:9s}: {len(entries)} frame(s)  "
-                    f"range {min(entries):+.3f} to {max(entries):+.3f} EV  "
-                    f"(mean abs: {sum(abs(e) for e in entries) / len(entries):.3f} EV)\n"
-                )
-    else:
-        out.write(
-            "  (none. If your LRT sequence has run Visual Deflicker or Holy\n"
-            "   Grail Wizard, non-zero per-frame deltas should appear here.\n"
-            "   Zero-valued mask corrections are filtered at parse time.)\n"
-        )
-
-    if seq.keyframes:
-        out.write("\nEmit warnings (fields parsed but dropped at darktable XMP emit):\n")
-        any_warning = False
-        for name in _DROPPED_AT_EMIT_FIELDS:
-            count = sum(
-                1 for kf in seq.keyframes if getattr(kf.ops, name) != 0.0
-            )
-            if count:
-                out.write(
-                    f"  - {name}: set on {count} of {kf_count} keyframes — "
-                    f"DROPPED at emit (dt's lightroom.c also drops these; "
-                    f"PV2012 tone math is closed-source)\n"
-                )
-                any_warning = True
-        tint_count = sum(1 for kf in seq.keyframes if kf.ops.tint is not None)
-        if tint_count:
-            out.write(
-                f"  - tint: set on {tint_count} of {kf_count} keyframes — "
-                f"emits only when a DCP is loaded (auto-detect or --dcp); "
-                f"drops otherwise\n"
-            )
-            any_warning = True
-        temp_count = sum(1 for kf in seq.keyframes if kf.ops.temperature_k is not None)
-        if temp_count:
-            out.write(
-                f"  - temperature_k: set on {temp_count} of {kf_count} keyframes — "
-                f"emits only when a DCP is loaded; without DCP, dt's "
-                f"as-shot WB is used\n"
-            )
-            any_warning = True
-        if not any_warning:
-            out.write(
-                "  (none. All parsed develop ops on the keyframes have a path\n"
-                "   to the darktable XMP.)\n"
+                f"c={ops.contrast:+.0f} b={ops.blacks:+.0f} "
+                f"sat={ops.saturation:+.0f} vib={ops.vibrance:+.0f} "
+                f"sharp={ops.sharpness:.0f} curve_pts={len(ops.tone_curve)}\n"
             )
 
     out.write(
-        "\nWhat WILL reach the rendered output (with default v0.4 flags):\n"
-        "  - exposure: LR Exposure2012 + Blacks2012 + Holy Grail / Deflicker /\n"
-        "    Global deltas + DCP BaselineExposure (when DCP loaded)\n"
-        "  - temperature: LR Temperature+Tint via DCP color matrices (when DCP)\n"
-        "  - tonecurve: LR ToneCurvePV2012 (when non-identity)\n"
-        "  - basecurve: DCP ProfileToneCurve (when DCP and not --no-dcp-tone-curve)\n"
-        "  - lut3d: DCP HueSatMap + LookTable (when DCP and not --no-dcp-hsv-cubes)\n"
-        "  - colorbalancergb: LR Saturation + Vibrance + Contrast2012\n"
-        "  - sharpen: LR Sharpness (≠ 25 default)\n"
+        f"\nLRT mask-correction offsets: {len(seq.lrt_mask_offsets)}\n"
+        f"Deflicker offsets (synthetic schema): {len(seq.deflicker_offsets)}\n"
     )
+
+    if seq.keyframes:
+        out.write(
+            "\nFields parsed but DROPPED at render (closed-source PV5 math):\n"
+        )
+        for name in _DROPPED_AT_EMIT_FIELDS:
+            count = sum(1 for kf in seq.keyframes if getattr(kf.ops, name) != 0.0)
+            if count:
+                out.write(f"  - {name}: set on {count} of {kf_count} keyframes\n")
     return 0
 
 
-def _cmd_render(args: argparse.Namespace) -> int:
-    preset = get_preset(args.preset)
+# ---------------------------------------------------------------------------
+# `render` subcommand
+# ---------------------------------------------------------------------------
 
-    # Refuse --input == --output: the per-frame TIFFs (output_dir / stem.tif)
-    # would clobber pre-existing source siblings if any (e.g. a prior dt
-    # export). The LRT XMP sidecars themselves use a different suffix
-    # (.dt.xmp vs .xmp) and survive, but a same-dir render is still wrong.
+
+def _resolve_dcp(args: argparse.Namespace, first_raw: Path) -> tuple[Path | None, str]:
+    """Decide what DCP path to pass to workers. Returns (path-or-None, info-msg)."""
+    if args.dcp is not None:
+        try:
+            if args.dcp.suffix.lower() == ".npz":
+                from lrt_cinema.dcp import load_profile
+                load_profile(args.dcp)  # validate
+            else:
+                parse_dcp(args.dcp)  # validate
+        except (FileNotFoundError, ValueError, struct.error) as exc:
+            raise SystemExit(f"error: --dcp: malformed or unreadable: {exc}") from exc
+        return args.dcp, f"info: using explicit DCP: {args.dcp}\n"
+
+    info = read_raw_make_model(first_raw)
+    if info is None:
+        return None, (
+            f"info: {first_raw.name} is not TIFF-shaped (e.g. Canon CR3); "
+            f"DCP auto-detect skipped. Pass --dcp <path> to render with a profile.\n"
+        )
+    make, model = info
+    found = auto_detect_profile(first_raw)
+    if found is None:
+        return None, (
+            f"info: no DCP found for {make} {model}. Pass --dcp or populate "
+            f"$LRT_CINEMA_PROFILES / ~/.config/lrt-cinema/profiles.\n"
+        )
+    _, src_path = found
+    return src_path, f"info: auto-detected DCP: {src_path}\n"
+
+
+def _cmd_render(args: argparse.Namespace) -> int:
     if args.output.resolve() == args.input.resolve():
         sys.stderr.write(
-            "error: --output must differ from --input (would overwrite "
-            "pre-existing TIFFs in the source directory).\n"
+            "error: --output must differ from --input.\n",
         )
         return 2
 
@@ -355,152 +326,121 @@ def _cmd_render(args: argparse.Namespace) -> int:
         sys.stderr.write(f"error: {exc}\n")
         return 2
 
-    dcp_profile = None
-    if args.engine == "algorithmic":
-        # Algorithmic engine: deliberately skip DCP loading/auto-detect.
-        # Sets dcp_profile=None which gates ALL DCP-derived module
-        # emissions downstream (temperature, basecurve, lut3d). LR-
-        # authored ops (exposure, blacks, tonecurve, sharpen,
-        # colorbalancergb) still emit. dt's libraw default supplies
-        # white-balance and input-color matrix.
-        if args.dcp is not None:
-            sys.stderr.write(
-                "info: --engine algorithmic ignores --dcp; "
-                "DCP-derived emissions are suppressed.\n"
-            )
-        sys.stderr.write(
-            "info: --engine algorithmic — DCP-derived modules suppressed "
-            "(temperature/basecurve/lut3d). dt's libraw defaults handle "
-            "white-balance and input-color.\n"
-        )
-    elif args.dcp is not None:
-        # Explicit --dcp path. Accepts either Adobe `.dcp` or lrt-cinema's
-        # extracted `.npz` format; dispatch by extension.
-        try:
-            if args.dcp.suffix.lower() == ".npz":
-                from lrt_cinema.dcp import load_profile
-                dcp_profile = load_profile(args.dcp)
-                source_kind = "extracted .npz"
-            else:
-                dcp_profile = parse_dcp(args.dcp)
-                source_kind = "Adobe .dcp"
-        except (FileNotFoundError, ValueError, struct.error) as exc:
-            sys.stderr.write(f"error: --dcp: malformed or unreadable: {exc}\n")
-            return 2
-        sys.stderr.write(f"info: loaded DCP ({source_kind}): {args.dcp}\n")
-    elif args.auto_dcp and seq.source_frames:
-        first_raw = args.input / seq.source_frames[0]
-        info = read_raw_make_model(first_raw)
-        if info is None:
-            sys.stderr.write(
-                f"info: {first_raw.name} is not a TIFF-shaped RAW (Canon CR3 or "
-                f"unknown format); auto-detect skipped. Pass --dcp <path> to use "
-                f"a DCP-aware render.\n"
-            )
-        else:
-            make, model = info
-            result = auto_detect_profile(first_raw)
-            if result is not None:
-                dcp_profile, src_path = result
-                sys.stderr.write(
-                    f"info: auto-detected profile for {make} {model}: {src_path}\n"
-                )
-            else:
-                sys.stderr.write(
-                    f"info: no profile found for {make} {model}. Either:\n"
-                    f"  * run `tools/extract_dcp_library.py` against an Adobe DNG "
-                    f"Converter install to populate ~/.config/lrt-cinema/profiles/, or\n"
-                    f"  * clone a sister `lrt-cinema-profiles` repo and set "
-                    f"$LRT_CINEMA_PROFILES to its path, or\n"
-                    f"  * pass --dcp <path> explicitly, or\n"
-                    f"  * pass --no-auto-dcp to suppress this message.\n"
-                )
-
-    if dcp_profile is not None:
-        sys.stderr.write(
-            f"info: loaded DCP {dcp_profile.profile_name!r} "
-            f"(baseline_exposure={dcp_profile.baseline_exposure:+.2f} EV, "
-            f"tone_curve_pts="
-            f"{0 if dcp_profile.profile_tone_curve is None else dcp_profile.profile_tone_curve.shape[0]})"
-            f"\n"
-        )
-    elif args.engine != "algorithmic":
-        sys.stderr.write(
-            "warning: no DCP supplied or detected; render will diverge from LR's "
-            "by the DCP-application gap. See `lrt-cinema render --help`.\n"
-        )
-
-    # Audit MEDIUM-6: warn at render-time about parsed fields that don't
-    # reach the rendered output. inspect already prints this; render
-    # was silent before, causing surprise data loss for users who set
-    # WB / contrast / tone-curve / etc. in LRT and didn't run inspect.
-    _emit_dropped_field_warnings(seq, sys.stderr, dcp_loaded=dcp_profile is not None)
-
     if seq.frame_count() == 0:
         sys.stderr.write(f"error: no RAW frames found under {args.input}\n")
         return 2
 
     if args.from_frame < 0 or args.from_frame >= seq.frame_count():
         sys.stderr.write(
-            f"error: --from-frame {args.from_frame} outside [0, {seq.frame_count()})\n"
+            f"error: --from-frame {args.from_frame} outside [0, {seq.frame_count()})\n",
         )
         return 2
-    if args.to_frame is not None and (args.to_frame <= args.from_frame or args.to_frame > seq.frame_count()):
+    if args.to_frame is not None and (
+        args.to_frame <= args.from_frame or args.to_frame > seq.frame_count()
+    ):
         sys.stderr.write(
             f"error: --to-frame {args.to_frame} must satisfy "
-            f"{args.from_frame} < to-frame <= {seq.frame_count()}\n"
+            f"{args.from_frame} < to-frame <= {seq.frame_count()}\n",
+        )
+        return 2
+    to_frame = args.to_frame if args.to_frame is not None else seq.frame_count()
+
+    dcp_path, info_msg = _resolve_dcp(args, args.input / seq.source_frames[0])
+    sys.stderr.write(info_msg)
+    if dcp_path is None and not args.dry_run:
+        sys.stderr.write(
+            "error: cannot render without a DCP profile. See above for "
+            "auto-detect failure detail; pass --dcp <path> explicitly.\n",
         )
         return 2
 
     per_frame = materialize_all_frames(seq)
-    # Pipeline ordering: keyframe-interpolated values are the base; then
-    # overlay real-LRT mask-correction per-frame deltas (HG / Deflicker /
-    # Global); then synthetic-schema deflicker offsets. Both overlay
-    # sources add exposure_ev linearly.
-    if args.lrt_mask_offsets != "none":
-        kinds = ("hg", "deflicker", "global") if args.lrt_mask_offsets == "all" \
-            else (args.lrt_mask_offsets,)
-        per_frame = apply_lrt_mask_offsets(per_frame, seq, kinds=kinds)
-    if args.deflicker == "apply-lrt-offsets":
+    if args.apply_lrt_offsets:
+        per_frame = apply_lrt_mask_offsets(
+            per_frame, seq, kinds=("hg", "deflicker", "global"),
+        )
         per_frame = apply_deflicker(per_frame, seq)
 
-    try:
-        results = render_sequence(
-            source_dir=args.input,
-            output_dir=args.output,
-            per_frame_ops=per_frame,
-            preset=preset,
-            source_frames=seq.source_frames,
-            from_frame=args.from_frame,
-            to_frame=args.to_frame,
-            custom_style=args.style,
-            dcp_profile=dcp_profile,
-            apply_dcp_tone_curve=args.apply_dcp_tone_curve,
-            apply_dcp_hsv_cubes=args.apply_dcp_hsv_cubes,
-            dry_run=args.dry_run,
-        )
-    except DarktableCliNotFound as exc:
-        sys.stderr.write(f"error: {exc}\n")
-        return 3
+    args.output.mkdir(parents=True, exist_ok=True)
+    dng_cache_dir = args.output / ".dng-cache"
 
-    total = len(results)
+    jobs = []
+    for i in range(args.from_frame, to_frame):
+        src_raw = args.input / seq.source_frames[i]
+        dst_stem = args.output / Path(seq.source_frames[i]).stem
+        jobs.append(_RenderJob(
+            frame_index=i,
+            src_raw=src_raw,
+            dst_stem=dst_stem,
+            ops=per_frame[i],
+            dcp_path=dcp_path,
+            preset=args.preset,
+            no_dng_convert=args.no_dng_convert,
+            dng_cache_dir=dng_cache_dir,
+        ))
+
+    if args.dry_run:
+        sys.stderr.write(
+            f"dry-run: would render {len(jobs)} frame(s) "
+            f"[{args.from_frame}..{to_frame}) → {args.output} "
+            f"(preset={args.preset}, workers={args.workers}).\n",
+        )
+        return 0
+
+    return _run_jobs(jobs, args.workers, args.quiet)
+
+
+def _run_jobs(jobs: list[_RenderJob], workers: int, quiet: bool) -> int:
+    total = len(jobs)
     failures = 0
-    for r in results:
-        ok = r.skipped or r.returncode == 0
-        if not ok:
-            failures += 1
-        if not args.quiet:
-            _emit_progress(r.frame_index, total, ok)
-        if not ok and r.error:
-            # Surface darktable-cli's stderr so the user can see WHY a
-            # frame failed without re-running by hand. Silent failures
-            # are useless during the first real-footage tests.
-            sys.stderr.write(
-                f"--- darktable-cli stderr for frame {r.frame_index} "
-                f"({r.source_path.name}) ---\n{r.error}\n"
-            )
+
+    if workers <= 1:
+        for j in jobs:
+            r = _render_one_frame(j)
+            failures += _handle_result(r, total, quiet)
+    else:
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_render_one_frame, j): j for j in jobs}
+            for fut in as_completed(futures):
+                r = fut.result()
+                failures += _handle_result(r, total, quiet)
 
     if failures:
         sys.stderr.write(f"\n{failures} of {total} frames failed.\n")
         return 1
     return 0
+
+
+def _handle_result(r: _RenderResult, total: int, quiet: bool) -> int:
+    """Print per-frame progress; return 1 if failure else 0."""
+    if not quiet:
+        marker = "ok" if r.ok else "FAIL"
+        sys.stdout.write(f"[{r.frame_index + 1}/{total}] {marker} {r.src_raw.name}\n")
+        sys.stdout.flush()
+    if not r.ok:
+        sys.stderr.write(
+            f"--- render error for frame {r.frame_index} "
+            f"({r.src_raw.name}) ---\n{r.error}\n",
+        )
+        return 1
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    if args.command == "render":
+        return _cmd_render(args)
+    if args.command == "inspect":
+        return _cmd_inspect(args)
+    parser.error(f"Unknown command: {args.command}")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

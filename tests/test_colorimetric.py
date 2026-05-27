@@ -1,43 +1,28 @@
-"""ColorChecker ΔE2000 test harness.
+"""ColorChecker ΔE2000 harness — self-test legs only (v0.6).
 
-Implements the methodology in `docs/VALIDATION.md` (option b — the
-bulletproof automated test). Two test legs:
+Validates the Lab(D55) ↔ XYZ ↔ Rec.2020 conversion + ΔE2000 math that the
+test suite relies on. Two checks:
 
-1. **Self-test** (always runs, no darktable / no chart shot required).
-   Synthesizes a "perfect" 16-bit linear Rec.2020 image of the 24-patch
-   ColorChecker and runs it through the same Lab(D55) ↔ XYZ ↔ Rec.2020
-   conversion + ΔE2000 path the real test uses, asserting the harness
-   machinery is functional. Includes a separate per-patch comparison
-   against a hand-rolled BT.2020 →  XYZ matrix (taken verbatim from
-   ITU-R BT.2020-2 §3.3) so a transposed or wrong matrix in our
-   harness code does not silently round-trip through colour-science.
+1. Synthesizes a "perfect" 16-bit linear Rec.2020 image of the 24-patch
+   ColorChecker and round-trips it. Asserts the harness machinery is
+   functional.
+2. Per-patch cross-check vs a hand-rolled ITU-R BT.2020 §3.3 matrix.
+   Catches a transposed or wrong-colourspace bug in `colour-science`
+   that would otherwise silently round-trip.
 
-2. **Real-chart test** (skipped unless a chart RAW + identity XMP are
-   dropped into `tests/fixtures/colorchecker/` — see that directory's
-   README). Renders the chart through `lrt-cinema render --preset
-   cinema-linear`, auto-detects the patches via the optional
-   `colour-checker-detection` dependency, computes ΔE2000 per patch
-   against the published D55-adapted reference, and asserts the
-   broadcast-cinema thresholds (mean < 2.0, max < 4.0).
-
-The real-chart leg is expected to FAIL on today's pipeline (the
-emitter drops 9 of 12 develop ops; WB multipliers are neutral). That
-failure is by design — see `docs/V03_PLAN.md` Track A. The harness's
-job is to quantify the gap, not to hide it.
+The dt-cli real-chart leg was deleted in v0.6 alongside `runner.py`;
+end-to-end ΔE validation is now `tests/test_pipeline.py` vs
+`dng_validate` on real DNG fixtures (the ship gate).
 
 References
 ----------
-- `docs/VALIDATION.md` for the full methodology and the source list.
-- ITU-R BT.2020-2 §3.3 for the Rec.2020 → XYZ matrix used in the
-  cross-check.
-- Sharma, Wu, Dalal (2005) for ΔE2000 (implemented by
-  `colour.delta_E(..., method='CIE 2000')`).
+- ITU-R BT.2020-2 §3.3 — Rec.2020 → XYZ matrix used in the cross-check.
+- Sharma, Wu, Dalal (2005) — ΔE2000.
 """
 
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 
 import numpy as np
@@ -265,137 +250,3 @@ def test_self_test_matrix_cross_check_against_itu_r_bt2020_section_3_3():
     )
 
 
-# ---------------------------------------------------------------------------
-# Real-chart test: lrt-cinema render → ΔE2000 against reference
-# ---------------------------------------------------------------------------
-
-
-def _discover_chart_raw() -> Path | None:
-    """Find chart.<RAW-ext> in the fixture directory if present.
-
-    Skips the .xmp / .json / .md / README companions. Returns None if
-    nothing usable is present (the test then skips).
-    """
-    if not FIXTURE_DIR.is_dir():
-        return None
-    candidates = [
-        p
-        for p in FIXTURE_DIR.glob("chart.*")
-        if p.suffix.lower() not in {".xmp", ".json", ".md", ".txt"}
-    ]
-    if not candidates:
-        return None
-    if len(candidates) > 1:
-        raise RuntimeError(
-            f"more than one chart.* RAW candidate found in {FIXTURE_DIR}: "
-            f"{[p.name for p in candidates]}. Keep exactly one."
-        )
-    return candidates[0]
-
-
-def test_colorimetric_real_chart_through_cinema_linear(tmp_path):
-    """End-to-end ΔE2000 against a real chart shot.
-
-    Skipped unless ALL of the following are present:
-      * `tests/fixtures/colorchecker/chart.<RAW-ext>`
-      * `tests/fixtures/colorchecker/chart.<RAW-ext>.xmp` (identity)
-      * `colour-checker-detection` installed (`pip install -e .[detect]`)
-      * `darktable-cli` on PATH
-
-    Pass criterion: mean ΔE2000 < 2.0 AND max ΔE2000 < 4.0 over the 24
-    patches. **Expected to fail on today's pipeline** — see
-    docs/V03_PLAN.md Track A. The harness quantifies the gap.
-    """
-    chart_raw = _discover_chart_raw()
-    if chart_raw is None:
-        pytest.skip(
-            "No chart RAW found in tests/fixtures/colorchecker/. "
-            "Drop in chart.<ext> + chart.<ext>.xmp to enable the "
-            "real-fixture leg — see that directory's README.md."
-        )
-
-    chart_xmp = Path(str(chart_raw) + ".xmp")
-    if not chart_xmp.is_file():
-        pytest.skip(
-            f"Found {chart_raw.name} but no companion {chart_xmp.name}. "
-            f"See tests/fixtures/colorchecker/README.md for the identity-XMP template."
-        )
-
-    ccd = pytest.importorskip(
-        "colour_checker_detection",
-        reason=(
-            "colour-checker-detection not installed. Run "
-            "`pip install -e '.[detect]'` to enable the real-chart leg."
-        ),
-    )
-
-    from lrt_cinema.cli import main as cli_main
-    from lrt_cinema.runner import darktable_cli_path
-
-    if darktable_cli_path() is None:
-        pytest.skip(
-            "darktable-cli not on PATH; cannot render the chart. "
-            "Install darktable to enable this test."
-        )
-
-    # Stage a fresh input dir so the fixture dir is never mutated by the
-    # renderer (it writes a .dt.xmp into the output dir, but we don't
-    # want any side-effects on the source-of-truth chart files).
-    src = tmp_path / "input"
-    src.mkdir()
-    shutil.copy(chart_raw, src / chart_raw.name)
-    shutil.copy(chart_xmp, src / chart_xmp.name)
-
-    out = tmp_path / "output"
-
-    rc = cli_main([
-        "render",
-        "--input", str(src),
-        "--output", str(out),
-        "--preset", "cinema-linear",
-        "--quiet",
-    ])
-    assert rc == 0, f"lrt-cinema render failed with rc={rc}"
-
-    rendered_tiffs = sorted(out.glob("*.tif"))
-    assert rendered_tiffs, f"no .tif rendered in {out}"
-    assert len(rendered_tiffs) == 1, (
-        f"expected exactly one rendered TIFF, got {[p.name for p in rendered_tiffs]}"
-    )
-
-    tiff_path = rendered_tiffs[0]
-    image = colour.io.read_image(str(tiff_path))
-    # read_image returns float in [0, 1] for 16-bit TIFF input.
-    assert image.ndim == 3 and image.shape[-1] in (3, 4), (
-        f"expected RGB(A) image, got shape {image.shape}"
-    )
-    if image.shape[-1] == 4:
-        image = image[..., :3]
-
-    detected = ccd.detect_colour_checkers_segmentation(image)
-    assert len(detected) >= 1, (
-        f"colour-checker-detection found no ColorChecker in {tiff_path}. "
-        f"Try a tighter chart framing or supply patch coordinates by hand."
-    )
-    # Convention: first detection is the highest-confidence one.
-    swatches = np.asarray(detected[0])
-    assert swatches.shape == (24, 3), (
-        f"expected (24, 3) swatches, got {swatches.shape}"
-    )
-
-    lab_measured = _linear_rec2020_to_lab_d55(swatches)
-    names, lab_ref = _load_reference()
-    de = _delta_e2000(lab_ref, lab_measured)
-
-    per_patch = {name: round(float(d), 3) for name, d in zip(names, de, strict=True)}
-
-    assert de.mean() < REAL_CHART_MEAN_DE_THRESHOLD, (
-        f"mean ΔE2000 = {de.mean():.3f} exceeds threshold "
-        f"{REAL_CHART_MEAN_DE_THRESHOLD} (broadcast-cinema convention). "
-        f"max = {de.max():.3f}. Per-patch: {per_patch}"
-    )
-    assert de.max() < REAL_CHART_MAX_DE_THRESHOLD, (
-        f"max ΔE2000 = {de.max():.3f} exceeds threshold "
-        f"{REAL_CHART_MAX_DE_THRESHOLD}. mean = {de.mean():.3f}. "
-        f"Per-patch: {per_patch}"
-    )
