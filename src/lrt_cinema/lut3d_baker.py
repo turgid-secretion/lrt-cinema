@@ -1,61 +1,20 @@
-"""Bake DCP HueSatMap + LookTable cubes into a Resolve-format .cube LUT.
+"""DCP HueSatMap / LookTable application primitives.
 
-darktable's `lut3d` module reads Resolve `.cube` files via an on-disk
-`filepath` in the params struct (per `src/iop/lut3d.c#L1178-L1196` SHA
-9402c65275). The path is resolved against a `def_path` config key. We
-emit the cube next to the per-frame XMP sidecar and point dt at that
-directory via `--conf plugins/darkroom/lut3d/def_path=...`.
+Pure-numpy helpers reused by `lrt_cinema.pipeline` at HSM (stage 5) and
+LookTable (stage 8). Apply cubes in HSV space, with Adobe's hexcone
+variant (hue in `[0, 6)`, not degrees) and the sRGB-gamma round-trip on V
+when the cube carries `srgb_gamma=True`.
 
-Algorithm summary (verified against RawTherapee `rtengine/dcp.cc`:
-clean-room HSM/LookTable reference port, GPL — used here strictly as the
-reference for matching Adobe's behavior, no code copied):
-
-  1. For each sample point on the Resolve cube's input grid (R, G, B
-     ∈ [0, 1]), interpret the triple as **linear ProPhoto RGB**. dt's
-     `lut3d` module converts working-space ↔ ProPhoto automatically at
-     pipeline entry/exit (verified at `src/iop/lut3d.c#L1085-L1110`), so
-     the cube's data lives in ProPhoto throughout.
-  2. Decompose to HSV via Adobe's hexcone variant (hue in `[0, 6)`, not
-     degrees). For pixels with any negative ProPhoto component, fall
-     back to the matrix-only passthrough (no HSM enrichment) — RT's
-     `apply()` at `dcp.cc#L1492-L1509`.
-  3. (HSM if present) trilinear-sample the HSM cube → (hueShift_deg,
-     satScale, valScale). Apply: `h += hueShift_deg × 6/360`, `s ×=
-     satScale`, `v ×= valScale` (with sRGB OETF/EOTF round-trip on V
-     when `srgb_gamma=True`).
-  4. (BaselineExposureOffset) scalar `v *= 2^offset` between HSM and
-     LookTable, matching Adobe's pipeline position.
-  5. (LookTable if present) same trilinear-sample-and-apply as step 3.
-  6. Recompose RGB from (h, s, v). Clamp to [0, 1] (dt's `_calculate_clut_cube`
-     warns but accepts out-of-range; pre-clamping is more predictable).
-  7. Emit Resolve `.cube` with R-fastest ordering (matches dt's
-     `_calculate_clut` indexing at `src/iop/lut3d.c#L263`: index = R + N×G + N²×B).
-
-Cube size default 33: the Adobe/Resolve standard, sufficient for
-visually-lossless representation of a 90×16×16 source HSV cube; 48 or 64
-available as headroom if saturated-gamut artifacts surface in practice
-(per spec Section 9.4).
+Verified against the RawTherapee `rtengine/dcp.cc` reference port (GPL,
+used as algorithmic reference only — no code copied) and Adobe DNG SDK
+1.7.1 `RefBaselineHueSatMap`.
 """
 
 from __future__ import annotations
 
-import contextlib
-import os
-import tempfile
-from pathlib import Path
-
 import numpy as np
 
 from lrt_cinema.dcp import HsvCube
-
-# Recommended Resolve cube size for HSV-cube baking. 33 is the Adobe /
-# Resolve / OCIO standard; 48 or 64 give more headroom against saturated-
-# gamut interpolation artifacts at the cost of larger cube files and a
-# slower dt load. dt's max is 256 (src/iop/lut3d.c#L813); going above 64
-# is rarely useful for HSV-derived cubes — the source HSV cube's own
-# density (max ~32K cells) bottlenecks meaningful detail recovery.
-RECOMMENDED_CUBE_SIZE = 33
-
 
 # ---------------------------------------------------------------------------
 # Standard sRGB transfer functions (used when cube.srgb_gamma is True)
@@ -257,117 +216,3 @@ def _apply_hsv_cube(
     return h_out, s_out, v_out
 
 
-# ---------------------------------------------------------------------------
-# Main entry point — bake one (or both) DCP HSV cubes into a Resolve .cube
-# ---------------------------------------------------------------------------
-
-def bake_dcp_cubes_to_resolve_cube(
-    out_path: Path,
-    cube_size: int,
-    hsm_blended: np.ndarray | None,
-    hsm_meta: HsvCube | None,
-    look_blended: np.ndarray | None,
-    look_meta: HsvCube | None,
-    baseline_exposure_offset_ev: float = 0.0,
-) -> None:
-    """Write a Resolve-format `.cube` file approximating the DCP HSV cubes.
-
-    Pipeline-order semantics mirror Adobe's:
-      1. HSM applied (if present)
-      2. BaselineExposureOffset scalar lift on V
-      3. LookTable applied (if present)
-
-    Steps 2 and 3 fire even when step 1's HSM is None — the BaselineExposureOffset
-    must still apply BEFORE the LookTable per spec § "Camera Profile
-    Encoding." Caller is responsible for blending HSM Data1/Data2 by target
-    kelvin via `dcp.interpolate_hsv_cube` BEFORE passing in `hsm_blended`;
-    LookTable has no per-illuminant blend.
-
-    Both cubes (when both present) must have shape `(V, H, S, 3)`. cube_meta
-    arguments carry the dim counts + srgb_gamma flag the application
-    algorithm needs.
-
-    The output Resolve cube is ProPhoto-in / ProPhoto-out — dt's `lut3d`
-    module handles the working-space ↔ ProPhoto conversion at module
-    entry/exit (verified at src/iop/lut3d.c#L1085-L1110). The cube
-    `colorspace` field in the emitted dt params must be
-    `DT_IOP_LIN_PROPHOTO = 5`.
-    """
-    if hsm_blended is None and look_blended is None:
-        raise ValueError("at least one of hsm_blended / look_blended must be supplied")
-
-    n = int(cube_size)
-    if n < 2 or n > 256:
-        raise ValueError(f"cube_size {n} outside [2, 256] (dt's max is 256)")
-
-    # Resolve-cube sample grid in linear ProPhoto. Iteration order matches
-    # dt's `_calculate_clut_cube` indexing (R-fastest): index = R + N*G + N²*B
-    # at src/iop/lut3d.c#L263. We compute all N³ samples in a single numpy
-    # operation, then iterate the write in (B, G, R) order.
-    axis = np.linspace(0.0, 1.0, n, dtype=np.float64)
-    # meshgrid with indexing='ij' so the leading axis is R.
-    R, G, B = np.meshgrid(axis, axis, axis, indexing="ij")
-    rgb_in = np.stack([R, G, B], axis=-1)  # shape (N, N, N, 3)
-
-    # 1. RGB → HSV (Adobe hexcone variant). valid_mask is False for any
-    #    negative-component samples — those bypass the cube per RT's
-    #    apply() contract.
-    h, s, v, valid_mask = _rgb_to_hsv_dcp(rgb_in)
-
-    # 2. HSM (if present).
-    if hsm_blended is not None:
-        h, s, v = _apply_hsv_cube(h, s, v, hsm_blended, hsm_meta)
-
-    # 3. BaselineExposureOffset between cubes (Adobe pipeline position).
-    if baseline_exposure_offset_ev != 0.0:
-        scale = float(2.0 ** baseline_exposure_offset_ev)
-        v = v * scale
-
-    # 4. LookTable (if present).
-    if look_blended is not None:
-        h, s, v = _apply_hsv_cube(h, s, v, look_blended, look_meta)
-
-    # 5. HSV → RGB; restore matrix-only passthrough for invalid samples.
-    rgb_out = _hsv_to_rgb_dcp(h, s, v)
-    rgb_out = np.where(valid_mask[..., None], rgb_out, rgb_in)
-
-    # 6. Clamp to [0, 1] — dt accepts but warns on out-of-range cube cells;
-    #    pre-clamping is more predictable. Saturated colors at gamut
-    #    boundary will be soft-clipped, which matches Adobe's behavior.
-    rgb_out = np.clip(rgb_out, 0.0, 1.0)
-
-    # 7. Write Resolve .cube atomically. Iteration order: B-outer, G-middle,
-    #    R-inner → matches dt's indexing. Atomic write via tempfile + os.replace
-    #    closes two latent bugs flagged in caveman-review on PR #10:
-    #      (a) TOCTOU race — content-hashed dedup at the emitter does an
-    #          `exists()` check before bake. Two parallel renders that both
-    #          see "not exists" would both write to the same path
-    #          non-atomically. With atomic write, last-write wins and the
-    #          intermediate bytes never appear under the final name.
-    #      (b) Partial-file-on-crash — a `kill -9` mid-write would leave a
-    #          truncated .cube that the next render's exists() check would
-    #          honor as valid. Atomic rename means the cube only appears
-    #          under the final name after the full write completes.
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_str = tempfile.mkstemp(
-        prefix=out_path.name + ".tmp.", dir=str(out_path.parent),
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(f"# lrt-cinema DCP HSV-cube bake, size={n}\n")
-            f.write(f"LUT_3D_SIZE {n}\n")
-            f.write("DOMAIN_MIN 0.0 0.0 0.0\n")
-            f.write("DOMAIN_MAX 1.0 1.0 1.0\n")
-            for bi in range(n):
-                for gi in range(n):
-                    for ri in range(n):
-                        px = rgb_out[ri, gi, bi]
-                        f.write(f"{px[0]:.6f} {px[1]:.6f} {px[2]:.6f}\n")
-        os.replace(tmp_str, out_path)
-    except BaseException:
-        # On any failure (incl. KeyboardInterrupt), remove the temp file
-        # rather than leave it cluttering the def_path dir.
-        with contextlib.suppress(OSError):
-            os.unlink(tmp_str)
-        raise

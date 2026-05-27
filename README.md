@@ -1,42 +1,65 @@
 # lrt-cinema
 
-Translate [LRTimelapse](https://lrtimelapse.com/) XMP develop instructions into [darktable](https://www.darktable.org/) history-stack XMP sidecars, then render a cinema-native intermediate sequence (linear Rec.2020 TIFF, ACES OpenEXR, or AgX-baked Rec.2020 TIFF) via `darktable-cli`.
+Self-contained Python implementation of the Adobe DNG 1.7.1 render pipeline,
+driven by [LRTimelapse](https://lrtimelapse.com/) XMP develop intent. Produces
+cinema-native intermediates — linear Rec.2020 TIFF or ACES OpenEXR — without
+shelling out to darktable, Lightroom, or any other RAW pipeline.
 
-**Status:** Pre-alpha scaffold. Not yet usable for production work. See [SCOPE.md](SCOPE.md) for what is and is not implemented, and [docs/VALIDATION.md](docs/VALIDATION.md) for how the project's "cinema-grade color" claim can be tested under CI (ColorChecker ΔE2000 methodology, what's testable vs unautomatable, first-class reference catalog).
+**Status:** Pre-alpha. Color science gates < 1 ΔE2000 mean against Adobe
+`dng_validate` on the project test scenes. Workflow polish, third-camera
+calibration coverage, and `stills-finished` AgX preset are v0.6.x scope.
 
-**Companion, not fork.** lrt-cinema does not modify or distribute LRTimelapse. It reads the XMP sidecars LRTimelapse writes and routes the develop intent through a different RAW pipeline. LRTimelapse is a separate commercial product by Gunther Wegner; this tool is independent.
+**Companion, not fork.** lrt-cinema does not modify or distribute
+LRTimelapse. It reads the XMP sidecars LRT writes and routes the develop
+intent through an in-process Python renderer. LRTimelapse is a separate
+commercial product by Gunther Wegner; this tool is independent.
 
 ## What it does
 
-LRTimelapse writes Lightroom-shaped XMP sidecars alongside RAW frames, including time-series extensions (Holy Grail exposure ramps, deflicker offsets, keyframe markers). The canonical LRT workflow renders those XMPs through Adobe Lightroom Classic or Camera Raw.
+LRTimelapse writes Lightroom-shaped XMP sidecars alongside RAW frames,
+including time-series extensions (Holy Grail exposure ramps, deflicker
+offsets, mask-correction per-frame deltas, keyframe markers). The canonical
+LRT workflow renders those XMPs through Adobe Lightroom Classic.
 
 `lrt-cinema` is an alternative renderer for the same XMP intent:
 
-1. Parse LRT-written XMP into an internal develop-ops + keyframes representation.
-2. Interpolate per-frame develop values from keyframes (linear and smooth modes; Holy Grail ramp support).
-3. Emit per-frame darktable history-stack XMP that maps the supported develop ops onto darktable modules (exposure, temperature, tone-curve / sigmoid, sharpening, etc.).
-4. Invoke `darktable-cli` per frame to produce the output sequence.
-5. Optionally apply a deflicker pass (export-and-measure-luminance loop with exposure delta writeback).
+1. Parse LRT XMP into an internal `DevelopOps` + keyframes representation.
+2. Interpolate per-frame develop values from keyframes.
+3. Run each frame through an Adobe DNG 1.7.1 reference pipeline:
+   demosaic → AsShotNeutral → ColorMatrix/ForwardMatrix → HueSatMap
+   → ExposureRamp → LookTable → ProfileToneCurve → BaselineExposure
+   → LR-authored develop ops → ProPhoto → Rec.2020 → TIFF / EXR.
+4. Write a frame sequence ready for DaVinci Resolve / ACES timelines.
+
+Per-frame color is within < 1 ΔE2000 of `dng_validate` (Adobe's own DNG
+SDK reference renderer) on the project's test scenes. See
+[docs/research/v06-architecture.md](docs/research/v06-architecture.md) for
+the full pipeline spec and [docs/research/dng-pipeline-findings.md](docs/research/dng-pipeline-findings.md)
+for the empirical journey.
 
 ## Output presets
 
-| Preset | Container | Color space | Display transform | Intended downstream |
-|---|---|---|---|---|
-| `cinema-linear` | 16-bit TIFF | Linear Rec.2020 | Disabled | Resolve (tag clip as Linear Rec.2020 input) |
-| `cinema-aces` | 32-bit float OpenEXR (PIZ) | Linear Rec.2020 | Disabled | ACES timelines (bundled OCIO config) |
-| `stills-finished` | 16-bit TIFF | Rec.2020 (gamma) | AgX baked | Finished delivery without further grading |
+| Preset | Container | Color space | Notes |
+|---|---|---|---|
+| `cinema-linear` | 16-bit TIFF | Linear Rec.2020 | Drop into Resolve; tag clip as Linear Rec.2020 input. |
+| `cinema-aces` | 32-bit float OpenEXR (PIZ) | Linear Rec.2020 | Resolve / OCIO ACES IDT (clean 3×3). |
+| `stills-finished` | 16-bit TIFF | Rec.2020 (gamma) + AgX | **v0.6.x** — `NotImplementedError` in v0.6. |
 
 ## Requirements
 
 - Python 3.10+
-- `darktable-cli` 4.6+ available on `PATH` (5.4+ recommended for AgX preset)
-- Source RAW files supported by darktable: CR3, NEF, ARW, DNG, RAF, ORF, RW2, FFF
+- macOS or Windows with Adobe DNG Converter installed (free, from Adobe)
+  — required for the < 1 ΔE result. On Linux pass `--no-dng-convert` to
+  read NEFs directly via libraw (expect ~0.5 ΔE regression).
+- A per-camera DCP profile. Auto-detected from `$LRT_CINEMA_PROFILES`,
+  `~/.config/lrt-cinema/profiles/`, or the system Adobe DNG Converter
+  install. Pass `--dcp PATH` to override.
+- Source RAW supported by libraw: NEF, DNG, CR3, ARW, RAF, ORF, RW2, FFF.
 
-Install darktable:
-- **macOS:** `brew install --cask darktable`
-- **Debian/Ubuntu:** `sudo apt install darktable`
-- **Fedora:** `sudo dnf install darktable`
-- **Arch:** `sudo pacman -S darktable`
+Install Adobe DNG Converter:
+- **macOS:** https://helpx.adobe.com/camera-raw/digital-negative.html
+- **Windows:** Same URL.
+- **Linux:** Not officially supported by Adobe — use `--no-dng-convert`.
 
 ## Install
 
@@ -46,53 +69,63 @@ pipx install lrt-cinema       # once published to PyPI
 pipx install .
 ```
 
+Runtime deps: `rawpy`, `colour-science`, `scipy`, `tifffile`, `OpenEXR`,
+`numpy`, `defusedxml`. All pulled automatically.
+
 ## Usage
 
 ```bash
 lrt-cinema render \
   --input  /path/to/source-and-xmp-folder \
-  --preset cinema-linear \
-  --output /path/to/output-tiff-sequence
-```
-
-Other presets:
-
-```bash
-lrt-cinema render --input ... --preset cinema-aces --output ...
-lrt-cinema render --input ... --preset stills-finished --output ...
+  --output /path/to/output-tiff-sequence \
+  --preset cinema-linear
 ```
 
 Power-user knobs:
 
 ```bash
 lrt-cinema render \
-  --input ... --output ... --preset cinema-linear \
-  --style /path/to/custom-darktable.style \
-  --keyframes auto \
-  --interpolation smooth \
-  --holy-grail apply-lrt-ramps \
-  --deflicker none \
+  --input ... --output ... --preset cinema-aces \
+  --dcp /path/to/camera.dcp \
   --workers 4 \
   --from-frame 0 --to-frame 500 \
+  --no-apply-lrt-offsets \
+  --no-dng-convert \
   --dry-run
 ```
 
-See `lrt-cinema --help` for the full surface.
+See `lrt-cinema render --help` for the full surface (9 flags).
 
 ## Scope and non-goals
 
 **In scope:**
-- Translation of LRT-written XMP develop ops that have a credible darktable equivalent.
-- Per-frame interpolation of keyframe values.
-- Three output presets above.
-- Bundled OCIO config naming the output color spaces.
+- Adobe DNG 1.7.1 reference pipeline within < 1 ΔE2000 of `dng_validate`.
+- LRT XMP develop ops with public LR formulas: Exposure2012, Blacks2012,
+  ToneCurvePV2012, Saturation, Vibrance, Contrast2012.
+- Holy Grail kelvin override + LRT mask-correction per-frame deltas.
+- Three output presets (above).
 
-**Out of scope:**
-- Replicating Adobe Camera Raw's parametric tone-curve look. AgX or scene-linear with a Resolve LUT downstream is a different rendering target.
-- CNN-based detail enhancement (ACR "Enhance Details" equivalent).
-- Spectral ACES IDTs from camera characterization. Honor darktable's matrix transforms and document Resolve-side tagging.
+**Out of scope (v0.6):**
+- Lightroom PV5 parametric tone math (Highlights/Shadows/Whites — closed
+  source). These fields drop at render.
+- Sharpening (`sharpness` is a no-op — sharpening belongs in the grade).
+- AgX display transform (`stills-finished` preset — v0.6.x).
+- CinemaDNG, ProRes, image-sequence-to-movie muxing.
 
-See [SCOPE.md](SCOPE.md) for the per-feature implementation status.
+See [SCOPE.md](SCOPE.md) for per-feature implementation status.
+
+## Validation
+
+End-to-end gate: `tests/test_pipeline.py` renders the project's test
+scenes through the pipeline and asserts mean ΔE2000 < 1.0 against
+Adobe's own `dng_validate` reference renderer.
+
+Latest measurement (gym + rose, vs `dng_validate`):
+
+| Scene | Mean ΔE | P50 | P95 | < 1 ΔE pixels |
+|---|---:|---:|---:|---:|
+| Gym (D750 Camera Standard) | **0.79** | 0.20 | 4.19 | 76.8% |
+| Rose (D750 Adobe Standard) | **0.84** | — | — | 69.6% |
 
 ## License
 
@@ -100,11 +133,15 @@ See [SCOPE.md](SCOPE.md) for the per-feature implementation status.
 
 ## Acknowledgements
 
-- The LRTimelapse XMP format is the public output of LRTimelapse; this tool reads but does not bundle or modify it.
-- darktable is the RAW pipeline; lrt-cinema invokes it via subprocess and ships no darktable code.
-- The Blender Foundation's AgX work is the basis for darktable's AgX module.
-- Prior art: [dtLapse](https://pypi.org/project/dtlapse/) (GPL-3, last updated 2020) explored a similar translation; lrt-cinema's interpolation is a clean reimplementation rather than a fork.
+- The LRTimelapse XMP format is the public output of LRTimelapse; this
+  tool reads but does not bundle or modify it.
+- Adobe DNG SDK 1.7.1 (BSD-3) is the algorithmic reference; `dng_validate`
+  is the ground-truth comparator for the test gate.
+- RawTherapee's `rtengine/dcp.cc` (GPL, used as algorithmic reference,
+  no code copied) clarified Adobe's HSM/LookTable cube application.
+- The Blender Foundation's AgX work is the basis for the planned
+  `stills-finished` v0.6.x preset.
 
 ## Contributing
 
-Bug reports and PRs welcome via GitHub issues. See [CONTRIBUTING.md](CONTRIBUTING.md) (TBD).
+Bug reports and PRs welcome via GitHub issues.
