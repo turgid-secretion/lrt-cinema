@@ -64,7 +64,9 @@ Chip 1 added during the sub-1 ΔE push.
 
 ## CLI surface
 
-Three required + six optional. Surface shrinks from 12 flags to 9.
+Three required + six optional. v0.4's ~15-flag surface (including
+`--engine`, `--no-auto-dcp`, `--no-dcp-tone-curve`, `--no-dcp-hsv-cubes`,
+`--style`, `--lrt-mask-offsets`, `--deflicker`) collapses to 9.
 
 | Flag | Disposition | Justification |
 |---|---|---|
@@ -113,9 +115,10 @@ conversion.
    data_1/data_2 if both present; applied in HSV (Adobe hexcone variant).
 6. **BaselineExposureOffset (BEO)** — folded into BE total per Adobe SDK
    (`TotalBaselineExposure = DNG.BaselineExposure + DCP.BEO`); applied
-   as a single scalar at Stage 9, not as a standalone V multiplier
-   between HSM and LookTable. Standalone-V application regressed rose
-   from 1.15 → 3.41 ΔE; the sum-into-BE form matches `dng_validate`.
+   as a single scalar at Stage 10 (with BE), not as a standalone V
+   multiplier between HSM and LookTable. Standalone-V application
+   regressed rose from 1.15 → 3.41 ΔE; the sum-into-BE form matches
+   `dng_validate`.
 7. **ExposureRamp** — Adobe `dng_function_exposure_ramp` per
    `dng_render.cpp:50-103`. Three-region piecewise: zero below
    `black - radius`, quadratic in `[black ± radius]`, linear above.
@@ -185,7 +188,7 @@ ground truth for `test_pipeline.py` and `test_colorimetric.py` regression.
 
 | Preset | Container | Color space | Library | Notes |
 |---|---|---|---|---|
-| `cinema-linear` | 16-bit int TIFF | linear Rec.2020 | `tifffile` | Drop into Resolve; tag clip as Linear Rec.2020 input. |
+| `cinema-linear` | 32-bit float TIFF | linear Rec.2020 | `tifffile` | Drop into Resolve; tag clip as Linear Rec.2020 input. Float (not 16-bit int) because 16-bit linear has ~6 bits of precision in the bottom stop — insufficient for grade. |
 | `cinema-aces` | 32-bit float EXR (PIZ) | linear Rec.2020 | `OpenEXR` (ASWF/PyPI, capital-O — the official binding, not `pyexr` or `imageio`'s EXR plugin) | Name is historical; Resolve applies "Linear Rec.2020 → ACES2065-1" as a clean 3×3 IDT. |
 | `stills-finished` | 16-bit int TIFF | Rec.2020 (gamma) | `tifffile` + AgX in Python | AgX is real new work — port from Blender Foundation reference; `colour-science` has primitives. ~200 LOC. |
 
@@ -241,28 +244,34 @@ not ship-gating.
 Shift: dt-cli goes away. New runtime deps (`pyproject.toml`): `rawpy`
 (demosaic), `colour-science` (color-space math + AgX primitives), `scipy`
 (`PchipInterpolator`), `tifffile` (TIFF writer), `OpenEXR` (EXR writer),
-`numpy` (already in). Install story moves from "install darktable + pipx
-install lrt-cinema" to "pipx install lrt-cinema" (self-contained, no
-external renderer).
+`numpy` (already in).
+
+**External runtime dependency:** Adobe DNG Converter, used to pre-convert
+NEF → DNG so libraw reads the correct `WhiteLevel` and
+`LinearizationTable` (see Stage 1). Without it, `--no-dng-convert` falls
+back to direct NEF input with a measured ΔE penalty. Install story moves
+from "install darktable + pipx install lrt-cinema" to "install Adobe DNG
+Converter + pipx install lrt-cinema". One external binary for another;
+the trade is spec-compliance, not zero-dep.
 
 ## Branch policy + PR sequencing
 
-1. **PR #18** (BEO tag fix + V-encoded clamp; commits `8778f4a` +
-   `b6eaaf7`) — lands independently against `main` first.
+1. ~~**PR #18**~~ — **superseded**; BEO tag fix + V-encoded clamp folded
+   into PR #20 (the v0.6 implementation PR).
 2. **This PR** (`docs/v06-architecture` → `main`) — spec only, single
    doc, doc-PR small.
 3. **PR #14, #15** — rejected with one-line link to this spec.
-4. **v0.6 implementation PR** — separate large PR against `main`, based
-   on this spec. Lands the renderer swap atomically: `pipeline.py` +
-   `develop_ops.py` + `output.py` + `cli.py` rewrite + test rewrites +
+4. **PR #20** (v0.6 implementation) — separate large PR against `main`,
+   based on this spec. Lands the renderer swap atomically: `pipeline.py`
+   + `develop_ops.py` + `output.py` + `cli.py` rewrite + test rewrites +
    deletions (`runner.py`, `xmp_emitter.py`, .style files,
    `test_dt_integration.py`) + dep manifest update.
 5. **`audit/v06-repo-impact`** and the findings docs become historical
    reference. The findings docs (`dng-pipeline-findings.md`,
    `v06-simplification-plan.md`, `v06-impact-audit.md`) land on `main`
-   with the v0.6 implementation PR (or earlier as a docs-only PR if the
-   maintainer prefers). The `.audit_tmp/` directory stays gitignored;
-   its useful content has been promoted to `pipeline.py`.
+   with PR #20 (or earlier as a docs-only PR if the maintainer prefers).
+   The `.audit_tmp/` directory stays gitignored; its useful content has
+   been promoted to `pipeline.py`.
 
 ## Open implementation questions
 
@@ -286,11 +295,9 @@ external renderer).
    reads `crs:Temperature` from the per-frame interpolated `DevelopOps`
    and overrides the AsShotNeutral pre-Step-2. Spec the override path
    in v0.6 implementation; cheap to add.
-5. **Worker pool.** v0.4 is single-worker. In-process Python at ~8s/24MP
-   frame on a 5000-frame Holy Grail is ~11 hours. Add a
-   `ProcessPoolExecutor` worker pool to `cli.py` driver, controlled by
-   `--workers N` (default = `os.cpu_count() // 2`). 1-day addition; gate
-   on whether the chip wants it in v0.6 or v0.6.x.
+5. ~~**Worker pool.**~~ **Resolved** — PR #20 ships `--workers N`
+   (default `os.cpu_count() // 2`) via `ProcessPoolExecutor` in
+   `cli.py`. v0.4 single-worker baseline is gone.
 6. **LR Exposure/Blacks placement (stage 11).** Spec defaults to
    post-DCP-shaping per ACR UI convention. The DNG spec is silent;
    empirical measurement would require the chip to compare LR-render
