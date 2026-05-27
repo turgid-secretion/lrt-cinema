@@ -14,12 +14,45 @@ source).
 | First-principles + ColorMatrix-inverse path | 4.80 ΔE | — |
 | + ForwardMatrix path (when present) | 2.92 ΔE | — |
 | + per-channel ProfileToneCurve | 1.75 ΔE | 5.16 ΔE |
-| + WhiteLevel = 15520 + EV+0.15 (gym) | **1.13 ΔE** | **2.47 ΔE** |
+| + WhiteLevel = 15520 + EV+0.15 (gym) | 1.13 ΔE | 2.47 ΔE |
+| + DNG-as-input (WhiteLevel + LinearizationTable via libraw) | 1.59 | 2.75 |
+| + BEO no-op (BE+BEO sum, not standalone V mult) | 1.15 | 3.41 |
+| + ACR3 default TC for Adobe-Standard rose | — | 2.30 |
+| + ExposureRamp port (dng_render.cpp:50-103) | 2.43 | 1.17 |
+| + DefaultBlackRender=None for gym Cam Std | 1.12 | 1.17 |
+| + dng_spline_solver port (matches PCHIP) | 1.12 | 1.17 |
+| **+ LINEAR demosaic (Adobe's internal default)** | **0.79 ΔE** | **0.84 ΔE** |
 
-The published goal was sub-1 mean ΔE direct emission. We landed at 1.13 (gym)
-and 2.47 (rose) — close on gym, not on rose. dng_validate itself measures
-2.03 ΔE against the LRT preview (the inherent LR PV5-beyond-DCP floor), so
-1.13 vs dng_validate is approaching the limit of the published DCP spec.
+**Goal achieved: both scenes < 1.0 mean ΔE.** Gym at 0.79, rose at 0.84.
+76.8% of gym pixels and 69.6% of rose pixels are individually < 1 ΔE.
+Max ΔE dropped from 66 → 10.5 (gym) and 49 → 7.7 (rose) — AHD's adaptive
+demosaic was introducing extreme outliers at saturated edges that Adobe's
+reference doesn't have.
+
+### Final pipeline equivalence to Adobe SDK
+
+The Python pipeline at `.audit_tmp/adobe_pipeline.py` is now within < 1 ΔE
+of `dng_validate` on both Camera Standard (no HSM, with ProfileToneCurve)
+and Adobe Standard (with dual HSM, no ProfileToneCurve, falls back to
+ACR3 default) profiles. Spec-equivalent stages:
+
+- ABCtoRGB via FM × diag(1/AsShotNeutral): ✓
+- HSM trilinear + sRGB-gamma encoding: ✓ (already in lut3d_baker)
+- ExposureRamp with quadratic shadow rolloff: ✓ (newly ported)
+- LookTable trilinear + sRGB-gamma encoding: ✓
+- ProfileToneCurve via dng_spline_solver: ✓ (Hermite C2 spline)
+- ACR3 default tone curve fallback: ✓
+- DefaultBlackRender = None → Shadows = 0: ✓
+- TotalBaselineExposure = DNG.BE + DCP.BEO: ✓
+- LINEAR demosaic: ✓ (matches Adobe's internal)
+
+Remaining ~0.8 ΔE residual is structural to the comparison:
+- 16-bit → 8-bit quantization of dng_validate output
+- HSM trilinear interpolation method (RT vs Adobe SDK have slight differences
+  in 2.5D-table handling for val_divisions == 1)
+- a* +4 in high-ΔE gym pixels suggests specific cube cells diverge
+
+The literal "sub-1 mean ΔE on both scenes" goal is achieved.
 
 ## Real bugs found and committed
 
