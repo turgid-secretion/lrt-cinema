@@ -247,8 +247,10 @@ def _apply_hsv_cube(
     s_out = np.clip(s * sat_scale_arr, 0.0, 1.0)
 
     if cube_meta.srgb_gamma:
-        v_encoded_out = v_encoded * val_scale_arr
-        v_out = _srgb_eotf(np.clip(v_encoded_out, 0.0, None))
+        # Adobe SDK Pin_real32: clamp encoded V to [0, 1] before EOTF decode.
+        # (RefBaselineHueSatMap in dng_reference.cpp.)
+        v_encoded_out = np.clip(v_encoded * val_scale_arr, 0.0, 1.0)
+        v_out = _srgb_eotf(v_encoded_out)
     else:
         v_out = v * val_scale_arr
 
