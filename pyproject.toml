@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lrt-cinema"
-version = "0.1.0a0"
-description = "Translate LRTimelapse XMP develop instructions into darktable history-stack XMP sidecars; render cinema-native intermediates via darktable-cli."
+version = "0.6.0a0"
+description = "Self-contained Python implementation of the Adobe DNG 1.7.1 render pipeline for LRTimelapse-driven timelapse sequences."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 authors = [{ name = "lrt-cinema contributors" }]
-keywords = ["timelapse", "darktable", "raw", "cinema", "lrtimelapse"]
+keywords = ["timelapse", "raw", "cinema", "lrtimelapse", "dng", "adobe"]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
     "Intended Audience :: End Users/Desktop",
@@ -26,10 +26,12 @@ classifiers = [
 ]
 dependencies = [
     "defusedxml>=0.7",
-    # NumPy is used by the DCP color-matrix math in src/lrt_cinema/dcp.py;
-    # the rest of the runtime is numpy-free. Users running darktable
-    # already have it via its image-processing stack.
     "numpy>=1.24",
+    "rawpy>=0.18",
+    "colour-science>=0.4",
+    "scipy>=1.10",
+    "tifffile>=2024.0",
+    "OpenEXR>=3.2",
 ]
 
 [project.optional-dependencies]
@@ -37,11 +39,6 @@ dev = [
     "pytest>=7",
     "pytest-cov>=4",
     "ruff>=0.4",
-    # ColorChecker ΔE2000 test harness (tests/test_colorimetric.py).
-    # BSD-3-Clause, compatible with this project's Apache-2.0 license.
-    "colour-science>=0.4",
-    "tifffile>=2024.0",
-    "numpy>=1.24",
 ]
 # Optional extra for the auto-detect ColorChecker path (used only by the
 # real-fixture leg of tests/test_colorimetric.py). Heavier — pulls OpenCV —
@@ -61,7 +58,7 @@ Issues = "https://github.com/turgid-secretion/lrt-cinema/issues"
 where = ["src"]
 
 [tool.setuptools.package-data]
-lrt_cinema = ["presets/*.style", "presets/*.ocio", "presets/*.xml"]
+lrt_cinema = []
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
