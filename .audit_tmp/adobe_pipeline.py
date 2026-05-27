@@ -75,14 +75,21 @@ def srgb_oetf(x):
     return np.where(x <= 0.0031308, x * 12.92, (1 + a) * np.power(np.maximum(x, 0), 1/2.4) - a)
 
 
-def demosaic_camera_rgb(nef_path: Path) -> np.ndarray:
-    """Demosaic NEF via rawpy/libraw. Returns float32 (H, W, 3) in
-    LINEAR camera RGB, normalized [0, 1] after black-level subtract.
+def demosaic_camera_rgb(raw_path) -> np.ndarray:
+    """Demosaic raw via rawpy/libraw. Accepts NEF or DNG path.
+
+    Returns float32 (H, W, 3) in LINEAR camera RGB, normalized [0, 1]
+    after black-level subtract.
+
+    When given the Adobe-converted DNG (vs the original NEF), libraw
+    honors the DNG's WhiteLevel (15520, not libraw's per-camera 15311)
+    and the embedded LinearizationTable (per-pixel sensor linearization).
+    Both close real-world ΔE vs dng_validate.
 
     Uses minimal libraw post-processing: no auto-bright, no WB, no gamma,
     no color matrix. Demosaic only.
     """
-    with rawpy.imread(str(nef_path)) as raw:
+    with rawpy.imread(str(raw_path)) as raw:
         # Use libraw's postprocess with maximally-neutral settings.
         # output_bps=16: 16-bit per channel output.
         # gamma=(1, 1): no gamma encoding (linear output).
