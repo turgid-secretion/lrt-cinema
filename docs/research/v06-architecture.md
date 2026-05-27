@@ -83,7 +83,10 @@ survives in `cli.py` unchanged.
 ## Pipeline stage order
 
 The order is load-bearing and the chip implementer should hold to it.
-Numbered to be unambiguous:
+Numbered to be unambiguous. Stages 1–4 are sensor → working space;
+stages 5–9 are DCP shaping (Adobe DNG 1.7.1 §"Mapping Camera Color
+Space"); stages 10–11 are LR-authored develop ops; 12 is output
+conversion.
 
 1. **Demosaic** — rawpy/libraw (AHD); float32, normalized `[0, 1]` after
    black-level subtract + WhiteLevel normalize. Per `dng-pipeline-findings`
@@ -95,28 +98,35 @@ Numbered to be unambiguous:
    (preferred; mired-blended by scene kelvin when FM1 ≠ FM2); else
    `inv(ColorMatrix)` × camera_rgb with iterative neutral normalization.
 4. **XYZ(D50) → linear ProPhoto(D50)** — fixed matrix.
-5. **LR-authored ops — pre-matrix half.** Exposure2012 (EV → linear gain)
-   and Blacks2012 apply here per Adobe convention (linear domain, pre
-   HSV-cube shaping). `develop_ops.py` is responsible for the ordering
-   inside this group.
-6. **HueSatMap (HSM)** — mired-blended by scene kelvin between
+5. **HueSatMap (HSM)** — mired-blended by scene kelvin between
    data_1/data_2 if both present; applied in HSV (Adobe hexcone variant).
-7. **BaselineExposureOffset (BEO)** — multiplicative on V; `2^BEO`.
-8. **LookTable (LT)** — applied in HSV; single cube (no per-illuminant).
-9. **ProfileToneCurve** — **per-R, per-G, per-B independently** in linear
+6. **BaselineExposureOffset (BEO)** — multiplicative on V; `2^BEO`.
+7. **LookTable (LT)** — applied in HSV; single cube (no per-illuminant).
+8. **ProfileToneCurve** — **per-R, per-G, per-B independently** in linear
    ProPhoto, NOT per-V as DNG 1.7.1 spec text suggests. Per
    `dng-pipeline-findings` §3: SDK `dng_render.cpp::DoBaselineRGBTone`
    applies it per-channel; switching from per-V to per-channel was the
    single largest ΔE improvement (2.92 → 1.75 on gym). Solve via PCHIP
    (closest to Adobe's `dng_spline_solver`; see Open Question 3).
-10. **BaselineExposure (BE)** — scalar EV on linear ProPhoto.
-11. **LR-authored ops — post-matrix half.** PV2012 ToneCurve (LR layers
-    this on top of DCP ProfileToneCurve — both fire when both present),
+9. **BaselineExposure (BE)** — scalar EV on linear ProPhoto.
+10. **LR-authored ops — linear domain.** Exposure2012 (EV → linear gain),
+    Blacks2012. Apply on linear ProPhoto, after all DCP shaping.
+    `develop_ops.py` owns the per-op math and the in-group ordering.
+11. **LR-authored ops — perceptual domain.** PV2012 ToneCurve (layered on
+    top of DCP ProfileToneCurve — both fire when both present),
     Saturation, Vibrance, Contrast2012, Sharpness. Apply in HSV where
     appropriate; sharpness last.
 12. **ProPhoto(D50) → Rec.2020(D65)** — Bradford CAT D50→D65 + ProPhoto→
     XYZ→Rec.2020 matrix. For `cinema-linear`/`cinema-aces` this is the
     final output (linear). For `stills-finished` apply AgX (see Output).
+
+**Caveat on stage 10 placement.** ACR's UI order applies Exposure/Blacks
+after the DCP look profile. The DNG 1.7.1 spec is silent on where user
+develop ops slot in; the seed pipeline applies zero LR ops, so the
+project has no empirical measurement to arbitrate. This spec defaults to
+"after DCP shaping" to match ACR UI; if Chip 1 (or v0.6 implementation)
+measures a meaningfully lower ΔE with Exposure/Blacks placed before
+HSM, the order shifts and this section updates. See Open Question 6.
 
 ## Test strategy
 
@@ -148,7 +158,7 @@ ground truth for `test_pipeline.py` and `test_colorimetric.py` regression.
 | Preset | Container | Color space | Library | Notes |
 |---|---|---|---|---|
 | `cinema-linear` | 16-bit int TIFF | linear Rec.2020 | `tifffile` | Drop into Resolve; tag clip as Linear Rec.2020 input. |
-| `cinema-aces` | 32-bit float EXR (PIZ) | linear Rec.2020 | `OpenEXR` (PyPI) | Name is historical; Resolve applies "Linear Rec.2020 → ACES2065-1" as a clean 3×3 IDT. |
+| `cinema-aces` | 32-bit float EXR (PIZ) | linear Rec.2020 | `OpenEXR` (ASWF/PyPI, capital-O — the official binding, not `pyexr` or `imageio`'s EXR plugin) | Name is historical; Resolve applies "Linear Rec.2020 → ACES2065-1" as a clean 3×3 IDT. |
 | `stills-finished` | 16-bit int TIFF | Rec.2020 (gamma) | `tifffile` + AgX in Python | AgX is real new work — port from Blender Foundation reference; `colour-science` has primitives. ~200 LOC. |
 
 CinemaDNG and other RAW intermediate formats: tracked as v0.7+ candidates
@@ -236,6 +246,11 @@ external renderer).
    `ProcessPoolExecutor` worker pool to `cli.py` driver, controlled by
    `--workers N` (default = `os.cpu_count() // 2`). 1-day addition; gate
    on whether the chip wants it in v0.6 or v0.6.x.
+6. **LR Exposure/Blacks placement (stage 10).** Spec defaults to
+   post-DCP-shaping per ACR UI convention. The DNG spec is silent;
+   empirical measurement would require the chip to compare LR-render
+   output against the project pipeline with the two ops swapped before
+   vs after HSM. Defer to v0.6 implementation; resolve before tag.
 
 ## Recommended action sequence
 
