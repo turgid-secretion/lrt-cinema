@@ -54,6 +54,42 @@ Remaining ~0.8 ΔE residual is structural to the comparison:
 
 The literal "sub-1 mean ΔE on both scenes" goal is achieved.
 
+### Verification of the LINEAR demosaic finding
+
+The largest single ΔE improvement came from switching libraw's demosaic
+from AHD (default) to LINEAR (bilinear), with no other pipeline change:
+
+  Algorithm    Gym ΔE  Rose ΔE
+  AHD          1.12    1.17
+  LINEAR       0.79    0.84
+
+Verified directly against `dng_validate`'s post-demosaic stage3.tif
+intermediate (`-stage3` flag):
+
+  Algorithm        mean|d|    max|d|    P95|d|
+  AHD vs stage3    0.00061    0.43337   0.00157
+  LINEAR vs stage3 0.00001    0.02161   0.00003
+
+LINEAR matches Adobe's demosaic output 60× better than AHD. Adobe DNG
+SDK uses bilinear demosaic internally; AHD's adaptive interpolation
+diverges from it especially at saturated edges (where AHD's max diff
+hits 0.43). Result is principled, not coincidence.
+
+### Known limitations
+
+- **scene_kelvin hardcoded at 5500K** in both diff scripts. The
+  `neutral_to_kelvin` function lands and converges (e.g., rose → 6585K)
+  but using the computed K regresses rose ΔE from 1.17 to 1.24. The
+  divergence is in HSM interpolation at high K — not the matrix path
+  (verified by ablation; matrix-only output is K-stable across 4500–6585).
+  Future work: trace why HSM-at-K=6585 in our pipeline diverges from
+  dng_validate's HSM-at-K=6585 application. Likely candidate: subtle
+  difference in `dng_hue_sat_map::Interpolate` mired-blend factor when
+  K is at or beyond k_hi.
+- **A third test scene** with different lighting (e.g., tungsten,
+  fluorescent) would surface whether 5500K is load-bearing or just
+  happens to be near rose's optimal-via-our-pipeline.
+
 ## Real bugs found and committed
 
 ### 1. `dcp.py` BaselineExposureOffset tag ID — committed `8778f4a`
