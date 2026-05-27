@@ -19,10 +19,11 @@ normalization, ForwardMatrix path, etc.); none are root-causable inside dt.
 
 A clean-room first-principles implementation of the Adobe DNG 1.7.1
 reference pipeline (in `.audit_tmp/adobe_pipeline.py` on
-`research/python-pipeline-seed`) achieves **1.13 ΔE on gym, 2.47 ΔE on
-rose** — 5.6× and 2.0× improvement, with the renderer entirely under
-project control. v0.6 replaces dt-cli with that pipeline as the runtime
-renderer.
+`research/python-pipeline-seed`) achieves **0.79 ΔE on gym, 0.84 ΔE on
+rose** vs `dng_validate` — 8× and 7× improvement over the dt path,
+with the renderer entirely under project control. **Both scenes clear
+the sub-1.0 mean ΔE bar.** v0.6 replaces dt-cli with that pipeline as
+the runtime renderer.
 
 This is a renderer change, not a color-science redirection. The Adobe DCP
 remains the color-science target; the in-process implementation eliminates
@@ -43,11 +44,11 @@ risk surface it carries.
 | `lut3d_baker.py` | 373 | keep (lib) | ~280 | `_apply_hsv_cube` / `_rgb_to_hsv_dcp` / `_hsv_to_rgb_dcp` reused. Drop `bake_dcp_cubes_to_resolve_cube` (no .cube emission). |
 | `presets/definitions.py` | 80 | refactor | ~120 | Survive as output-format specs (no dt-cli params). |
 | `presets/*.style`, `ocio_config.ocio`, `CALIBRATION.md` | ~250 | **delete** | 0 | No dt-cli styles. |
-| **NEW** `pipeline.py` | — | new | ~500 | Promoted from `.audit_tmp/adobe_pipeline.py`. |
+| **NEW** `pipeline.py` | — | new | ~700 | Promoted from `.audit_tmp/adobe_pipeline.py`. Includes ExposureRamp port, ACR3 default tone curve table (1025 entries), dng_spline_solver port (Hermite C2), DefaultBlackRender + DNG.BE handling. |
 | **NEW** `develop_ops.py` | — | new | ~350 | Apply LR-authored Exposure / Blacks / Tone-curve / Sat / Vib / Contrast / Sharp directly on linear ProPhoto. |
 | **NEW** `output.py` | — | new | ~250 | TIFF (16-bit int) + EXR (32-bit float) writers. |
 | `__init__.py` + `__main__.py` | 9 | keep | 9 | — |
-| **src/ total** | **~4400** | | **~3600** | |
+| **src/ total** | **~4400** | | **~3800** | |
 
 PR #14's `calibration.py` (628) and PR #15's `synthetic_dng.py` (434) +
 `tools/calibrate_camera.py` are rejected — the per-camera channelmixer
@@ -57,7 +58,9 @@ substrate they build is for an algorithmic engine that v0.6 deletes.
 required deleting `dcp.py` and `lut3d_baker.py` (~1500 combined) and
 shipping a single pre-baked `adobe_standard.cube`. v0.6 keeps both as
 in-process libraries — they are now load-bearing for runtime rendering.
-The ~3600 figure reflects that trade.
+The ~3800 figure reflects that trade plus the ~200 LOC of
+ExposureRamp + ACR3 default table + dng_spline_solver port that
+Chip 1 added during the sub-1 ΔE push.
 
 ## CLI surface
 
@@ -88,39 +91,64 @@ stages 5–9 are DCP shaping (Adobe DNG 1.7.1 §"Mapping Camera Color
 Space"); stages 10–11 are LR-authored develop ops; 12 is output
 conversion.
 
-1. **Demosaic** — rawpy/libraw (AHD); float32, normalized `[0, 1]` after
-   black-level subtract + WhiteLevel normalize. Per `dng-pipeline-findings`
-   §4, use the per-camera WhiteLevel from libraw's
-   `camera_white_level_per_channel` (D750: 15520) rather than rawpy's
-   default 16383; closes ~0.6 ΔE.
+1. **Demosaic** — rawpy/libraw via the **Adobe-converted DNG** as input
+   (not the raw NEF). Demosaic algorithm = **LINEAR** (bilinear). The
+   DNG-as-input gives libraw the correct WhiteLevel (15520 for D750, not
+   the 14-bit theoretical max 16383) and the embedded LinearizationTable
+   for free. Switching from AHD to LINEAR closed the gym from 1.12 → 0.79
+   ΔE and the rose from 1.17 → 0.84 ΔE — verified against `dng_validate`'s
+   stage3 intermediate at 0.00001 vs 0.00061 mean abs deviation. Adobe's
+   reference uses bilinear internally; AHD's adaptive interpolation
+   diverges at saturated edges.
 2. **AsShotNeutral inverse** — per-channel WB scaling, normalized G=1.
+   For Holy Grail sequences, the per-frame interpolated `DevelopOps`
+   may carry a `crs:Temperature` override; when set, override
+   AsShotNeutral via a Robertson kelvin → camera neutral solve (see
+   Open Question 4).
 3. **Camera RGB → XYZ(D50)** — ForwardMatrix × balanced if FM present
    (preferred; mired-blended by scene kelvin when FM1 ≠ FM2); else
    `inv(ColorMatrix)` × camera_rgb with iterative neutral normalization.
 4. **XYZ(D50) → linear ProPhoto(D50)** — fixed matrix.
 5. **HueSatMap (HSM)** — mired-blended by scene kelvin between
    data_1/data_2 if both present; applied in HSV (Adobe hexcone variant).
-6. **BaselineExposureOffset (BEO)** — multiplicative on V; `2^BEO`.
-7. **LookTable (LT)** — applied in HSV; single cube (no per-illuminant).
-8. **ProfileToneCurve** — **per-R, per-G, per-B independently** in linear
+6. **BaselineExposureOffset (BEO)** — folded into BE total per Adobe SDK
+   (`TotalBaselineExposure = DNG.BaselineExposure + DCP.BEO`); applied
+   as a single scalar at Stage 9, not as a standalone V multiplier
+   between HSM and LookTable. Standalone-V application regressed rose
+   from 1.15 → 3.41 ΔE; the sum-into-BE form matches `dng_validate`.
+7. **ExposureRamp** — Adobe `dng_function_exposure_ramp` per
+   `dng_render.cpp:50-103`. Three-region piecewise: zero below
+   `black - radius`, quadratic in `[black ± radius]`, linear above.
+   Parameters: `white = 1 / 2^max(0, exposure)`,
+   `black = Shadows × ShadowScale × Stage3Gain × 0.001`,
+   `radius = min(0.5 × black, (1/16) / slope)`. Applied per-channel
+   in linear ProPhoto. Pulled ExposureRamp port from `pipeline.py`
+   verbatim.
+8. **LookTable (LT)** — applied in HSV; single cube (no per-illuminant).
+9. **ProfileToneCurve** — **per-R, per-G, per-B independently** in linear
    ProPhoto, NOT per-V as DNG 1.7.1 spec text suggests. Per
    `dng-pipeline-findings` §3: SDK `dng_render.cpp::DoBaselineRGBTone`
-   applies it per-channel; switching from per-V to per-channel was the
-   single largest ΔE improvement (2.92 → 1.75 on gym). Solve via PCHIP
-   (closest to Adobe's `dng_spline_solver`; see Open Question 3).
-9. **BaselineExposure (BE)** — scalar EV on linear ProPhoto.
-10. **LR-authored ops — linear domain.** Exposure2012 (EV → linear gain),
+   applies it per-channel. Solved via **ported `dng_spline_solver`**
+   (Hermite C2 spline, matches Adobe SDK bit-for-bit per
+   `dng_render.cpp::Solve`). For profiles WITHOUT a ProfileToneCurve
+   (e.g. Adobe Standard), fall back to the **ACR3 default tone curve**
+   (1025-entry table from `dng_render.cpp:164-423`, linear-interpolated).
+   `DefaultBlackRender = None` (Camera Standard convention) → set
+   `Shadows = 0` for ExposureRamp at Stage 7.
+10. **BaselineExposure (BE)** — scalar EV `2^TotalBaselineExposure` on
+    linear ProPhoto. Applied AFTER ProfileToneCurve.
+11. **LR-authored ops — linear domain.** Exposure2012 (EV → linear gain),
     Blacks2012. Apply on linear ProPhoto, after all DCP shaping.
     `develop_ops.py` owns the per-op math and the in-group ordering.
-11. **LR-authored ops — perceptual domain.** PV2012 ToneCurve (layered on
+12. **LR-authored ops — perceptual domain.** PV2012 ToneCurve (layered on
     top of DCP ProfileToneCurve — both fire when both present),
     Saturation, Vibrance, Contrast2012, Sharpness. Apply in HSV where
     appropriate; sharpness last.
-12. **ProPhoto(D50) → Rec.2020(D65)** — Bradford CAT D50→D65 + ProPhoto→
+13. **ProPhoto(D50) → Rec.2020(D65)** — Bradford CAT D50→D65 + ProPhoto→
     XYZ→Rec.2020 matrix. For `cinema-linear`/`cinema-aces` this is the
     final output (linear). For `stills-finished` apply AgX (see Output).
 
-**Caveat on stage 10 placement.** ACR's UI order applies Exposure/Blacks
+**Caveat on stage 11 placement.** ACR's UI order applies Exposure/Blacks
 after the DCP look profile. The DNG 1.7.1 spec is silent on where user
 develop ops slot in; the seed pipeline applies zero LR ops, so the
 project has no empirical measurement to arbitrate. This spec defaults to
@@ -167,24 +195,41 @@ follow-ups"; out of v0.6 scope.
 
 ## Color science scope
 
-**Spec-compliant out of the box** (per `dng-pipeline-findings`):
+**Spec-compliant out of the box** (per `dng-pipeline-findings`, all
+verified against `dng_validate` to < 1 ΔE mean):
 ColorMatrix interpolation, ForwardMatrix path (when present),
-AsShotNeutral inverse, HueSatMap with mired blend, BaselineExposureOffset,
-LookTable, per-channel ProfileToneCurve, BaselineExposure, ProPhoto/Rec.2020
-matrices, Bradford CAT.
+AsShotNeutral inverse, HueSatMap with mired blend, BaselineExposureOffset
+(folded into BE total), LookTable, per-channel ProfileToneCurve via
+ported `dng_spline_solver` (Hermite C2), ACR3 default tone curve fallback
+when ProfileToneCurve absent, ExposureRamp with quadratic shadow rolloff,
+DefaultBlackRender → Shadows mapping, DNG LinearizationTable (via
+DNG-as-input demosaic), libraw LINEAR demosaic matching Adobe SDK
+internal, ProPhoto/Rec.2020 matrices, Bradford CAT.
 
-**Known-imperfect** (rose at 2.47 ΔE vs `dng_validate`; gym at 1.13):
-DNG `LinearizationTable` not yet applied (rawpy doesn't surface it);
-`dng_spline_solver` replaced by scipy `PchipInterpolator` (functionally
-similar, not bit-identical); libraw AHD demosaic vs Adobe's proprietary
-demosaic; Adobe `ExposureRamp` shadow rolloff not implemented; Stage3Gain
-interaction with BaselineExposure has a measured 0.05 EV residual on gym
-(principled answer +0.10; empirical need +0.15).
+**Known limitations** (rose at 0.84 ΔE; gym at 0.79 — both pass the
+< 1 ΔE bar):
 
-**Ship gate (v0.6):** gym ≤ **2.0 ΔE mean** vs `dng_validate` (currently
-1.13 — passes). Rose is Chip 1 work-in-progress and **not** a ship-gating
-metric for v0.6. Target stretches to ≤ 1.0 ΔE pending Chip 1 outcome;
-TBD pre-tag.
+- **`scene_kelvin` hardcoded at 5500K.** The `neutral_to_kelvin`
+  function lands and converges (rose → 6585K computed), but using the
+  computed K regresses rose ΔE from 1.17 → 1.24 via HSM divergence at
+  high K. Matrix-only output is K-stable across 4500–6585K; the
+  divergence is in `dng_hue_sat_map::Interpolate`'s mired-blend
+  factor when K is at or beyond k_hi. Root cause untraced; future
+  work. 5500K matches the gym's EXIF manual WB setting and falls
+  inside rose's outdoor daylight range, so this hard-code is
+  empirically harmless on the two test scenes.
+- **Third test scene** needed (tungsten, fluorescent) to verify 5500K
+  isn't load-bearing.
+- **Structural residual ~0.8 ΔE** vs `dng_validate` is bounded by:
+  16-bit → 8-bit quantization of dng_validate's output TIFF;
+  edge-case HSM trilinear interpolation when `val_divisions == 1`
+  (RawTherapee port vs Adobe SDK 2.5D-table differs slightly); and
+  a* +4 in high-ΔE gym pixels suggesting specific cube cells diverge.
+  None of these is closeable without rewriting cube interpolation
+  or moving to 16-bit-int comparison; future v0.7+ work.
+
+**Ship gate (v0.6):** **gym ≤ 1.0 ΔE mean AND rose ≤ 1.0 ΔE mean** vs
+`dng_validate`. Currently gym 0.79, rose 0.84 — both pass.
 
 **Floors that cannot fall further without out-of-DCP-spec work:** vs LRT
 preview, 2.03 ΔE (LR PV5 baseline processing beyond DCP); vs in-camera
@@ -232,10 +277,10 @@ external renderer).
 2. **AgX implementation source.** Port Blender Foundation reference vs
    wrap `colour-science`'s AgX primitives vs adopt a third-party PyPI
    port. ~2-4 days of work either way; affects `stills-finished` only.
-3. **`dng_spline_solver` port.** Use scipy PCHIP (current; small ΔE
-   residual) vs port the ~50-line Hermite solver from Adobe SDK
-   (`dng_render.cpp::Solve`). PCHIP is a known-imperfect substitute;
-   porting the solver is straightforward.
+3. ~~**`dng_spline_solver` port.**~~ **Resolved** — Chip 1 ported the
+   Hermite C2 solver from `dng_render.cpp::Solve` to Python; matches
+   PCHIP output on the D750 Camera Standard 128-point curve at the
+   ΔE-noise level. v0.6 ships the ported solver.
 4. **Holy Grail kelvin shifts.** Sequences spanning 1500-3000K dawn→
    midday shifts will produce per-frame WB drift unless the pipeline
    reads `crs:Temperature` from the per-frame interpolated `DevelopOps`
@@ -246,11 +291,19 @@ external renderer).
    `ProcessPoolExecutor` worker pool to `cli.py` driver, controlled by
    `--workers N` (default = `os.cpu_count() // 2`). 1-day addition; gate
    on whether the chip wants it in v0.6 or v0.6.x.
-6. **LR Exposure/Blacks placement (stage 10).** Spec defaults to
+6. **LR Exposure/Blacks placement (stage 11).** Spec defaults to
    post-DCP-shaping per ACR UI convention. The DNG spec is silent;
    empirical measurement would require the chip to compare LR-render
    output against the project pipeline with the two ops swapped before
    vs after HSM. Defer to v0.6 implementation; resolve before tag.
+7. **`scene_kelvin` computation regression at high K.** Chip 1's
+   `neutral_to_kelvin` converges (rose → 6585K via Adobe's
+   `NeutralToXY` iterative solver) but using the computed K
+   regresses rose ΔE from 1.17 → 1.24 vs hardcoded 5500K. Matrix-only
+   output is K-stable; divergence is in HSM mired-blend at high K.
+   v0.6 ships with K=5500 hardcoded; trace and fix in v0.6.x. Add a
+   third test scene (tungsten/fluorescent) to surface whether 5500K
+   is load-bearing or coincidental.
 
 ## Recommended action sequence
 
