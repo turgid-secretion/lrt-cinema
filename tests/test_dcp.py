@@ -815,3 +815,68 @@ def test_load_profile_version_mismatch_error_is_actionable(tmp_path):
     )
     with pytest.raises(ValueError, match="extract_dcp_library"):
         load_profile(bad_npz)
+
+
+def test_save_load_profile_preserves_none_profile_name(tmp_path):
+    """A DCPProfile constructed with profile_name=None (or "" — the
+    dataclass default) must round-trip without becoming the literal
+    string "None" — that bug would survive every code-path that uses
+    profile_name as a display label and silently mislabel manually-
+    constructed profiles in user output. Caveman-review PR #8 #7."""
+    import numpy as np
+    prof = DCPProfile(
+        profile_name=None,  # type: ignore[arg-type]
+        color_matrix_1=np.eye(3, dtype=np.float32),
+        kelvin_1=5500.0,
+        kelvin_2=5500.0,
+    )
+    out = tmp_path / "noname.npz"
+    save_profile(prof, out)
+    loaded = load_profile(out)
+    assert loaded.profile_name == "", (
+        f"profile_name=None must round-trip to '' not {loaded.profile_name!r}"
+    )
+
+
+def test_interpolate_hsv_cube_returns_data_1_when_either_kelvin_zero():
+    """Symmetric guard: if EITHER calibration kelvin is zero or negative,
+    can't compute the mired blend. Returns data_1. The original code
+    only guarded kelvin_2==0; kelvin_1=0 would div-by-zero at the
+    mired-inverse step. Caveman-review PR #8 #8."""
+    import numpy as np
+    data_1 = np.ones((2, 6, 2, 3), dtype=np.float32)
+    data_2 = np.zeros((2, 6, 2, 3), dtype=np.float32)
+    cube = HsvCube(
+        hue_divisions=6, sat_divisions=2, val_divisions=2,
+        srgb_gamma=False, data_1=data_1, data_2=data_2,
+    )
+    # Pre-fix: kelvin_1=0 would produce inf in inv_lo and NaN in the
+    # blend output. Post-fix: returns data_1 directly.
+    result = interpolate_hsv_cube(cube, kelvin=4000.0, kelvin_1=0.0, kelvin_2=6504.0)
+    assert np.array_equal(result, data_1)
+    # Symmetric case: kelvin_2=0 was already guarded; verify still works.
+    result2 = interpolate_hsv_cube(cube, kelvin=4000.0, kelvin_1=2856.0, kelvin_2=0.0)
+    assert np.array_equal(result2, data_1)
+    # And negative-kelvin defensive case.
+    result3 = interpolate_hsv_cube(cube, kelvin=4000.0, kelvin_1=-1.0, kelvin_2=6504.0)
+    assert np.array_equal(result3, data_1)
+
+
+def test_parse_dcp_rejects_oversized_count_field(tmp_path):
+    """A malformed DCP claiming a giant tag count would cause _read_value
+    to attempt a multi-GB allocation. The 16 MiB cap rejects it as
+    malformed before the allocation. Caveman-review PR #8 #13."""
+    import struct as _struct
+    # Construct a minimal TIFF/DCP header pointing to one IFD entry that
+    # claims count=2^30 (1 billion) FLOAT (4-byte) values → 4 GiB payload.
+    bad = tmp_path / "oversized.dcp"
+    header = b"II"  # little-endian
+    header += _struct.pack("<H", 0x4352)  # DCP magic
+    header += _struct.pack("<I", 8)  # IFD0 at offset 8
+    ifd = _struct.pack("<H", 1)  # 1 entry
+    # Entry: tag=50721 (ColorMatrix1), type=FLOAT(11), count=2^30, offset=0
+    ifd += _struct.pack("<HHII", 50721, 11, 1 << 30, 0)
+    ifd += _struct.pack("<I", 0)  # next IFD = none
+    bad.write_bytes(header + ifd)
+    with pytest.raises(ValueError, match="exceeds the .* cap|malformed"):
+        parse_dcp(bad)
