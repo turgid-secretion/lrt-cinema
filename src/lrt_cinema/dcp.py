@@ -747,30 +747,38 @@ def _xy_to_xyz(x: float, y: float) -> np.ndarray:
 
 
 def xy_to_camera_neutral(profile: DCPProfile, x: float, y: float) -> np.ndarray:
-    """Solve camera-RGB neutral multipliers for a given target (x, y).
+    """Compute camera-RGB neutral for a given target white-point (x, y).
 
-    Iterative because the color matrix depends on kelvin and the kelvin
-    we want is the one derived from the target (x, y). Converges in
-    typically ≤5 iterations. Algorithm ported from
-    colour-hdri.models.dng `xy_to_camera_neutral` (BSD-3, Mansencal
-    et al. 2025), which in turn ports DNG SDK 1.7.1
-    `dng_color_spec::SetWhiteXY`.
+    Algorithm matches colour-hdri.models.dng `xy_to_camera_neutral`
+    (BSD-3, Mansencal et al.), which is the canonical Python port of
+    DNG SDK 1.7.1 `dng_color_spec::SetWhiteXY`:
 
-    Returns the un-normalized camera-RGB neutral vector. Caller
-    normalizes — typically by dividing through so the green entry is 1.
+        1. (x, y) → CIE 1960 uv → Robertson CCT
+        2. interpolate ColorMatrix1/2 at that CCT (mired-linear blend)
+        3. camera_neutral = ColorMatrix @ XYZ(x, y)
+
+    Returns the un-normalized camera-RGB neutral vector. Caller normalizes
+    (typically by dividing through so the green entry is 1).
+
+    History: a prior version of this function carried a `for _ in
+    range(10)` loop labeled "iterative because the color matrix depends
+    on kelvin." The loop was dead — kelvin was computed once outside the
+    loop and never updated, so np.allclose(matrix, matrix) was always
+    True on iteration 1. Empirically the output exactly matches the
+    colour-hdri reference (verified in test_xy_to_camera_neutral_matches
+    _colour_hdri_reference), confirming the single-pass form is correct
+    for the DCP shapes we target. The DNG SDK's iterative form matters
+    only for non-Adobe vendor profiles with non-identity CameraCalibration
+    matrices or non-unit AnalogBalance — both absent from every Adobe DCP
+    shipped to date (including the bundled Nikon D750 Camera Standard).
+    If the renderer ever needs to handle a custom profile with these
+    fields populated, the iterative form would re-enter; that's a v0.5+
+    concern documented as `CameraCalibration` / `AnalogBalance` support.
     """
     u, v = xy_to_uv(x, y)
     kelvin = uv_to_kelvin(u, v)
     matrix = interpolate_color_matrix(profile, kelvin)
-    xyz = _xy_to_xyz(x, y)
-    for _ in range(10):
-        neutral = matrix @ xyz
-        new_matrix = interpolate_color_matrix(profile, kelvin)
-        if np.allclose(new_matrix, matrix, atol=1e-9):
-            return neutral
-        matrix = new_matrix
-        neutral = matrix @ xyz
-    return neutral
+    return matrix @ _xy_to_xyz(x, y)
 
 
 def kelvin_tint_to_dt_multipliers(
