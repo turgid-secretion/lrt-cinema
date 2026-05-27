@@ -3,7 +3,7 @@
 Stage 13 of the pipeline (per `docs/research/v06-architecture.md` §"Pipeline
 stage order"). Three presets, three containers:
 
-  cinema-linear     → 16-bit int TIFF, linear Rec.2020 — Resolve linear input
+  cinema-linear     → 32-bit float TIFF, linear Rec.2020 — Resolve linear input
   cinema-aces       → 32-bit float EXR (PIZ), linear Rec.2020 — ACES IDT clean 3×3
   stills-finished   → 16-bit int TIFF, Rec.2020 (gamma) + AgX  — DEFERRED to v0.6.x
 
@@ -50,20 +50,33 @@ def _prophoto_to_rec2020(prophoto_d50: np.ndarray) -> np.ndarray:
 
 
 def write_tiff_linear_rec2020(
-    prophoto: np.ndarray, dst: Path | str, bit_depth: int = 16,
+    prophoto: np.ndarray, dst: Path | str, bit_depth: int = 32,
 ) -> Path:
-    """Convert linear ProPhoto(D50) → linear Rec.2020(D65) and write as
-    16-bit (or 8-bit) integer TIFF. Clips to [0, 1] before quantization
-    — over/underexposure outside the gamut is lost at this stage."""
+    """Convert linear ProPhoto(D50) → linear Rec.2020(D65) and write a TIFF.
+
+    `bit_depth=32` (default) writes 32-bit float — required for linear
+    scene-referred data; 16-bit linear has ~6 bits of precision in the
+    bottom stop, insufficient for Resolve grade. Float preserves the
+    overrange (>1) signal.
+
+    `bit_depth=16` writes 16-bit unsigned int, clipping to [0, 1] —
+    suitable only for already-graded display-referred content.
+
+    `bit_depth=8` writes 8-bit unsigned int — preview/contact-sheet use
+    only.
+    """
     import tifffile
 
-    if bit_depth not in (8, 16):
-        raise ValueError(f"bit_depth must be 8 or 16, got {bit_depth}")
+    if bit_depth not in (8, 16, 32):
+        raise ValueError(f"bit_depth must be 8, 16, or 32, got {bit_depth}")
     rec2020 = _prophoto_to_rec2020(prophoto)
-    clipped = np.clip(rec2020, 0.0, 1.0)
-    if bit_depth == 16:
+    if bit_depth == 32:
+        pixels = rec2020.astype(np.float32)
+    elif bit_depth == 16:
+        clipped = np.clip(rec2020, 0.0, 1.0)
         pixels = (clipped * 65535.0 + 0.5).astype(np.uint16)
     else:
+        clipped = np.clip(rec2020, 0.0, 1.0)
         pixels = (clipped * 255.0 + 0.5).astype(np.uint8)
     dst = Path(dst)
     dst.parent.mkdir(parents=True, exist_ok=True)
