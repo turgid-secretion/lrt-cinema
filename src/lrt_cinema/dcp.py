@@ -17,8 +17,14 @@ Profile Format"). It carries:
                                          identifying which illuminants
                                          the matrices were calibrated
                                          at.
-    BaselineExposure / Offset            additive EV bias LR applies on
-                                         top of any user exposure.
+    BaselineExposureOffset               additive EV bias folded into
+                                         TotalBaselineExposure alongside
+                                         DNG.BaselineExposure (per Adobe
+                                         DNG SDK dng_negative.cpp:2588-2606
+                                         — DCP.BaselineExposure tag 50730 is
+                                         spec-permitted but Adobe's writer
+                                         never emits it, and the SDK's
+                                         TotalBE formula does not consume it).
     ProfileToneCurve                     N×2 (x,y) tone-curve LR
                                          applies as part of the
                                          "Camera Standard" / etc.
@@ -76,7 +82,6 @@ _TAG_COLOR_MATRIX_1 = 50721
 _TAG_COLOR_MATRIX_2 = 50722
 _TAG_CAMERA_CALIBRATION_1 = 50723
 _TAG_CAMERA_CALIBRATION_2 = 50724
-_TAG_BASELINE_EXPOSURE = 50730
 # CalibrationIlluminant1/2 — canonical DNG 1.7.1 tag IDs (verified against
 # RawTherapee dcp.cc:856-857, LibRaw tiff.cpp:1427-1431, darktable
 # imageio_dng.c#L606 at SHA 9402c65275, and the real Nikon D750
@@ -240,7 +245,11 @@ class DCPProfile:
     calibration_illuminant_1: int = 0
     calibration_illuminant_2: int = 0
 
-    baseline_exposure: float = 0.0
+    # Per Adobe DNG SDK dng_image_writer.cpp:2658, the DCP writer emits
+    # tcBaselineExposureOffset (51109) but never tcBaselineExposure (50730);
+    # likewise dng_negative.cpp:2588-2606 computes TotalBaselineExposure as
+    # DNG.BaselineExposure + DCP.BaselineExposureOffset — no DCP.BE term.
+    # So the DCP `BaselineExposure` field is intentionally absent here.
     baseline_exposure_offset: float = 0.0
 
     # Tone curve as Nx2 array of (x, y) in 0..1. None if not present.
@@ -431,8 +440,6 @@ def _parse_dcp_impl(path: Path) -> DCPProfile:
                 prof.calibration_illuminant_1 = _decode_short(data, 1, byte_order)[0]
             elif tag == _TAG_CALIBRATION_ILLUMINANT_2 and tag_type == _TYPE_SHORT:
                 prof.calibration_illuminant_2 = _decode_short(data, 1, byte_order)[0]
-            elif tag == _TAG_BASELINE_EXPOSURE and tag_type == _TYPE_SRATIONAL:
-                prof.baseline_exposure = _decode_srational(data, 1, byte_order)[0]
             elif tag == _TAG_BASELINE_EXPOSURE_OFFSET and tag_type == _TYPE_SRATIONAL:
                 prof.baseline_exposure_offset = _decode_srational(data, 1, byte_order)[0]
             elif (
@@ -975,9 +982,9 @@ def find_dcp_for_camera(
 # ---------------------------------------------------------------------------
 #
 # Project-defined lossless serialization of the DCP fields the renderer
-# actually consumes (matrices, illuminants, baseline exposure, tone curve,
-# HSV cubes). Storing extracted *data* — not Adobe's .dcp file format — is
-# the project's stance on Adobe DCP redistribution per
+# actually consumes (matrices, illuminants, baseline-exposure offset, tone
+# curve, HSV cubes). Storing extracted *data* — not Adobe's .dcp file
+# format — is the project's stance on Adobe DCP redistribution per
 # docs/research/KELVIN_MULTIPLIERS_RESEARCH.md.
 #
 # Format: numpy `.npz` (zip of zlib-compressed `.npy` arrays) with the
@@ -1017,7 +1024,6 @@ def save_profile(profile: DCPProfile, path: Path) -> None:
         "calibration_illuminant_2": np.int32(profile.calibration_illuminant_2),
         "kelvin_1": np.float32(profile.kelvin_1),
         "kelvin_2": np.float32(profile.kelvin_2),
-        "baseline_exposure": np.float32(profile.baseline_exposure),
         "baseline_exposure_offset": np.float32(profile.baseline_exposure_offset),
     }
     if profile.color_matrix_1 is not None:
@@ -1088,7 +1094,6 @@ def load_profile(path: Path) -> DCPProfile:
             camera_calibration_2=_opt("camera_calibration_2"),
             calibration_illuminant_1=int(data["calibration_illuminant_1"]),
             calibration_illuminant_2=int(data["calibration_illuminant_2"]),
-            baseline_exposure=float(data["baseline_exposure"]),
             baseline_exposure_offset=float(data["baseline_exposure_offset"]),
             profile_tone_curve=_opt("profile_tone_curve"),
             kelvin_1=float(data["kelvin_1"]),
