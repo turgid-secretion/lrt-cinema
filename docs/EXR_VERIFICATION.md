@@ -63,7 +63,9 @@ import numpy as np, OpenEXR, tifffile
 
 import pathlib
 exr_path = next(pathlib.Path("/tmp/exr-verify").glob("*.exr"))
-with OpenEXR.File(exr_path) as f:
+# separate_channels=True so R/G/B aren't auto-combined into a single "RGB"
+# channel (ASWF binding's default merges them when all three are present).
+with OpenEXR.File(str(exr_path), separate_channels=True) as f:
     h = f.header()
     print("EXR compression:", h["compression"])  # expect PIZ_COMPRESSION
     print("EXR channels:", sorted(f.channels().keys()))  # expect R, G, B
