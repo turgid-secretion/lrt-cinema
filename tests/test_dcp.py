@@ -66,7 +66,7 @@ def _build_synthetic_dcp(
     calibration_illuminant_1: int = 17,  # Standard A
     calibration_illuminant_2: int = 21,  # D65
     profile_name: str = "Test DCP",
-    baseline_exposure: float = 0.0,
+    baseline_exposure_tag: float | None = None,
     profile_tone_curve: np.ndarray | None = None,
 ) -> bytes:
     """Build a minimal valid DCP file as bytes.
@@ -105,11 +105,17 @@ def _build_synthetic_dcp(
     entries.append((50778, 3, 1, struct.pack("<H", calibration_illuminant_1)))
     entries.append((50779, 3, 1, struct.pack("<H", calibration_illuminant_2)))
 
-    # BaselineExposure (SRATIONAL, count=1)
-    entries.append((
-        50730, 10, 1,
-        _srational(int(round(baseline_exposure * 10000)), 10000),
-    ))
+    # BaselineExposure tag (50730) — Adobe's DCP writer never emits it
+    # (dng_image_writer.cpp:2658 writes only tcBaselineExposureOffset) and
+    # the renderer no longer parses it. Test fixture writes it only when
+    # `baseline_exposure_tag` is supplied explicitly, to exercise the
+    # silent-drop behavior the parser must guarantee for legacy hand-built
+    # DCPs.
+    if baseline_exposure_tag is not None:
+        entries.append((
+            50730, 10, 1,
+            _srational(int(round(baseline_exposure_tag * 10000)), 10000),
+        ))
 
     # ProfileToneCurve (FLOAT, count = 2*N)
     if profile_tone_curve is not None:
@@ -167,7 +173,7 @@ def test_parse_synthetic_dcp_round_trips_matrices(tmp_path):
         calibration_illuminant_1=17,
         calibration_illuminant_2=21,
         profile_name="Synthetic Test",
-        baseline_exposure=-0.5,
+        baseline_exposure_tag=-0.5,
     )
     path = tmp_path / "test.dcp"
     path.write_bytes(dcp)
@@ -178,7 +184,11 @@ def test_parse_synthetic_dcp_round_trips_matrices(tmp_path):
     assert p.calibration_illuminant_2 == 21
     assert p.kelvin_1 == 2856.0
     assert p.kelvin_2 == 6504.0
-    assert p.baseline_exposure == pytest.approx(-0.5, abs=1e-4)
+    # Regression guard: DCP `BaselineExposure` tag 50730 is intentionally
+    # NOT parsed (Adobe's DCP writer never emits it; TotalBE formula uses
+    # DNG.BE + DCP.BEO per dng_negative.cpp:2588-2606). Even though the
+    # fixture writes the tag, the parsed profile must not expose it.
+    assert not hasattr(p, "baseline_exposure")
     # SRATIONAL encoding scale=10000 → 4-decimal precision.
     np.testing.assert_allclose(p.color_matrix_1, m1, atol=1e-4)
     np.testing.assert_allclose(p.color_matrix_2, m2, atol=1e-4)
@@ -602,7 +612,6 @@ def _build_minimal_profile() -> DCPProfile:
         forward_matrix_2=np.eye(3) * 0.6,
         calibration_illuminant_1=17,
         calibration_illuminant_2=21,
-        baseline_exposure=-0.5,
         baseline_exposure_offset=0.25,
         profile_tone_curve=np.stack(
             [np.linspace(0, 1, 32), np.linspace(0, 1, 32) ** 0.5], axis=1,
@@ -624,8 +633,8 @@ def test_save_load_profile_round_trip_minimal(tmp_path):
     np.testing.assert_allclose(loaded.forward_matrix_2, profile.forward_matrix_2)
     assert loaded.calibration_illuminant_1 == 17
     assert loaded.calibration_illuminant_2 == 21
-    assert loaded.baseline_exposure == pytest.approx(-0.5)
     assert loaded.baseline_exposure_offset == pytest.approx(0.25)
+    assert not hasattr(loaded, "baseline_exposure")
     np.testing.assert_allclose(loaded.profile_tone_curve, profile.profile_tone_curve)
     assert loaded.kelvin_1 == pytest.approx(2856.0)
     assert loaded.kelvin_2 == pytest.approx(6504.0)
@@ -675,7 +684,6 @@ def test_load_profile_rejects_unsupported_version(tmp_path):
         calibration_illuminant_2=np.int32(0),
         kelvin_1=np.float32(2856),
         kelvin_2=np.float32(6504),
-        baseline_exposure=np.float32(0),
         baseline_exposure_offset=np.float32(0),
     )
     with pytest.raises(ValueError, match="unsupported profile format_version"):
@@ -692,7 +700,6 @@ def test_load_profile_rejects_missing_color_matrix(tmp_path):
         calibration_illuminant_2=np.int32(0),
         kelvin_1=np.float32(2856),
         kelvin_2=np.float32(6504),
-        baseline_exposure=np.float32(0),
         baseline_exposure_offset=np.float32(0),
     )
     with pytest.raises(ValueError, match="missing color_matrix_1"):

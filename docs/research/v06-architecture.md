@@ -90,8 +90,8 @@ survives in `cli.py` unchanged.
 The order is load-bearing and the chip implementer should hold to it.
 Numbered to be unambiguous. Stages 1–4 are sensor → working space;
 stages 5–9 are DCP shaping (Adobe DNG 1.7.1 §"Mapping Camera Color
-Space"); stages 10–11 are LR-authored develop ops; 12 is output
-conversion.
+Space"); stages 11–12 are LR-authored develop ops; 13 is output
+conversion. Stage 10 is intentionally absent — see Stage 6 / Stage 7.
 
 1. **Demosaic** — rawpy/libraw via the **Adobe-converted DNG** as input
    (not the raw NEF). Demosaic algorithm = **LINEAR** (bilinear). The
@@ -113,16 +113,19 @@ conversion.
 4. **XYZ(D50) → linear ProPhoto(D50)** — fixed matrix.
 5. **HueSatMap (HSM)** — mired-blended by scene kelvin between
    data_1/data_2 if both present; applied in HSV (Adobe hexcone variant).
-6. **BaselineExposureOffset (BEO)** — folded into BE total per Adobe SDK
-   (`TotalBaselineExposure = DNG.BaselineExposure + DCP.BEO`); applied
-   as a single scalar at Stage 10 (with BE), not as a standalone V
-   multiplier between HSM and LookTable. Standalone-V application
-   regressed rose from 1.15 → 3.41 ΔE; the sum-into-BE form matches
-   `dng_validate`.
+6. **BaselineExposureOffset (BEO)** — folded into
+   `TotalBaselineExposure = DNG.BaselineExposure + DCP.BaselineExposureOffset`
+   per Adobe DNG SDK `dng_negative.cpp:2588-2606`. The DCP-side `BaselineExposure`
+   tag (50730) is NOT part of this sum — `dng_image_writer.cpp:2658` shows
+   Adobe's writer emits only `tcBaselineExposureOffset` (51109), and the
+   SDK's TotalBE formula has no DCP.BE term. TotalBE is fed to Stage 7's
+   ExposureRamp via its `exposure` parameter; there is no separate
+   post-tone-curve scalar.
 7. **ExposureRamp** — Adobe `dng_function_exposure_ramp` per
    `dng_render.cpp:50-103`. Three-region piecewise: zero below
    `black - radius`, quadratic in `[black ± radius]`, linear above.
-   Parameters: `white = 1 / 2^max(0, exposure)`,
+   Parameters: `white = 1 / 2^max(0, exposure)` (where
+   `exposure = TotalBaselineExposure` from Stage 6),
    `black = Shadows × ShadowScale × Stage3Gain × 0.001`,
    `radius = min(0.5 × black, (1/16) / slope)`. Applied per-channel
    in linear ProPhoto. Pulled ExposureRamp port from `pipeline.py`
@@ -138,8 +141,15 @@ conversion.
    (1025-entry table from `dng_render.cpp:164-423`, linear-interpolated).
    `DefaultBlackRender = None` (Camera Standard convention) → set
    `Shadows = 0` for ExposureRamp at Stage 7.
-10. **BaselineExposure (BE)** — scalar EV `2^TotalBaselineExposure` on
-    linear ProPhoto. Applied AFTER ProfileToneCurve.
+10. ~~**BaselineExposure (BE)** — scalar EV `2^TotalBaselineExposure`.~~
+    **Removed** in `chore/strip-dead-baseline-exposure`. The SDK has no
+    post-tone-curve BE scalar on the libraw LINEAR / interpolation path
+    (`dng_render.cpp:977-1014`, Stage3Gain = 1.0); TotalBE is now
+    delivered exclusively via Stage 7's ExposureRamp `exposure`
+    parameter. The standalone scalar was a no-op on every real DCP
+    (because Adobe never writes tag 50730) and is dropped from the
+    pipeline. Stage number retained as a tombstone to preserve
+    downstream stage IDs (11/12/13).
 11. **LR-authored ops — linear domain.** Exposure2012 (EV → linear gain),
     Blacks2012. Apply on linear ProPhoto, after all DCP shaping.
     `develop_ops.py` owns the per-op math and the in-group ordering.
@@ -202,7 +212,10 @@ follow-ups"; out of v0.6 scope.
 verified against `dng_validate` to < 1 ΔE mean):
 ColorMatrix interpolation, ForwardMatrix path (when present),
 AsShotNeutral inverse, HueSatMap with mired blend, BaselineExposureOffset
-(folded into BE total), LookTable, per-channel ProfileToneCurve via
+(folded into ExposureRamp's `exposure` parameter alongside
+DNG.BaselineExposure per Adobe SDK `dng_negative.cpp:2588-2606` —
+DCP.BaselineExposure intentionally excluded since Adobe's writer never
+emits the tag), LookTable, per-channel ProfileToneCurve via
 ported `dng_spline_solver` (Hermite C2), ACR3 default tone curve fallback
 when ProfileToneCurve absent, ExposureRamp with quadratic shadow rolloff,
 DefaultBlackRender → Shadows mapping, DNG LinearizationTable (via

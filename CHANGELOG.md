@@ -15,12 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pipeline stages: LINEAR demosaic (rawpy/libraw, Adobe-internal default)
   → AsShotNeutral inverse with optional Holy Grail kelvin override
   → ForwardMatrix or inv-ColorMatrix to XYZ(D50) → linear ProPhoto → HSM
-  (mired-blended) → ExposureRamp (Adobe `dng_function_exposure_ramp`)
+  (mired-blended) → ExposureRamp (Adobe `dng_function_exposure_ramp`,
+  carrying TotalBaselineExposure = DNG.BaselineExposure +
+  DCP.BaselineExposureOffset per SDK `dng_negative.cpp:2588-2606`)
   → LookTable → per-channel ProfileToneCurve via ported `dng_spline_solver`
-  (Hermite C2) with ACR3 default-table fallback → BaselineExposure
-  → LR-authored develop ops (Exposure2012, Blacks2012, ToneCurvePV2012,
-  Saturation, Vibrance, Contrast2012) → ProPhoto(D50) → Rec.2020(D65)
-  Bradford CAT → TIFF/EXR output.
+  (Hermite C2) with ACR3 default-table fallback → LR-authored develop ops
+  (Exposure2012, Blacks2012, ToneCurvePV2012, Saturation, Vibrance,
+  Contrast2012) → ProPhoto(D50) → Rec.2020(D65) Bradford CAT → TIFF/EXR
+  output.
 - CLI surface trimmed from 12 flags to 9. Dropped: `--engine`,
   `--no-auto-dcp`, `--no-dcp-tone-curve`, `--no-dcp-hsv-cubes`, `--style`,
   `--deflicker`, `--lrt-mask-offsets`. Added: `--workers N` (parallel
