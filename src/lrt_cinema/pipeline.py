@@ -16,17 +16,22 @@ Stage order (per `docs/research/v06-architecture.md` §"Pipeline stage order"):
       inverse ColorMatrix path.
   4.  XYZ(D50) → linear ProPhoto(D50).
   5.  HueSatMap (mired-blended by scene kelvin), applied in HSV.
-  6.  BaselineExposureOffset folded into TotalBaselineExposure (single
-      scalar at Stage 10, not a standalone V multiplier).
+  6.  BaselineExposureOffset folded into TotalBaselineExposure (=
+      DNG.BaselineExposure + DCP.BaselineExposureOffset per Adobe DNG SDK
+      `dng_negative.cpp:2588-2606`); the sum is fed to Stage 7's
+      ExposureRamp `exposure` parameter — there is no separate
+      post-tone-curve BE scalar on the libraw LINEAR / interpolation path
+      (Stage3Gain = 1.0).
   7.  ExposureRamp (per-channel, three-region piecewise).
   8.  LookTable in HSV.
   9.  ProfileToneCurve per-R/G/B independently via ported `dng_spline_solver`
       (Hermite C2). Falls back to ACR3 default tone curve when profile
       has no ProfileToneCurve.
-  10. BaselineExposure (scalar EV) applied after ProfileToneCurve.
 
   Stages 11–13 (LR-authored develop ops + output color conversion) live in
-  `develop_ops.py` and `output.py` respectively.
+  `develop_ops.py` and `output.py` respectively. Stage 10 (the previous
+  standalone `2^TotalBE` scalar) is intentionally absent — TotalBE is now
+  folded into Stage 7's ExposureRamp per the SDK reference.
 
 The module-level entry point is `render_frame()`.
 """
@@ -388,7 +393,7 @@ def demosaic_camera_rgb(raw_path: str | Path) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# Core pipeline: stages 1–10 (sensor → linear ProPhoto post-BE)
+# Core pipeline: stages 1–9 (sensor → linear ProPhoto post-tone-curve)
 # ---------------------------------------------------------------------------
 
 
@@ -400,7 +405,7 @@ def apply_adobe_pipeline(
     dng_baseline_exposure: float = 0.0,
     default_black_render: int = 0,
 ) -> np.ndarray:
-    """Apply DNG 1.7.1 §"Mapping Camera Color Space" stages 2–10.
+    """Apply DNG 1.7.1 §"Mapping Camera Color Space" stages 2–9.
 
     Input: linear camera RGB (H, W, 3), [0, 1+], post-demosaic / black-subtract.
     Output: linear ProPhoto RGB (D50), (H, W, 3), [0, 1+].
@@ -408,9 +413,11 @@ def apply_adobe_pipeline(
     `default_black_render`: 0 = Auto (Shadows=5.0), 1 = None (Shadows=0).
     Read via `read_dcp_default_black_render(dcp_path)`.
 
-    Module boundary: this function ends at Stage 10 (post-BE). LR-authored
-    develop ops (Stages 11–12) live in `develop_ops.py`. Output color
-    conversion (Stage 13) lives in `output.py`.
+    Module boundary: this function ends at Stage 9 (post-tone-curve, with
+    TotalBaselineExposure already folded into Stage 7's ExposureRamp).
+    LR-authored develop ops (Stages 11–12) live in `develop_ops.py`. Output
+    color conversion (Stage 13) lives in `output.py`. Stage 10 (the prior
+    standalone `2^TotalBE` scalar) is removed — see module docstring.
     """
     h, w, _ = camera_rgb.shape
 
@@ -472,8 +479,13 @@ def apply_adobe_pipeline(
         rgb = np.where(valid[..., None], rgb_post_hsm, rgb)
 
     # Stages 6+7: TotalBaselineExposure folded into ExposureRamp.
-    total_baseline_exposure = dng_baseline_exposure + profile.baseline_exposure_offset
-    exposure_value = total_baseline_exposure + profile.baseline_exposure
+    # TotalBE = DNG.BaselineExposure + DCP.BaselineExposureOffset per Adobe
+    # DNG SDK dng_negative.cpp:2588-2606. Fed to the ramp as its `exposure`
+    # parameter; the SDK has no post-tone-curve BE scalar (Stage3Gain == 1.0
+    # on the libraw LINEAR / interpolation path). The DCP `BaselineExposure`
+    # tag (50730) is NOT part of the sum — Adobe's DCP writer never emits it
+    # (dng_image_writer.cpp:2658 only writes tcBaselineExposureOffset).
+    exposure_value = dng_baseline_exposure + profile.baseline_exposure_offset
     shadows = 0.0 if default_black_render == 1 else 5.0
     ramp = make_exposure_ramp(
         exposure=exposure_value,
@@ -507,22 +519,18 @@ def apply_adobe_pipeline(
         for ch in range(3):
             rgb[..., ch] = apply_acr3_default(clipped[..., ch]).astype(np.float32)
 
-    # Stage 10: BaselineExposure scalar.
-    if profile.baseline_exposure != 0.0:
-        rgb = rgb * (2.0 ** profile.baseline_exposure)
-
     return rgb
 
 
 # ---------------------------------------------------------------------------
-# Module entry point: render a single frame end-to-end (stages 1–10)
+# Module entry point: render a single frame end-to-end (stages 1–9)
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class FrameRenderResult:
-    """Output of `render_frame`. Contains linear ProPhoto(D50) post-BE plus
-    rendering metadata for downstream stages."""
+    """Output of `render_frame`. Contains linear ProPhoto(D50)
+    post-tone-curve plus rendering metadata for downstream stages."""
 
     prophoto: np.ndarray
     scene_kelvin: float
@@ -536,7 +544,7 @@ def render_frame(
     dcp_path: str | Path | None = None,
     develop_ops: DevelopOps | None = None,
 ) -> FrameRenderResult:
-    """End-to-end render of a single RAW frame through pipeline stages 1–10.
+    """End-to-end render of a single RAW frame through pipeline stages 1–9.
 
     `raw_path` should point to an Adobe-converted DNG (use `dng_convert.py`
     to produce one from a NEF). NEF input works but loses the embedded

@@ -10,7 +10,7 @@ Honest per-feature status of the v0.6 pre-alpha.
 | Per-frame keyframe interpolation (linear) | shipped | `interpolation.py` |
 | Holy Grail kelvin override | shipped | `DevelopOps.temperature_k` honored per frame |
 | LRT mask-correction per-frame deltas (HG / Deflicker / Global) | shipped | `--apply-lrt-offsets` default |
-| Adobe DNG 1.7.1 render pipeline (stages 1–10) | shipped | `pipeline.py`, ΔE < 1 vs `dng_validate` |
+| Adobe DNG 1.7.1 render pipeline (stages 1–9) | shipped | `pipeline.py`, ΔE < 1 vs `dng_validate` |
 | Per-camera DCP profile loading + ColorMatrix interpolation | shipped | `dcp.py`, auto-detect from Adobe DNG Converter install or `$LRT_CINEMA_PROFILES` |
 | LR Exposure2012, Blacks2012, ToneCurvePV2012, Saturation, Vibrance, Contrast2012 | shipped | `develop_ops.py` (greenfield from public LR formulas) |
 | NEF→DNG preprocessing | shipped | `dng_convert.py` wraps Adobe DNG Converter; mtime+size cache |
