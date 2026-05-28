@@ -25,8 +25,12 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
+import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
+
+from filelock import FileLock
 
 # Adobe DNG Converter install paths (macOS first — only platform with a
 # canonical fixed path). Linux users with Wine / a Crossover bottle can
@@ -108,40 +112,49 @@ def convert_nef_to_dng(
       subprocess.TimeoutExpired — single-frame convert exceeded `timeout_seconds`.
       RuntimeError — converter exit code != 0.
     """
-    import time
-
     if converter_binary is None:
         converter_binary = find_dng_converter()
     cache_dir.mkdir(parents=True, exist_ok=True)
     dst = cached_dng_path(nef_path, cache_dir)
-    if dst.exists():
-        return DngConvertResult(dng_path=dst, from_cache=True, elapsed_seconds=0.0)
 
-    t0 = time.monotonic()
-    proc = subprocess.run(
-        [
-            str(converter_binary),
-            "-c",
-            "-d", str(cache_dir),
-            str(nef_path),
-        ],
-        capture_output=True,
-        timeout=timeout_seconds,
-    )
-    elapsed = time.monotonic() - t0
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"Adobe DNG Converter failed (exit {proc.returncode}) on "
-            f"{nef_path}. stderr: {proc.stderr.decode(errors='replace')[:500]}"
-        )
-    # Adobe DNG Converter writes <stem>.dng in cache_dir; rename to the
-    # cache-keyed name so we don't re-convert on next run.
-    produced = cache_dir / f"{nef_path.stem}.dng"
-    if not produced.is_file():
-        raise RuntimeError(
-            f"Adobe DNG Converter exited 0 but produced no file at {produced}."
-        )
-    produced.rename(dst)
+    # Cross-process lock so cli.py's ProcessPoolExecutor (`--workers N>1`)
+    # can't double-convert the same NEF. Without this, two workers can both
+    # pass the dst.exists() check, race on Adobe's fixed "<stem>.dng" output
+    # inside cache_dir, and one fails with ENOENT during rename.
+    lock_path = cache_dir / f".{dst.name}.lock"
+    with FileLock(str(lock_path), timeout=timeout_seconds + 60):
+        if dst.exists():
+            return DngConvertResult(dng_path=dst, from_cache=True, elapsed_seconds=0.0)
+
+        # Adobe DNG Converter always writes "<stem>.dng" in the -d directory.
+        # Use a worker-private temp dir so two parallel conversions of
+        # same-stem NEFs from different folders can't clobber each other
+        # via that fixed filename (separate locks, shared output name).
+        with tempfile.TemporaryDirectory(prefix="dngc-", dir=cache_dir) as tmpdir:
+            tmp_out = Path(tmpdir)
+            t0 = time.monotonic()
+            proc = subprocess.run(
+                [
+                    str(converter_binary),
+                    "-c",
+                    "-d", str(tmp_out),
+                    str(nef_path),
+                ],
+                capture_output=True,
+                timeout=timeout_seconds,
+            )
+            elapsed = time.monotonic() - t0
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"Adobe DNG Converter failed (exit {proc.returncode}) on "
+                    f"{nef_path}. stderr: {proc.stderr.decode(errors='replace')[:500]}"
+                )
+            produced = tmp_out / f"{nef_path.stem}.dng"
+            if not produced.is_file():
+                raise RuntimeError(
+                    f"Adobe DNG Converter exited 0 but produced no file at {produced}."
+                )
+            produced.replace(dst)
     return DngConvertResult(dng_path=dst, from_cache=False, elapsed_seconds=elapsed)
 
 
