@@ -99,13 +99,21 @@ PY
    - Output color space: per your target.
 2. Media Pool → import the `.exr` and `.tif` files from
    `/tmp/exr-verify/`.
-3. Right-click each clip → **Input Color Space:**
-   - For both: **Linear** (gamma) + **Rec.2020** (gamut), i.e.
-     **Linear / Rec.2020** if listed, otherwise the closest match
-     ("Linear", "Rec.2020 ST.2084" with Linear gamma override).
+3. Right-click each clip → **Input Color Space.** Resolve's clip-level
+   tag is gamma-only (not a combined gamut+gamma label), so pick
+   **Linear**. The gamut interpretation is the project's working space
+   (Rec.2020 in the HDR DaVinci WG Intermediate config); the clip
+   inherits it implicitly. If your project uses a different working
+   gamut, add an explicit `Color Space Transform` node from
+   `Rec.2020 / Linear` → working space.
 4. Drop both clips on the timeline.
 
 ## Step 4 — visual + numerical checks in Resolve
+
+The `Color Space Transform` (CST) plugin has four fields in two pairs:
+`Input Color Space` (gamut) + `Input Gamma` are the source labels;
+`Output Color Space` + `Output Gamma` are the target. The checks below
+spell out all four for each node.
 
 **A. Linearity check (must pass).** With the EXR clip selected, scrub
 the **Lift / Gamma / Gain** wheels in Color page. A `+1.0` stop of Gain
@@ -113,27 +121,48 @@ should double the apparent brightness of midtones without raising the
 black point. If midtones double AND blacks crush together, the clip is
 being interpreted as gamma-encoded — Input Color Space is wrong.
 
-**B. Round-trip check (must pass).** Apply a node with `Color Space
-Transform`: from **Linear Rec.2020** → **DaVinci Intermediate** →
-**Linear Rec.2020**. The image should be visually identical to the
-unprocessed clip. If there's a gamma shift, the input space is
-mis-tagged.
+**B. Round-trip check (must pass).** Apply a CST node:
+- Input Color Space: **Rec.2020**, Input Gamma: **Linear**
+- Output Color Space: **DaVinci Wide Gamut**, Output Gamma: **DaVinci Intermediate**
 
-**C. ACES IDT check (must pass for `cinema-aces`).** Add a node:
-`Color Space Transform` from **Linear Rec.2020** → **ACES2065-1**.
-Color picker on a known neutral patch (sky, gray card) should land
-on chromaticity within ±0.005 of the D65 white point. A drift > 0.02
-suggests a CAT or matrix bug.
+Then a second CST node back the other way:
+- Input: **DaVinci Wide Gamut** / **DaVinci Intermediate**
+- Output: **Rec.2020** / **Linear**
 
-**D. Reference comparison (recommended, requires `dng_validate`).**
-- Render the same NEF through `dng_validate -16 -stage3 raw.dng out.tif`
-  for an Adobe-reference 16-bit stage-3 TIFF.
-- Import into Resolve as **Linear / sRGB**.
-- Side-by-side with the `cinema-aces` EXR converted to Linear sRGB via
-  CST. Use **Difference** blend mode on a layer. Anywhere the difference
-  isn't near-black indicates pipeline divergence.
-- Architecture spec ship gate: **≤ 1.0 mean ΔE2000 vs `dng_validate`**
-  on both reference scenes.
+The image should be visually identical to the unprocessed clip. If
+there's a gamma shift, the input space tag is wrong.
+
+**C. ACES IDT check (must pass for `cinema-aces`).** Add a CST:
+- Input: **Rec.2020** / **Linear**
+- Output: **ACES AP0** / **Linear** (ACES2065-1)
+
+Use the qualifier / color picker on a known neutral patch (sky, gray
+card) — the chromaticity should land within ±0.005 of the D65 white
+point. A drift > 0.02 suggests a CAT or matrix bug.
+
+**D. Reference comparison (`dng_validate` ground truth).** The
+canonical reference renderer for the v0.6 pipeline. On this machine,
+the binary lives at
+`/private/tmp/dng_sdk/_build/dng_sdk/source/dng_validate` (built from
+the Adobe DNG SDK 1.7.1 source during the seed-pipeline work).
+
+Render the same DNG via the reference:
+```bash
+DV=/private/tmp/dng_sdk/_build/dng_sdk/source/dng_validate
+"$DV" -16 -cs2020 -3 /tmp/exr-verify/reference \
+      /tmp/exr-verify/dng_cache/<your-cached>.dng
+# Produces /tmp/exr-verify/reference.tif — Adobe stage-3 render,
+# 16-bit, Rec.2020 colour-space.
+```
+
+Import into Resolve as **Linear / Rec.2020**. Side-by-side with the
+`cinema-aces` EXR. Use **Difference** blend mode on a node above —
+anywhere the result isn't near-black indicates pipeline divergence
+from Adobe's reference.
+
+Architecture spec ship gate: **≤ 1.0 mean ΔE2000 vs `dng_validate`**
+on both reference scenes (gym `DSC_4053.NEF`, rose). Current measured
+values per `docs/research/v06-architecture.md`: gym 0.79, rose 0.84.
 
 ## Step 5 — render a 24-frame burst
 

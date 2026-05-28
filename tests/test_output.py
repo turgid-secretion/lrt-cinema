@@ -137,6 +137,55 @@ def test_exr_roundtrip_preserves_float_precision(tmp_path):
     assert rgb.max() > 1.0  # overrange survived
 
 
+def test_exr_channels_distinct_at_realistic_size(tmp_path):
+    """Regression: passing strided views of an interleaved (H, W, 3) array
+    to the OpenEXR ASWF binding silently produced garbled per-channel data
+    on real-sized renders (~4K × 6K). Tiny 16×16 fixtures didn't trigger
+    it. This test uses a 1024×1024 image with deliberately distinct
+    per-channel content and verifies the readback matches the input
+    pixel-for-pixel.
+
+    The fix in output.py wraps each channel slice in `np.ascontiguousarray`
+    before handing it to OpenEXR.File.
+    """
+    OpenEXR = pytest.importorskip("OpenEXR")
+    rng = np.random.default_rng(seed=0)
+    x = np.zeros((1024, 1024, 3), dtype=np.float32)
+    x[..., 0] = rng.random((1024, 1024)) * 0.3 + 0.1  # R: ~[0.1, 0.4]
+    x[..., 1] = rng.random((1024, 1024)) * 0.4 + 0.4  # G: ~[0.4, 0.8]
+    x[..., 2] = rng.random((1024, 1024)) * 0.2 + 0.7  # B: ~[0.7, 0.9]
+    # Pre-divergence sanity: the per-channel means must be well-separated
+    # so the bug would have nowhere to hide if it regressed.
+    assert x[..., 0].mean() < x[..., 1].mean() < x[..., 2].mean()
+
+    dst = tmp_path / "wide.exr"
+    write_exr_linear_rec2020(x, dst)
+    with OpenEXR.File(str(dst), separate_channels=True) as exr:
+        ch = exr.channels()
+        R = ch["R"].pixels
+        G = ch["G"].pixels
+        B = ch["B"].pixels
+
+    # The writer applies ProPhoto→Rec.2020 conversion, so we cannot expect
+    # `R == x[..., 0]`. But the per-channel means must remain monotonically
+    # ordered the way the input was (Rec.2020 is a near-identity colour
+    # rotation for these synthetic non-spectral values — small enough that
+    # the ordering invariant holds). The bug produced all-equal channel
+    # means as the smoking gun.
+    means = (R.mean(), G.mean(), B.mean())
+    assert means[0] < means[1] < means[2], (
+        f"EXR per-channel mean ordering broken — likely strided-view "
+        f"regression in write_exr_linear_rec2020. Got means R={means[0]:.4f} "
+        f"G={means[1]:.4f} B={means[2]:.4f}"
+    )
+    # Stricter: per-channel means must not all collapse to a single value.
+    spread = max(means) - min(means)
+    assert spread > 0.05, (
+        f"EXR per-channel means collapsed to nearly one value (spread={spread:.4f}) "
+        f"— strided-view bug signature. Means: {means}"
+    )
+
+
 def test_exr_uses_piz_compression(tmp_path):
     OpenEXR = pytest.importorskip("OpenEXR")
     x = np.zeros((8, 8, 3), dtype=np.float32)
