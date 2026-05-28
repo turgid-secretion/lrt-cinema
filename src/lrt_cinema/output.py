@@ -115,14 +115,20 @@ def write_exr_linear_rec2020(
     #             "type": OpenEXR.scanlineimage}
     #   channels = {"R": np.float32 (H, W), "G": ..., "B": ...}
     #   with OpenEXR.File(header, channels) as f: f.write(dst)
+    #
+    # Channels MUST be C-contiguous arrays. Passing strided views of the
+    # interleaved (H, W, 3) source (e.g. `rec2020[..., 0]`) silently
+    # produces garbled per-channel data on real-sized renders — the binding
+    # reads with a tight stride assumption. `np.ascontiguousarray` forces
+    # a per-channel copy.
     header = {
         "compression": OpenEXR.PIZ_COMPRESSION,
         "type": OpenEXR.scanlineimage,
     }
     channels = {
-        "R": rec2020[..., 0],
-        "G": rec2020[..., 1],
-        "B": rec2020[..., 2],
+        "R": np.ascontiguousarray(rec2020[..., 0]),
+        "G": np.ascontiguousarray(rec2020[..., 1]),
+        "B": np.ascontiguousarray(rec2020[..., 2]),
     }
     with OpenEXR.File(header, channels) as exr:
         exr.write(str(dst))
