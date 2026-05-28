@@ -200,9 +200,11 @@ def test_convert_parallel_same_nef_serializes_on_lock(tmp_path):
         barrier.wait()
         return convert_nef_to_dng(nef, cache_dir, converter_binary=fake_binary)
 
-    with patch("lrt_cinema.dng_convert.subprocess.run", side_effect=fake_run):
-        with ThreadPoolExecutor(max_workers=n_workers) as pool:
-            results = list(pool.map(worker, range(n_workers)))
+    with (
+        patch("lrt_cinema.dng_convert.subprocess.run", side_effect=fake_run),
+        ThreadPoolExecutor(max_workers=n_workers) as pool,
+    ):
+        results = list(pool.map(worker, range(n_workers)))
 
     assert len(invocations) == 1, (
         f"expected exactly 1 subprocess call under lock; got {len(invocations)}"
@@ -258,12 +260,14 @@ def test_convert_parallel_same_stem_different_paths_no_clobber(tmp_path):
         barrier.wait()
         return convert_nef_to_dng(nef, cache_dir, converter_binary=fake_binary)
 
-    with patch("lrt_cinema.dng_convert.subprocess.run", side_effect=fake_run):
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            fut_a = pool.submit(worker, nef_a)
-            fut_b = pool.submit(worker, nef_b)
-            res_a = fut_a.result()
-            res_b = fut_b.result()
+    with (
+        patch("lrt_cinema.dng_convert.subprocess.run", side_effect=fake_run),
+        ThreadPoolExecutor(max_workers=2) as pool,
+    ):
+        fut_a = pool.submit(worker, nef_a)
+        fut_b = pool.submit(worker, nef_b)
+        res_a = fut_a.result()
+        res_b = fut_b.result()
 
     assert res_a.dng_path != res_b.dng_path
     assert res_a.dng_path.is_file()
