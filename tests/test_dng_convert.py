@@ -161,6 +161,122 @@ def test_convert_raises_when_no_output_produced(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Parallel-conversion regression (race against Adobe's fixed-name output)
+# ---------------------------------------------------------------------------
+
+
+def test_convert_parallel_same_nef_serializes_on_lock(tmp_path):
+    """Four workers converting the same NEF in parallel must serialize on
+    the file lock: exactly one runs the subprocess, the rest see a populated
+    cache, and the cached DNG is intact. Without the lock, two workers can
+    both pass dst.exists(), race on Adobe's fixed `<stem>.dng` output, and
+    one fails ENOENT during rename — that's the bug this guards."""
+    import threading
+    import time as _time
+    from concurrent.futures import ThreadPoolExecutor
+
+    nef = tmp_path / "frame.nef"
+    nef.write_bytes(b"raw bytes")
+    cache_dir = tmp_path / "cache"
+    fake_binary = tmp_path / "fake_dngc"
+    fake_binary.write_text("#!/bin/sh\nexit 0\n")
+    fake_binary.chmod(0o755)
+
+    n_workers = 4
+    invocations: list[list[str]] = []
+    inv_lock = threading.Lock()
+    barrier = threading.Barrier(n_workers)
+
+    def fake_run(cmd, capture_output, timeout):
+        with inv_lock:
+            invocations.append(list(cmd))
+        # Sleep widens the overlap window — without the file lock, all four
+        # workers would be inside the subprocess concurrently here.
+        _time.sleep(0.05)
+        _fake_converter(Path(cmd[-1]).stem, Path(cmd[-2]))
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+    def worker(_):
+        barrier.wait()
+        return convert_nef_to_dng(nef, cache_dir, converter_binary=fake_binary)
+
+    with (
+        patch("lrt_cinema.dng_convert.subprocess.run", side_effect=fake_run),
+        ThreadPoolExecutor(max_workers=n_workers) as pool,
+    ):
+        results = list(pool.map(worker, range(n_workers)))
+
+    assert len(invocations) == 1, (
+        f"expected exactly 1 subprocess call under lock; got {len(invocations)}"
+    )
+    paths = {r.dng_path for r in results}
+    assert len(paths) == 1, f"workers disagreed on dst path: {paths}"
+    fresh = [r for r in results if not r.from_cache]
+    assert len(fresh) == 1, f"expected exactly one fresh convert, got {len(fresh)}"
+    dst = results[0].dng_path
+    assert dst.is_file()
+    assert dst.read_bytes()[:4] == b"\x49\x49\x2a\x00"
+
+
+def test_convert_parallel_same_stem_different_paths_no_clobber(tmp_path):
+    """Behavioural check: two NEFs sharing a stem in different folders
+    convert in parallel without corrupting each other's cache slot. They
+    have different cache keys (different locks) so subprocesses can run
+    concurrently — passes trivially under the worker-private temp dir
+    design, and would fail loudly if a future change re-introduces a
+    shared output directory."""
+    import threading
+    import time as _time
+    from concurrent.futures import ThreadPoolExecutor
+
+    dir_a = tmp_path / "a"
+    dir_b = tmp_path / "b"
+    dir_a.mkdir()
+    dir_b.mkdir()
+    nef_a = dir_a / "frame.nef"
+    nef_b = dir_b / "frame.nef"
+    nef_a.write_bytes(b"NEF_A_PAYLOAD")
+    nef_b.write_bytes(b"NEF_B_PAYLOAD_DISTINCT")
+    cache_dir = tmp_path / "cache"
+    fake_binary = tmp_path / "fake_dngc"
+    fake_binary.write_text("#!/bin/sh\nexit 0\n")
+    fake_binary.chmod(0o755)
+
+    barrier = threading.Barrier(2)
+
+    def fake_run(cmd, capture_output, timeout):
+        # Tag each fake DNG with its input bytes so we can prove the right
+        # body ended up in the right cache slot.
+        in_path = Path(cmd[-1])
+        out_dir = Path(cmd[-2])
+        tag = in_path.read_bytes()
+        _time.sleep(0.05)
+        (out_dir / f"{in_path.stem}.dng").write_bytes(
+            b"\x49\x49\x2a\x00" + tag + b"\x00" * 100
+        )
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+    def worker(nef):
+        barrier.wait()
+        return convert_nef_to_dng(nef, cache_dir, converter_binary=fake_binary)
+
+    with (
+        patch("lrt_cinema.dng_convert.subprocess.run", side_effect=fake_run),
+        ThreadPoolExecutor(max_workers=2) as pool,
+    ):
+        fut_a = pool.submit(worker, nef_a)
+        fut_b = pool.submit(worker, nef_b)
+        res_a = fut_a.result()
+        res_b = fut_b.result()
+
+    assert res_a.dng_path != res_b.dng_path
+    assert res_a.dng_path.is_file()
+    assert res_b.dng_path.is_file()
+    assert b"NEF_A_PAYLOAD" in res_a.dng_path.read_bytes()
+    assert b"NEF_B_PAYLOAD_DISTINCT" in res_b.dng_path.read_bytes()
+
+
+# ---------------------------------------------------------------------------
 # Optional: real-binary smoke (only when Adobe DNG Converter is installed)
 # ---------------------------------------------------------------------------
 
