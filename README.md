@@ -27,8 +27,9 @@ LRT workflow renders those XMPs through Adobe Lightroom Classic.
 2. Interpolate per-frame develop values from keyframes.
 3. Run each frame through an Adobe DNG 1.7.1 reference pipeline:
    demosaic → AsShotNeutral → ColorMatrix/ForwardMatrix → HueSatMap
-   → ExposureRamp → LookTable → ProfileToneCurve → BaselineExposure
-   → LR-authored develop ops → ProPhoto → Rec.2020 → TIFF / EXR.
+   → ExposureRamp (carries TotalBaselineExposure) → LookTable
+   → ProfileToneCurve → LR-authored develop ops → ProPhoto → Rec.2020
+   → TIFF / EXR.
 4. Write a frame sequence ready for DaVinci Resolve / ACES timelines.
 
 Per-frame color is within < 1 ΔE2000 of `dng_validate` (Adobe's own DNG
