@@ -1,6 +1,18 @@
 # vkdt-fork + LLM-built UI strategy
 
-**Status:** Research / decision spike, 2026-05-29. Deep evaluation of the
+> ⛔ **OUTCOME — NO-GO FOR NOW (2026-05-29).** This spike was put through an
+> adversarial sanity-check (§6). As currently staffed — a non-engineer,
+> non-designer lead + Claude — the standalone build **cannot clear the bar**,
+> because its two hardest parts (native-systems engineering and originating a
+> class-leading aesthetic) are exactly what neither the lead nor Claude reliably
+> provides. **Do not begin implementation.** Revisit only after securing a
+> Vulkan/native-systems engineer **and/or** a design originator, AND running the
+> Phase-1 viewport-latency spike (§5.4). Governance:
+> [`v09-standalone-repo-plan.md`](v09-standalone-repo-plan.md). Everything below
+> stands as valid technical research — the engine fork is sound *with the right team.*
+
+**Status:** Research / decision spike, 2026-05-29 (superseded by the NO-GO outcome
+above). Deep evaluation of the
 **fork-vkdt** path for the standalone, open-source, Adobe-free LRTimelapse
 replacement (see [v09-standalone-app-build-vs-not.md](v09-standalone-app-build-vs-not.md)
 and [v08 §1.5](v08-timelapse-emission-survey.md)), with a specific focus on
@@ -561,6 +573,61 @@ curve widgets," and the viewport bridge of Phase 1 collapses to documented wirin
 - **qvk rewrite balloons** beyond ~1.5 mo → reconsider whether an open-source
   (BSD-2 + GPL-acknowledged) release defers the de-GPL work until a commercial
   decision is actually made.
+
+---
+
+## 6. Adversarial sanity-check → decision: NO-GO for now (2026-05-29)
+
+After §1–§5, the plan and this analysis's own assumptions were deliberately
+red-teamed (two independent adversarial agents + a stronger reviewer). The verdict
+reframes the recommendation above from "viable, pick a path" to **"on hold until
+staffed."**
+
+**Convergent finding (reached independently):** the two hardest parts of this
+project — (1) **native-systems engineering** and (2) **originating a class-leading
+aesthetic** — are exactly the two things neither a non-engineer/non-designer lead
+nor Claude reliably provides. "Mostly Claude" is true only for the *chrome*, which
+is the minority of the work and **not on the critical path** (by the §5.4 phase
+budgets: native spine ≈ 6–9.5 eng-mo vs chrome ≈ 3–4.5).
+
+**Why "mostly Claude" breaks on the hard half:** Claude's UI strength depends on a
+screenshot-feedback loop (write → render → screenshot → fix). That loop **does not
+exist** for the native spine — a `VK_KHR_external_semaphore` race *hangs*, a
+MoltenVK `shader_atomic_float` gap yields *silently-corrupt HDR*; neither
+screenshots. So that work isn't slower under "mostly Claude," it's liable to
+**block outright.** And the GPLv2 `qvk` rewrite **gates every UI path** (nothing
+boots, web or Qt, until ~1,254 LOC of Vulkan bootstrap is rewritten), so the
+"web-vs-Qt fork-in-the-road" is downstream of a native gate the staffing model
+cannot pass. **A competent Vulkan/native-systems engineer is required regardless
+of UI stack.**
+
+**Why web doesn't rescue the design gap:** web reduces design *execution*, not
+*origination*. Critique-only steering (the lead's actual ability) converges on the
+model's generic mean — Anthropic's own Frontend Design plugin names the failure
+("predictable purple gradients, cookie-cutter components"). No precedent was found
+for a non-designer + LLM shipping a pro-grade creative editor, and the one
+respected "web" pro tool (Figma) reaches native-grade by *escaping the DOM* to
+WASM/GPU — the LLM-hostile surface — so the web stack does not even deliver the
+native-feel viewport. [verified — Anthropic Frontend Design plugin; Figma
+engineering blog; HN "Where Are the Vibecoded Photoshops?" Oct 2025]
+
+**Estimate caveat:** the ~9–13 eng-mo figure is *senior-Vulkan-engineer*-months;
+under the as-specified team it is not a valid unit, and it had drifted *down* on
+optimism (crediting a saving against an unbuilt viewport bridge).
+
+**Conditions to revisit (BOTH required):**
+1. **Team secured** — (a) a competent Vulkan/native-systems engineer
+   (non-negotiable; not Claude-substitutable), and (b) design *origination*: a
+   short (2–4 week) designer engagement to set tokens + direction + the
+   un-clonable timelapse surfaces (keyframe timeline, ramp/deflicker editors),
+   and/or a decision to clone a proven pro aesthetic wholesale as the fixed
+   reference.
+2. **Evidence gate** — the Phase-1 viewport-latency spike (§5.4) has actually been
+   **run**, not assumed.
+
+**What still stands:** §1–§5 are sound — the engine fork is genuinely the best
+engine path *with the right team*. This decision **resizes the team honestly; it
+does not refute the technology.**
 
 ---
 

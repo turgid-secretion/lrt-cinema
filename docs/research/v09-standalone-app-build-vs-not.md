@@ -1,5 +1,13 @@
 # Standalone timelapse authoring+render app — build-vs-not research
 
+> ⛔ **DECISION (2026-05-29): standalone app ON HOLD / NO-GO for now.** An
+> adversarial sanity-check of the chosen path concluded the build is not viable as
+> staffed (a non-engineer/non-designer lead + Claude) — it needs a Vulkan/
+> native-systems engineer **and/or** a design originator first. Governance:
+> [`v09-standalone-repo-plan.md`](v09-standalone-repo-plan.md); reasoning:
+> [`v09-vkdt-fork-ui-strategy.md`](v09-vkdt-fork-ui-strategy.md) §6. Below is
+> research input, **not a build authorization.**
+
 **Status:** Research / decision input, 2026-05-28. Scopes an OPEN-SOURCE,
 Adobe-free, STANDALONE timelapse authoring + render application — a full
 LRTimelapse replacement that ingests RAW sequences, authors keyframed develop
