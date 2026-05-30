@@ -25,7 +25,14 @@ import pytest
 
 colour = pytest.importorskip("colour")  # noqa: F841  (output.py needs it; gate import)
 
+from lrt_cinema.dcp import DCPProfile, HsvCube, interpolate_color_matrix  # noqa: E402
+from lrt_cinema.lut3d_baker import (  # noqa: E402
+    _apply_hsv_cube,
+    _hsv_to_rgb_dcp,
+    _rgb_to_hsv_dcp,
+)
 from lrt_cinema.output import _prophoto_to_display, write_tiff_display  # noqa: E402
+from lrt_cinema.pipeline import DngSplineSolver, make_exposure_ramp  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Independent, spec-sourced re-implementation (the oracle)
@@ -181,3 +188,241 @@ def test_oracle_detects_transposed_matrix():
     xyz_d65 = xyz_d50 @ _M_BRADFORD_D50_TO_D65.T
     wrong = xyz_d65 @ _M_XYZ_D65_TO_SRGB  # NOT transposed → bug
     assert np.max(np.abs(correct - wrong)) > 5e-2
+
+
+# ===========================================================================
+# Layer-1 oracles for the render-math ops (v0.8 extension).
+#
+# Same philosophy as the sRGB display oracle above: an independent re-derivation
+# of what each op MUST do — from the Adobe spec/source or from first principles
+# — held against the real implementation (expect ~0), plus a deliberately
+# injected bug to prove the check discriminates. These ops feed the rendered
+# (Stage-9) path; the colorimetric tap (Stages 3/4) sits upstream of all of
+# them, which is why absolute accuracy is measured there (test_colorimetric.py).
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# ExposureRamp (dng_function_exposure_ramp, dng_render.cpp:50-103)
+# ---------------------------------------------------------------------------
+
+
+def _oracle_exposure_ramp(
+    x, exposure, shadows=5.0, shadow_scale=1.0, stage3_gain=1.0, support_overrange=False,
+):
+    """Independent scalar transcription of Adobe's three-region exposure ramp:
+    flat 0 below the shadow knee, a quadratic knee, then a linear slope (clamped
+    at 1 unless overrange). Looped per-element — a structurally different
+    formulation from the vectorised production code, so a transcription typo in
+    either surfaces as disagreement."""
+    x = np.asarray(x, dtype=np.float64)
+    white = 1.0 / (2.0 ** max(0.0, exposure))
+    black = min(shadows * shadow_scale * stage3_gain * 0.001, 0.99 * white)
+    slope = 1.0 / (white - black) if white > black else 1.0
+    radius = min(0.5 * black, (1.0 / 16.0) / slope) if slope > 0 else 0.0
+    qscale = slope / (4.0 * radius) if radius > 0.0 else 0.0
+    floor_t, ceil_t = black - radius, black + radius
+    out = np.empty(x.size, dtype=np.float64)
+    for i, xi in enumerate(x.ravel()):
+        if xi <= floor_t:
+            out[i] = 0.0
+        elif xi >= ceil_t:
+            lin = (xi - black) * slope
+            out[i] = lin if support_overrange else min(lin, 1.0)
+        else:
+            out[i] = qscale * (xi - floor_t) ** 2
+    return out.reshape(x.shape)
+
+
+def test_exposure_ramp_matches_oracle():
+    """The production ramp must equal the independent transcription across the
+    whole range, for both DefaultBlackRender modes (shadows 5 = Auto, 0 = None)
+    and the overrange flag."""
+    x = np.linspace(0.0, 2.0, 401)
+    for shadows in (5.0, 0.0):
+        for exposure in (0.0, 0.5, 1.0, -0.3):
+            for overrange in (False, True):
+                got = make_exposure_ramp(
+                    exposure=exposure, shadows=shadows, support_overrange=overrange,
+                )(x.astype(np.float64))
+                want = _oracle_exposure_ramp(
+                    x, exposure, shadows=shadows, support_overrange=overrange,
+                )
+                np.testing.assert_allclose(got, want, atol=1e-12)
+
+
+def test_exposure_ramp_analytic_pins():
+    """First-principles pins (independent of the formula):
+      * shadows=0 (no black lift) + exposure=0 → identity on [0, 1];
+      * exposure=1 EV → +1 stop = ×2 gain, clamped at 1 (or not, with overrange);
+      * exposure=0, shadows=5 (Auto) → white maps to 1, black floor to 0."""
+    x = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
+    np.testing.assert_allclose(make_exposure_ramp(0.0, shadows=0.0)(x), x, atol=1e-9)
+
+    ramp1 = make_exposure_ramp(1.0, shadows=0.0)
+    np.testing.assert_allclose(ramp1(np.array([0.25, 0.5])), [0.5, 1.0], atol=1e-9)
+    assert ramp1(np.array([0.6]))[0] == pytest.approx(1.0)        # clamped
+    ramp1_over = make_exposure_ramp(1.0, shadows=0.0, support_overrange=True)
+    assert ramp1_over(np.array([0.6]))[0] == pytest.approx(1.2)   # overrange kept
+
+    auto = make_exposure_ramp(0.0, shadows=5.0)
+    assert auto(np.array([0.0]))[0] == pytest.approx(0.0)
+    assert auto(np.array([1.0]))[0] == pytest.approx(1.0, abs=1e-9)
+
+
+def test_exposure_ramp_oracle_detects_sign_flipped_knee():
+    """If the knee thresholds were swapped (black+radius / black-radius flipped,
+    a classic transcription bug), the ramp would diverge in the shadow region —
+    confirming the oracle would catch it."""
+    x = np.linspace(0.0, 0.05, 200)
+    correct = _oracle_exposure_ramp(x, 0.0, shadows=5.0)
+
+    # Buggy variant: floor/ceil thresholds swapped.
+    white, black = 1.0, 0.005
+    slope = 1.0 / (white - black)
+    radius = min(0.5 * black, (1.0 / 16.0) / slope)
+    qscale = slope / (4.0 * radius)
+    floor_t, ceil_t = black + radius, black - radius   # SWAPPED → bug
+    buggy = np.where(
+        x >= ceil_t, np.minimum((x - black) * slope, 1.0),
+        np.where(x <= floor_t, 0.0, qscale * (x - floor_t) ** 2),
+    )
+    assert np.max(np.abs(correct - buggy)) > 1e-3
+
+
+# ---------------------------------------------------------------------------
+# ProfileToneCurve — Hermite C2 natural cubic spline (dng_spline.cpp port)
+# ---------------------------------------------------------------------------
+
+
+def test_tone_curve_spline_interpolation_and_clamp():
+    """Algorithm-independent properties any correct tone-curve spline satisfies:
+    it passes through every control point exactly, clamps to the endpoint values
+    outside the knot range, and reproduces the identity curve to machine
+    precision."""
+    x_knots = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
+    y_knots = np.array([0.0, 0.18, 0.45, 0.78, 1.0])
+    solver = DngSplineSolver(x_knots, y_knots)
+    np.testing.assert_allclose(solver.evaluate(x_knots), y_knots, atol=1e-9)
+    np.testing.assert_allclose(solver.evaluate(np.array([-1.0, 2.0])), [0.0, 1.0])
+
+    ident = DngSplineSolver(np.array([0.0, 0.5, 1.0]), np.array([0.0, 0.5, 1.0]))
+    xs = np.linspace(0.0, 1.0, 64)
+    np.testing.assert_allclose(ident.evaluate(xs), xs, atol=1e-9)
+
+
+def test_tone_curve_spline_matches_independent_scipy_natural_cubic():
+    """The DNG spline uses second-derivative-zero (natural) boundaries. SciPy's
+    CubicSpline is a wholly independent solver; with bc_type='natural' it must
+    agree to ~0. The same curve under 'not-a-knot' boundaries does NOT agree —
+    so this cross-check is discriminating, not a tautology (a wrong boundary
+    condition in the port would surface as divergence from 'natural')."""
+    interp = pytest.importorskip("scipy.interpolate")
+    x_knots = np.array([0.0, 0.2, 0.45, 0.7, 0.85, 1.0])
+    y_knots = np.array([0.0, 0.10, 0.35, 0.68, 0.86, 1.0])
+    solver = DngSplineSolver(x_knots, y_knots)
+    xs = np.linspace(0.0, 1.0, 256)
+
+    natural = interp.CubicSpline(x_knots, y_knots, bc_type="natural")
+    np.testing.assert_allclose(solver.evaluate(xs), natural(xs), atol=1e-5)
+
+    not_a_knot = interp.CubicSpline(x_knots, y_knots, bc_type="not-a-knot")
+    assert np.max(np.abs(solver.evaluate(xs) - not_a_knot(xs))) > 1e-3
+
+
+# ---------------------------------------------------------------------------
+# ColorMatrix kelvin interpolation (DNG SDK InterpolateColorMatrix — mired blend)
+# ---------------------------------------------------------------------------
+
+
+def _oracle_mired_blend(m_lo, m_hi, kelvin, k_lo, k_hi):
+    """Independent mired (reciprocal-temperature) linear blend, from the DNG
+    SDK convention: clamp outside [k_lo, k_hi]; inside, blend by
+    f = (1/k − 1/k_lo)/(1/k_hi − 1/k_lo)."""
+    if kelvin <= k_lo:
+        return m_lo
+    if kelvin >= k_hi:
+        return m_hi
+    f = (1.0 / kelvin - 1.0 / k_lo) / (1.0 / k_hi - 1.0 / k_lo)
+    return (1.0 - f) * m_lo + f * m_hi
+
+
+def _two_illuminant_profile():
+    m1 = np.array([[1.0, -0.3, -0.05], [-0.4, 1.2, 0.15], [0.02, -0.2, 1.1]])
+    m2 = np.array([[0.9, -0.2, -0.10], [-0.3, 1.1, 0.10], [0.05, -0.1, 1.2]])
+    return DCPProfile(
+        color_matrix_1=m1, color_matrix_2=m2, kelvin_1=2856.0, kelvin_2=6504.0,
+    )
+
+
+def test_color_matrix_interpolation_matches_oracle():
+    """interpolate_color_matrix must equal the independent mired blend at the
+    endpoints and an interior kelvin."""
+    prof = _two_illuminant_profile()
+    m_lo, m_hi = prof.color_matrix_1, prof.color_matrix_2
+    for k in (2000.0, 2856.0, 4000.0, 5000.0, 6504.0, 9000.0):
+        np.testing.assert_allclose(
+            interpolate_color_matrix(prof, k),
+            _oracle_mired_blend(m_lo, m_hi, k, 2856.0, 6504.0),
+            atol=1e-12,
+        )
+
+
+def test_color_matrix_interpolation_detects_linear_in_kelvin_bug():
+    """A linear-in-kelvin blend (the wrong but tempting f = (k−k_lo)/(k_hi−k_lo))
+    diverges from the correct mired blend at an interior kelvin — confirms the
+    oracle catches it."""
+    prof = _two_illuminant_profile()
+    k = 4000.0
+    mired = _oracle_mired_blend(prof.color_matrix_1, prof.color_matrix_2, k, 2856.0, 6504.0)
+    f_lin = (k - 2856.0) / (6504.0 - 2856.0)
+    linear = (1.0 - f_lin) * prof.color_matrix_1 + f_lin * prof.color_matrix_2
+    assert np.max(np.abs(mired - linear)) > 1e-3
+
+
+# ---------------------------------------------------------------------------
+# HueSatMap / LookTable HSV cube (DNG §"Hue Sat Map", trilinear hsdApply)
+# ---------------------------------------------------------------------------
+
+
+def _uniform_cube(hue_shift_deg, sat_scale, val_scale, dims=(6, 2, 1)):
+    h_div, s_div, v_div = dims
+    cube = np.zeros((v_div, h_div, s_div, 3), dtype=np.float32)
+    cube[..., 0] = hue_shift_deg
+    cube[..., 1] = sat_scale
+    cube[..., 2] = val_scale
+    return HsvCube(
+        hue_divisions=h_div, sat_divisions=s_div, val_divisions=v_div,
+        srgb_gamma=False, data_1=cube,
+    )
+
+
+def test_hsv_cube_identity_is_a_no_op():
+    """A (hueShift 0, satScale 1, valScale 1) cube must leave RGB unchanged
+    through the rgb→hsv→cube→rgb round-trip — proves the round-trip itself is
+    transparent (any net bias would show here, against the input)."""
+    rgb = np.array([[
+        [0.6, 0.3, 0.2], [0.2, 0.5, 0.4], [0.3, 0.3, 0.3], [0.05, 0.4, 0.7],
+    ]], dtype=np.float32)
+    cube = _uniform_cube(0.0, 1.0, 1.0)
+    h, s, v, valid = _rgb_to_hsv_dcp(rgb)
+    h2, s2, v2 = _apply_hsv_cube(h, s, v, cube.data_1, cube)
+    out = _hsv_to_rgb_dcp(h2, s2, v2)
+    np.testing.assert_allclose(np.where(valid[..., None], out, rgb), rgb, atol=1e-5)
+
+
+def test_hsv_cube_uniform_hue_rotation_is_exact():
+    """A uniform +120° hue-shift cube must rotate hue by exactly 120° (= 2.0 in
+    the DNG [0,6) hue space) for chromatic pixels, and leave a neutral grey a
+    neutral grey (hue is moot when sat=0). Pins the cube's hue-shift semantics
+    independently of the trilinear weights (uniform cube → weights irrelevant)."""
+    rgb = np.array([[[0.6, 0.3, 0.2], [0.3, 0.3, 0.3]]], dtype=np.float32)
+    cube = _uniform_cube(120.0, 1.0, 1.0)
+    h, s, v, _ = _rgb_to_hsv_dcp(rgb)
+    h2, s2, v2 = _apply_hsv_cube(h, s, v, cube.data_1, cube)
+
+    expected_h = (h[0, 0] + 120.0 * (6.0 / 360.0)) % 6.0   # chromatic pixel
+    assert h2[0, 0] == pytest.approx(expected_h, abs=1e-5)
+    # Neutral pixel: sat≈0, so it must come back out neutral after hsv→rgb.
+    out = _hsv_to_rgb_dcp(h2, s2, v2)
+    np.testing.assert_allclose(out[0, 1], [0.3, 0.3, 0.3], atol=1e-5)
