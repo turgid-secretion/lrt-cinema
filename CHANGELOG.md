@@ -5,6 +5,152 @@ All notable changes to this project will be documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — v0.8 prep
+
+### Changed
+- **Cinema masters now emit scene-linear ACEScg (AP1), not linear Rec.2020.**
+  `cinema-linear-finished` / `cinema-linear-master` write half-float DWAB EXR in
+  ACEScg (AP1 primaries, ~D60 white) with the OpenEXR `chromaticities` header
+  attribute. Rationale: linear Rec.2020 is a *delivery* gamut misused as
+  scene-referred and has **no** matching DaVinci Resolve clip Input Color Space
+  (only the gamut-agnostic "Linear", which inherits the timeline gamut); ACEScg
+  is the standards-aligned scene-referred grading space with a named Resolve
+  Input entry. `write_exr_linear_rec2020(colorspace=…)` accepts `"rec2020"`
+  (default, back-compat) / `"acescg"` / `"aces2065"`; `"aces2065"` also sets
+  `acesImageContainerFlag`. The < 1 ΔE pipeline ship gate is unaffected (output
+  colourspace is independent of the validated render). See
+  `docs/research/v08-linear-exr-gamut-resolve-nuke.md`.
+- **RAW→DNG conversion is now Adobe-free (dnglab).** `dng_convert.py` uses
+  **dnglab** (open, LGPL-2.1) by default — a verified drop-in for the Adobe DNG
+  Converter (dnglab-DNG vs Adobe-DNG on the same pipeline+DCP = mean ΔE 0.059,
+  100 % < 1 ΔE). Adobe DNG Converter retained only as a fallback
+  (`$LRT_CINEMA_DNG_CONVERTER`); discovery order is `$LRT_CINEMA_DNGLAB` → PATH →
+  common installs → Adobe. The render chain no longer requires any Adobe binary.
+
+### Verified (DaVinci Resolve Studio 21, headless — tools/resolve_verify/)
+- **ACEScg round-trip:** our ACEScg EXR, ingested via the named "ACEScg" Input
+  Color Space → Rec.709 γ2.4, matches our pipeline at **mean ΔE2000 0.64** — the
+  switch preserves our validated colour science end-to-end.
+- **dnglab** (open, LGPL) is an Adobe-DNG-Converter drop-in: same pipeline+DCP,
+  dnglab-DNG vs Adobe-DNG = **mean ΔE 0.059, 100 % < 1 ΔE** → render chain is
+  Adobe-free end-to-end (Adobe DNG Converter no longer required).
+- **CinemaDNG** honors per-frame `AsShotNeutral`/`BaselineExposure` (genuine
+  Bayer mosaic, **no re-mosaic**) but **delegates colour to Resolve's bundled
+  DCP** (materially divergent from our 0.79-ΔE science). **Linear DNG** also
+  honors per-frame WB/exposure (no re-mosaic) but is dominated by ACEScg-EXR
+  (our colour, smaller) and CFA-CDNG (full-sensor raw); **not adopted**.
+
+### Emission verdict
+**Do not switch to CDNG/Linear DNG.** ACEScg EXR is the colour-accurate master
+(our science; recovery = half-float + Stage-7 overrange). CFA CinemaDNG is the
+only full-sensor-raw option but trades away our colour science → offer later as
+an *optional* max-recovery preset (needs a `cdng_emit` writer + per-camera
+colour characterisation), not a default. See
+`docs/research/v08-timelapse-emission-survey.md` §2.6.
+
+## [0.7.1a0] — 2026-05-28
+
+### Added
+- **`cinema-linear-master` preset (β; Option B).** Emits half-float
+  DWAB EXR at **Stage 7** (post-ExposureRamp), skipping the DCP
+  LookTable (Stage 8) + ProfileToneCurve (Stage 9). Preserves the
+  HDR headroom that the DCP tone curve otherwise consumes. LR PV2012
+  ops (Exposure, Blacks, ToneCurve, Saturation, Vibrance, Contrast)
+  still apply on the Stage 7 output, so LRT-authored keyframes bake
+  into pixels exactly as γ does — just without the DCP shape applied.
+- `apply_adobe_pipeline(stop_after_stage=)` + `render_frame(stop_after_stage=)`
+  kwargs accept `7` (β) or `9` (default; γ behaviour). Other values
+  raise `ValueError`.
+- `STAGE_7_PRESETS` constant exported from `lrt_cinema.presets`.
+- Tests: `test_stage_7_emission_rejects_other_stops`,
+  `test_stage_7_emission_preserves_more_overrange_than_stage_9` (fixture-
+  gated), `test_preset_cinema_linear_master_writes_half_dwab_exr`.
+- `tools/v07_fullstack/run_test.py` extended to verify both γ and β
+  end-to-end: monotonic per-frame R-mean interpolation under each
+  preset, β output materially differs from γ on every frame.
+
+### Fixed
+- **β recovery was a no-op.** `cinema-linear-master` advertised "preserves
+  HDR headroom for recovery", but the Stage-7 ExposureRamp ran with
+  `support_overrange=False`, hard-clamping to 1.0 *before* the emission
+  point — zero overrange survived (gym frame: max 1.000, 0 % pixels > 1).
+  The pipeline now sets `support_overrange=(stop_after_stage == 7)`, so β
+  preserves real recoverable highlights (gym: max 2.0 = +1 stop; the
+  half-float container holds ~30 stops). Stage-9 (γ) is unchanged — its
+  ProfileToneCurve clamps to [0,1] regardless — so the < 1 ΔE ship gate
+  stays bit-identical (gym 0.789, unchanged).
+- `test_stage_7_emission_preserves_more_overrange_than_stage_9` now
+  asserts actual overrange survival; it previously only checked that the
+  outputs "differ", masking the clamp above.
+
+### Verified
+- **Emission format is now verified functional headlessly**, replacing the
+  manual-Resolve checkpoint that never ran. `tools/verify_emission_format.py`
+  proves on the real gym DNG (vs Adobe `dng_validate`): writer is
+  bit-exact per channel on 4016×6016 non-square content (kills the
+  strided-view garble class on real data, not 16×16 fixtures); half-DWAB
+  is 19.5× vs float TIFF; DWAB is visually lossless (mean ΔE 0.25) on real
+  content; Stage-7 preserves +1 stop of recovery; end-to-end colour is
+  0.789 ΔE vs `dng_validate`. See `docs/EMISSION_FORMAT_VERIFIED.md`.
+
+### Why this exists
+The v0.7 spec's Phase 2 (β-XML; Stage 7 EXR + Resolve project sidecar
+carrying LRT-authored keyframes) was deferred to v0.8 — Resolve does
+not preserve per-frame grade keyframes through any documented import
+path (see `docs/research/v07-beta-xml-deadend.md`). Option B is the
+pragmatic intermediate: the Stage 7 emission point (HDR headroom win)
+without the sidecar (which doesn't work). Users who want the v0.6 DCP
+shape stay on γ (`cinema-linear-finished`); users who want maximum
+recoverability above the tone curve switch to β. Both preserve LRT
+keyframes-in-pixels.
+
+## [0.7.0a0] — 2026-05-28
+
+### Added
+- **`cinema-linear-finished` preset (γ; new v0.7 default).** Writes
+  16-bit half-float OpenEXR with DWAB compression — the cinema
+  scene-referred compressed-intermediate standard. 10–18× smaller than
+  v0.6 `cinema-aces` PIZ float EXR; same pipeline output (all LRT-
+  authored develop ops baked into pixels exactly as v0.6 does).
+- `write_exr_linear_rec2020(bit_depth=, compression=)` arguments —
+  accepts `"half" | "float"` and `"piz" | "zip" | "dwab"` respectively.
+  Default flips to `("half", "dwab")` for v0.7.
+- `DEFAULT_PRESET` constant exported from `lrt_cinema.presets`.
+- `cinema-linear-finished` becomes the CLI default; `--preset` is now
+  optional. Existing `--preset cinema-linear-finished` invocations
+  continue to work.
+- Test gate: ΔE2000 < 0.5 between DWAB-half and PIZ-half outputs on a
+  synthetic gradient+noise fixture (the visually-lossless gate per
+  `docs/research/v07-spec-revision-plan.md` §"Phase 1 — Validation").
+
+### Changed
+- `cinema-aces` preset now emits a one-time `DeprecationWarning` per
+  process steering users to `cinema-linear-finished`. The preset
+  continues to work for one release cycle; planned removal in v0.8.
+- Version bumped from `0.6.0a0` to `0.7.0a0`.
+
+### Why this exists
+Per `docs/research/v07-spec-revision-plan.md`, v0.6's emissions were
+huge (~292 MiB / frame for `cinema-linear` 32-bit float TIFF, ~100 MiB
+for `cinema-aces` PIZ-float EXR). Cinema scene-referred workflows ship
+half-float DWAB EXR because it's the size/quality/decode-speed Pareto
+front. v0.7.0 swaps to that without changing the upstream render
+pipeline.
+
+### What's NOT in v0.7 (β-XML deferred to v0.8)
+The spec's Phase 2 — `cinema-linear-master` preset shipping a Stage-7
+EXR + per-sequence Resolve XML sidecar carrying LRT-authored keyframes
+— is **deferred to v0.8** pending a new carrier format. Empirical
+verification (2026-05-28) found Resolve's documented import paths do
+not preserve per-frame grade keyframes: FCPXML colour data lands as
+static primary corrections only (Manual ~line 50884); Studio scripting
+API exposes `SetCDL` / `SetLUT` / `ApplyGradeFromDRX` only, with no
+per-frame setter. See `docs/research/v07-beta-xml-deadend.md` for the
+full finding and what v0.8 could re-open. The v0.7.x §2.B free-upgrade
+roadmap (X1–X6: HSL, Color Grading wheels, parametric tone, user
+masks, Texture, Clarity) is correspondingly deferred — those
+increments were architected around the β-XML carrier.
+
 ## [0.6.0a0] — 2026-05-27
 
 ### Changed

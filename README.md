@@ -42,9 +42,11 @@ for the empirical journey.
 
 | Preset | Container | Color space | Notes |
 |---|---|---|---|
-| `cinema-linear` | 16-bit TIFF | Linear Rec.2020 | Drop into Resolve; tag clip as Linear Rec.2020 input. |
-| `cinema-aces` | 32-bit float OpenEXR (PIZ) | Linear Rec.2020 | Resolve / OCIO ACES IDT (clean 3×3). |
-| `stills-finished` | 16-bit TIFF | Rec.2020 (gamma) + AgX | **v0.6.x** — `NotImplementedError` in v0.6. |
+| `cinema-linear-finished` | 16-bit half OpenEXR (DWAB) at Stage 13 | Linear Rec.2020 | **v0.7 default (γ).** Full DCP shape baked. Cinema scene-referred compressed intermediate; 10–18× smaller than `cinema-aces` with the same LRT-authored look. |
+| `cinema-linear-master` | 16-bit half OpenEXR (DWAB) at Stage 7 | Linear Rec.2020 | **v0.7.1 (β).** Skips DCP LookTable + ProfileToneCurve for HDR headroom. LR PV2012 keyframes still bake into pixels. Pick this when highlight recovery matters more than the canned DCP look. |
+| `cinema-linear` | 32-bit float TIFF | Linear Rec.2020 | Uncompressed reference master; v0.6 back-compat. |
+| `cinema-aces` | 32-bit float OpenEXR (PIZ) | Linear Rec.2020 | **Deprecated.** Emits one-time `DeprecationWarning`; planned removal in v0.8. Use `cinema-linear-finished` instead. |
+| `stills-finished` | 16-bit TIFF | Rec.2020 (gamma) + AgX | **v0.6.x** — `NotImplementedError`. |
 
 ## Requirements
 
@@ -78,8 +80,8 @@ Runtime deps: `rawpy`, `colour-science`, `scipy`, `tifffile`, `OpenEXR`,
 ```bash
 lrt-cinema render \
   --input  /path/to/source-and-xmp-folder \
-  --output /path/to/output-tiff-sequence \
-  --preset cinema-linear
+  --output /path/to/output-exr-sequence
+# defaults to --preset cinema-linear-finished (half-float DWAB EXR).
 ```
 
 Power-user knobs:

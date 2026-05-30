@@ -1,6 +1,13 @@
-# Implementation Scope (v0.6)
+# Implementation Scope (v0.7)
 
-Honest per-feature status of the v0.6 pre-alpha.
+Honest per-feature status. v0.7.0 ships the γ preset
+(`cinema-linear-finished`, half-float DWAB EXR). β-XML
+(`cinema-linear-master`, Stage-7 EXR + Resolve project sidecar) lands
+in v0.7.1; the §2.B free-upgrade increments (X1–X6) extend β-XML
+coverage in subsequent v0.7.x releases.
+
+See [`docs/research/v07-spec-revision-plan.md`](docs/research/v07-spec-revision-plan.md)
+for the authoritative roadmap.
 
 ## What works
 
@@ -14,8 +21,10 @@ Honest per-feature status of the v0.6 pre-alpha.
 | Per-camera DCP profile loading + ColorMatrix interpolation | shipped | `dcp.py`, auto-detect from Adobe DNG Converter install or `$LRT_CINEMA_PROFILES` |
 | LR Exposure2012, Blacks2012, ToneCurvePV2012, Saturation, Vibrance, Contrast2012 | shipped | `develop_ops.py` (greenfield from public LR formulas) |
 | NEF→DNG preprocessing | shipped | `dng_convert.py` wraps Adobe DNG Converter; mtime+size cache |
-| `cinema-linear` output (16-bit linear Rec.2020 TIFF) | shipped | `output.py` via `tifffile` |
-| `cinema-aces` output (32-bit float linear Rec.2020 PIZ EXR) | shipped | `output.py` via `OpenEXR` ASWF binding |
+| `cinema-linear-finished` output (16-bit half DWAB EXR; γ) | **shipped v0.7.0** | `output.py`; v0.7 default; 10–18× smaller than `cinema-aces` |
+| `cinema-linear-master` output (16-bit half DWAB EXR at Stage 7; β) | **shipped v0.7.1** | `output.py` + `pipeline.py` `stop_after_stage=7`; skips DCP LookTable + ProfileToneCurve for HDR headroom |
+| `cinema-linear` output (32-bit float linear Rec.2020 TIFF) | shipped | `output.py` via `tifffile`; v0.6 back-compat |
+| `cinema-aces` output (32-bit float linear Rec.2020 PIZ EXR) | **deprecated** | `output.py`; one-time `DeprecationWarning`; removal in v0.8 |
 | Parallel worker pool | shipped | `--workers N`, `ProcessPoolExecutor` |
 
 ## Known limitations / deferred
@@ -32,11 +41,21 @@ Honest per-feature status of the v0.6 pre-alpha.
 
 ## Output presets
 
-| Preset | Container | Color space | Library |
-|---|---|---|---|
-| `cinema-linear` | 16-bit int TIFF | linear Rec.2020 | `tifffile` |
-| `cinema-aces` | 32-bit float EXR (PIZ) | linear Rec.2020 | `OpenEXR` (capital-O ASWF PyPI binding) |
-| `stills-finished` | 16-bit int TIFF | Rec.2020 + AgX | NotImplemented (v0.6.x) |
+| Preset | Container | Color space | Library | Status |
+|---|---|---|---|---|
+| `cinema-linear-finished` | 16-bit half EXR (DWAB) at Stage 13 | linear Rec.2020 | `OpenEXR` ASWF | **v0.7 default (γ)** |
+| `cinema-linear-master` | 16-bit half EXR (DWAB) at Stage 7 | linear Rec.2020 | `OpenEXR` ASWF | **v0.7.1 (β, Option B)** |
+| `cinema-linear` | 32-bit float TIFF | linear Rec.2020 | `tifffile` | back-compat |
+| `cinema-aces` | 32-bit float EXR (PIZ) | linear Rec.2020 | `OpenEXR` ASWF | deprecated (v0.8 removal) |
+| `stills-finished` | 16-bit int TIFF | Rec.2020 + AgX | n/a | NotImplemented (v0.6.x) |
+
+**β-XML deferred to v0.8.** The originally-planned `cinema-linear-master`
+sidecar variant (per-sequence Resolve project XML carrying LRT keyframes)
+proved infeasible — Resolve does not preserve per-frame grade keyframes
+through any documented import path. See
+[`docs/research/v07-beta-xml-deadend.md`](docs/research/v07-beta-xml-deadend.md).
+The v0.7.1 `cinema-linear-master` preset is the Option B pivot: Stage 7
+pixel bake without sidecar.
 
 ## Validation
 
@@ -70,7 +89,9 @@ Both are characterized, not ship-gating.
 lrt-cinema render
   --input PATH               (required)  source RAW + LRT XMP folder
   --output PATH              (required)  destination folder
-  --preset NAME              (required)  cinema-linear | cinema-aces | stills-finished
+  --preset NAME              default cinema-linear-finished
+                             (cinema-linear-finished | cinema-linear |
+                              cinema-aces | stills-finished)
   --from-frame N             default 0
   --to-frame N               default = end of sequence
   --dry-run                  print what would render; no I/O
