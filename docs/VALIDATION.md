@@ -351,6 +351,35 @@ as a test-only oracle and tune open-DCP renders back toward the **proven 0.789**
 end-to-end check, reported as raw + affine-residual with the PV5 floor named so
 it is never mistaken for our error or chased past what is closed-source.
 
+### Synthetic-chart harness (Axes 2 & 3) — landed 2026-05-30
+
+The deterministic flat-patch harness foreshadowed above now exists. A
+**colorimetric tap** (`pipeline.apply_adobe_pipeline(..., stop_after_stage=3|4)`
+→ XYZ(D50) / linear ProPhoto(D50), post-ForwardMatrix, pre-HSM) is the
+measurement point for both nonzero-floor axes.
+
+- **Axis 2 — absolute accuracy** (`tests/test_colorimetric.py`, supersedes the
+  old Rec.2020/Lab self-test). ISO 17321-1 (+ grey wedge) spectra → CIE truth
+  (Bradford→D50) and → synthetic Nikon-D5100 camera RGB (its SSF; the D750's is
+  unpublished). At the tap: a synthetic white-constrained FM gives mean ΔE2000
+  **0.70–0.74** and the shipped **Adobe Standard** D5100 DCP **0.77–0.86**, both
+  sitting on the **independently computed SSF Luther floor 0.81–0.84**
+  (`ssf_lstsq_floor`) — accuracy = profile fit, not bug. (Camera-*Standard*
+  profiles are NOT colorimetric: their ForwardMatrix is the ProPhoto→XYZ
+  passthrough; the colour work is in the LookTable. Use Adobe Standard for
+  absolute accuracy.)
+- **Axis 3 — implementation vs `dng_validate`** (`tests/test_synthetic_dng.py`,
+  D750). A flat-patch synthetic DNG (dnglab uncompressed clone + raw-strip
+  byte-patch honouring BlackLevel 600 / WhiteLevel 15520) rendered both sides
+  with Camera Standard. **Neutral wedge: median ΔE 0.000** across the tonal
+  range — the clean isolation of the bit-match, free of the demosaic-edge tail.
+  **Chromatic flats diverge ~4–8 ΔE**, confirmed in wide-gamut ProPhoto (so NOT
+  sRGB-gamut clipping) and localised to the **LookTable** (the only
+  chromatic-vs-neutral stage). This IS the gym's documented "~5% flat-region
+  colour tail", now surfaced cleanly (real-scene colours are too desaturated to
+  probe these cells) and the concrete **drive-toward-0 target** for the open-DCP
+  transition.
+
 ### Empirical finding 2026-05-23 — lrt-cinema vs LRT 7.5.3 preview (SUPERSEDED — darktable-era, pre-v0.6 Python pipeline; kept for history)
 
 Test frame: DSC_4053 (neutral keyframe, EV=0 per user's LRT XMP). After Visual Preview re-render in LRT.
