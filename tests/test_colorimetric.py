@@ -1,252 +1,341 @@
-"""ColorChecker ΔE2000 harness — self-test legs only (v0.6).
+"""Axis 2 — absolute colorimetric accuracy at the colorimetric tap.
 
-Validates the Lab(D55) ↔ XYZ ↔ Rec.2020 conversion + ΔE2000 math that the
-test suite relies on. Two checks:
+The middle axis of the validation harness (docs/VALIDATION.md §"Validation
+axes — never conflate them"):
 
-1. Synthesizes a "perfect" 16-bit linear Rec.2020 image of the 24-patch
-   ColorChecker and round-trips it. Asserts the harness machinery is
-   functional.
-2. Per-patch cross-check vs a hand-rolled ITU-R BT.2020 §3.3 matrix.
-   Catches a transposed or wrong-colourspace bug in `colour-science`
-   that would otherwise silently round-trip.
+  Axis 1  implementation correctness   vs our own maths     → ~0 (test_color_oracle.py)
+  Axis 2  ABSOLUTE accuracy            vs CIE truth          → nonzero FLOOR  (here)
+  Axis 3  appearance vs LRT preview    vs the .lrtpreview    → nonzero floor (tools/…)
 
-The dt-cli real-chart leg was deleted in v0.6 alongside `runner.py`;
-end-to-end ΔE validation is now `tests/test_pipeline.py` vs
-`dng_validate` on real DNG fixtures (the ship gate).
+"Absolute accuracy" asks how close the pipeline's colour gets to CIE truth
+computed from spectra (ISO 17321-1). It has an **irreducible nonzero floor**:
+a real camera SSF violates the Luther condition, so no 3×3 (Adobe's
+ForwardMatrix included) reproduces CIE XYZ exactly — the residual is the
+profile fit, NOT a bug. Every ΔE here is reported against an *independently
+computed* floor (`synthetic_chart.ssf_lstsq_floor`, a pure-SSF least-squares
+solve), so the floor can never silently absorb a pipeline error.
 
-References
-----------
-- ITU-R BT.2020-2 §3.3 — Rec.2020 → XYZ matrix used in the cross-check.
-- Sharma, Wu, Dalal (2005) — ΔE2000.
+Measurement happens at the **colorimetric tap** — Stage-4 linear ProPhoto(D50)
+(or Stage-3 XYZ(D50)), post-ForwardMatrix and BEFORE HueSatMap / ExposureRamp
+/ LookTable / ProfileToneCurve. Measuring the rendered image instead would
+measure Adobe's pictorial tone curve + look, not pipeline colour error.
+
+The chart, ground truth and synthetic camera RGB all come from
+`tests/synthetic_chart.py` (colour-science spectral data — deterministic, no
+RAW fixture, no network). Two end-to-end legs:
+
+  * **autonomous** — a white-constrained ForwardMatrix fit to the D5100 SSF is
+    injected as a synthetic profile; runs everywhere colour-science is present.
+  * **real Adobe DCP** — the shipped Nikon D5100 *Adobe Standard* profile
+    (skip-gated on a macOS Adobe install). NB: the *Camera Standard* profiles
+    are NOT colorimetric (their ForwardMatrix is the ProPhoto→XYZ passthrough —
+    the colour look lives in the LookTable/ToneCurve); see
+    `test_camera_standard_forward_matrix_is_not_colorimetric`.
+
+(Supersedes the v0.6 self-test legs that round-tripped a synthetic linear
+Rec.2020 chart through a Lab(D55) harness and gated a since-removed
+`cinema-linear` preset — that compared at the wrong tap and used a delivery
+gamut as a working space. The reference fixture under fixtures/colorchecker/
+is now unused by tests; kept for the documented real-chart drop-in workflow.)
 """
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-# colour-science is a hard dev-dep; importorskip keeps the file safe
-# to import in a fresh tree that hasn't run `pip install -e .[dev]` yet
-# (e.g. someone running just `pytest tests/test_cli.py` for a focused
-# iteration).
-colour = pytest.importorskip("colour")  # type: ignore[assignment]
-from colour.adaptation import chromatic_adaptation_VonKries  # noqa: E402
+colour = pytest.importorskip("colour")  # noqa: F841  (used throughout; gate import)
 
-FIXTURE_DIR = Path(__file__).parent / "fixtures" / "colorchecker"
-REFERENCE_JSON = FIXTURE_DIR / "chart_reference.json"
+from lrt_cinema.dcp import DCPProfile, parse_dcp  # noqa: E402
+from lrt_cinema.pipeline import apply_adobe_pipeline  # noqa: E402
+from tests import synthetic_chart as sc  # noqa: E402
 
-# Reference illuminants (CIE 1931 2-degree observer).
-D50_XY = np.array([0.3457, 0.3585])
-D55_XY = np.array([0.33243, 0.34744])
-D65_XY = np.array([0.3127, 0.3290])
-
-# ITU-R BT.2020-2 §3.3 — linear Rec.2020 → CIE XYZ (D65) matrix.
-# Hard-coded so a transposed / wrong matrix anywhere in our
-# colour-science wiring is detected by the self-test cross-check.
-BT2020_TO_XYZ_D65 = np.array([
-    [0.6369580, 0.1446169, 0.1688810],
-    [0.2627002, 0.6779981, 0.0593017],
-    [0.0000000, 0.0280727, 1.0609851],
+# Independent ROMM/ProPhoto-linear → XYZ(D50) matrix (ISO 22028-2 / ROMM RGB).
+# Kept LOCAL — identical to test_color_oracle._M_PP_LIN_TO_XYZ_D50 — so the
+# measurement-chain self-test below stands on a matrix NOT sourced from
+# colour-science (the same path the pipeline + the rest of this file use).
+_M_PP_LIN_TO_XYZ_D50 = np.array([
+    [0.7976749, 0.1351917, 0.0313534],
+    [0.2880402, 0.7118741, 0.0000857],
+    [0.0000000, 0.0000000, 0.8252100],
 ])
 
-# Broadcast-cinema thresholds (see docs/VALIDATION.md table).
-REAL_CHART_MEAN_DE_THRESHOLD = 2.0
-REAL_CHART_MAX_DE_THRESHOLD = 4.0
+_M_PP_TO_XYZ = colour.RGB_COLOURSPACES["ProPhoto RGB"].matrix_RGB_to_XYZ
 
-# Self-test tolerance: round-trip through u16 Rec.2020 then back to
-# Lab(D55) should be well under 1 ΔE2000 — measured empirically at
-# max ≈ 0.008 on the darkest grey patch. Generous headroom for
-# floating-point implementation drift across colour-science versions.
-SELF_TEST_MEAN_DE_TOLERANCE = 0.05
-SELF_TEST_MAX_DE_TOLERANCE = 0.20
+_ILLUMINANTS = ("A", "D50", "D65")
 
-
-# ---------------------------------------------------------------------------
-# Reference loading
-# ---------------------------------------------------------------------------
-
-
-def _load_reference():
-    """Load the 24-patch reference. Returns (names, Lab_D55 array of shape (24, 3))."""
-    with open(REFERENCE_JSON, encoding="utf-8") as f:
-        data = json.load(f)
-    patches = data["patches"]
-    assert len(patches) == 24, f"reference must have 24 patches, got {len(patches)}"
-    names = [p["name"] for p in patches]
-    lab_d55 = np.array([p["Lab_D55"] for p in patches], dtype=np.float64)
-    return names, lab_d55
+_ADOBE_STANDARD_D5100 = Path(
+    "/Library/Application Support/Adobe/CameraRaw/CameraProfiles/"
+    "Adobe Standard/Nikon D5100 Adobe Standard.dcp"
+)
+_CAMERA_STANDARD_D5100 = Path(
+    "/Library/Application Support/Adobe/CameraRaw/CameraProfiles/"
+    "Camera/Nikon D5100/Nikon D5100 Camera Standard.dcp"
+)
 
 
 # ---------------------------------------------------------------------------
-# Colorimetric conversions — single canonical path
+# Measurement helpers
 # ---------------------------------------------------------------------------
 
 
-def _linear_rec2020_to_lab_d55(rgb: np.ndarray) -> np.ndarray:
-    """linear Rec.2020 RGB → Lab(D55), via BT.2020 native D65 and CAT02 to D55.
+def _tap_to_lab_d50(prophoto: np.ndarray) -> np.ndarray:
+    """Stage-4 tap (linear ProPhoto-D50) → Lab(D50) — the measurement chain
+    used by every end-to-end ΔE below. Validated non-circularly by the
+    `test_measurement_chain_*` tests before any pipeline number is trusted."""
+    xyz = prophoto.reshape(-1, 3) @ _M_PP_TO_XYZ.T
+    return colour.XYZ_to_Lab(xyz, illuminant=sc.D50_XY)
 
-    Input: rgb shape (..., 3) in [0, 1] (linear, not gamma-encoded).
-    Output: Lab shape (..., 3) under D55, 2° observer.
-    """
-    xyz_d65 = colour.RGB_to_XYZ(
-        rgb,
-        colourspace="ITU-R BT.2020",
-        illuminant=D65_XY,
-        chromatic_adaptation_transform=None,
-        apply_cctf_decoding=False,
+
+def _pipeline_tap_lab(profile: DCPProfile, reflectances: np.ndarray, illuminant: str) -> np.ndarray:
+    """Run the synthetic chart through stages 2–4 of the real pipeline and
+    return per-patch Lab(D50) at the Stage-4 tap."""
+    syn = sc.synthesize_camera_rgb(reflectances, illuminant)
+    cam = syn["camera_rgb"][None]                       # (1, n, 3) flat patches
+    tap = apply_adobe_pipeline(
+        cam, profile, syn["as_shot_neutral"], sc.ILLUMINANT_CCT[illuminant],
+        stop_after_stage=4,
     )
-    xyz_d55 = chromatic_adaptation_VonKries(
-        xyz_d65, colour.xy_to_XYZ(D65_XY), colour.xy_to_XYZ(D55_XY), transform="CAT02"
-    )
-    return colour.XYZ_to_Lab(xyz_d55, illuminant=D55_XY)
+    return _tap_to_lab_d50(tap)
 
 
-def _lab_d55_to_linear_rec2020(lab: np.ndarray) -> np.ndarray:
-    """Inverse of `_linear_rec2020_to_lab_d55`. For synthesizing the self-test chart."""
-    xyz_d55 = colour.Lab_to_XYZ(lab, illuminant=D55_XY)
-    xyz_d65 = chromatic_adaptation_VonKries(
-        xyz_d55, colour.xy_to_XYZ(D55_XY), colour.xy_to_XYZ(D65_XY), transform="CAT02"
-    )
-    return colour.XYZ_to_RGB(
-        xyz_d65,
-        colourspace="ITU-R BT.2020",
-        illuminant=D65_XY,
-        chromatic_adaptation_transform=None,
-        apply_cctf_encoding=False,
-    )
-
-
-def _linear_rec2020_to_lab_d55_hardcoded_matrix(rgb: np.ndarray) -> np.ndarray:
-    """Cross-check path: BT.2020 matrix from ITU-R BT.2020-2 §3.3 by hand.
-
-    Catches a transposed / wrong matrix in the colour-science path. The
-    two paths must agree to within floating-point noise for the same
-    input — any disagreement is a bug in the harness, not in the data.
-    """
-    rgb = np.asarray(rgb, dtype=np.float64)
-    xyz_d65 = rgb @ BT2020_TO_XYZ_D65.T
-    xyz_d55 = chromatic_adaptation_VonKries(
-        xyz_d65, colour.xy_to_XYZ(D65_XY), colour.xy_to_XYZ(D55_XY), transform="CAT02"
-    )
-    return colour.XYZ_to_Lab(xyz_d55, illuminant=D55_XY)
-
-
-def _delta_e2000(lab_a: np.ndarray, lab_b: np.ndarray) -> np.ndarray:
-    """Per-row ΔE2000 between two (N, 3) Lab arrays."""
+def _delta_e(lab_a: np.ndarray, lab_b: np.ndarray) -> np.ndarray:
     return np.asarray(colour.delta_E(lab_a, lab_b, method="CIE 2000"))
 
 
 # ---------------------------------------------------------------------------
-# Self-test: synthesize a perfect 24-patch chart and round-trip
+# (i) Measurement-chain self-test — must be NON-circular (advisor note).
+# Injecting ProPhoto = M·XYZ and reading XYZ = M⁻¹·ProPhoto via the same
+# colour-science call round-trips to ~0 regardless of whether M is right.
+# So the chain is pinned two independent ways: analytic neutral L*, and a
+# hardcoded ROMM matrix. Only then can a nonzero (ii) be trusted as profile fit.
 # ---------------------------------------------------------------------------
 
 
-def _synthesize_perfect_chart_u16(
-    patch_size: int = 60,
-) -> tuple[np.ndarray, list[tuple[int, int]]]:
-    """Build a (4*patch_size, 6*patch_size, 3) u16 array of the 24-patch chart.
-
-    Returns the image and the list of (row_center_y, col_center_x) per
-    patch in standard row-major order (4 rows × 6 cols, same order as
-    the reference JSON).
-    """
-    _, lab_d55 = _load_reference()
-    rgb = _lab_d55_to_linear_rec2020(lab_d55)
-    rgb = np.clip(rgb, 0.0, 1.0)
-    u16_per_patch = (rgb * 65535.0 + 0.5).astype(np.uint16)
-
-    rows, cols = 4, 6
-    h, w = rows * patch_size, cols * patch_size
-    image = np.zeros((h, w, 3), dtype=np.uint16)
-    centers: list[tuple[int, int]] = []
-    for i in range(24):
-        r, c = divmod(i, cols)
-        y0, y1 = r * patch_size, (r + 1) * patch_size
-        x0, x1 = c * patch_size, (c + 1) * patch_size
-        image[y0:y1, x0:x1] = u16_per_patch[i]
-        centers.append((y0 + patch_size // 2, x0 + patch_size // 2))
-    return image, centers
+def _lab_L_from_relative_Y(y: np.ndarray) -> np.ndarray:
+    """Textbook CIE L* from Y/Yn (Yn=1), by hand — not via colour-science."""
+    eps, kappa = 216.0 / 24389.0, 24389.0 / 27.0
+    fy = np.where(y > eps, np.cbrt(y), (kappa * y + 16.0) / 116.0)
+    return 116.0 * fy - 16.0
 
 
-def _sample_patches_by_centers(
-    image: np.ndarray,
-    centers: list[tuple[int, int]],
-    half_size: int,
-) -> np.ndarray:
-    """Sample mean linear RGB inside a (2 half_size+1)² box around each center.
-
-    Returns (24, 3) float64 array scaled to [0, 1] from the u16 image.
-    """
-    assert image.dtype == np.uint16, f"expected u16 image, got {image.dtype}"
-    out = np.zeros((len(centers), 3), dtype=np.float64)
-    for i, (cy, cx) in enumerate(centers):
-        patch = image[
-            cy - half_size : cy + half_size + 1,
-            cx - half_size : cx + half_size + 1,
-        ]
-        out[i] = patch.reshape(-1, 3).mean(axis=0)
-    return out / 65535.0
+def test_measurement_chain_neutral_pins_analytic_Lstar():
+    """Inject neutral ProPhoto [v,v,v]; the tap→Lab chain must return a neutral
+    (a*≈b*≈0) with the analytic L* = 116·f(v)−16. Independent of the matrix's
+    chromatic entries — pins the white point of the chain (a wrong output white
+    would tilt the neutral axis off a*=b*=0)."""
+    levels = np.array(sc.GREY_WEDGE_LEVELS)
+    pp = np.repeat(levels[:, None], 3, axis=1).astype(np.float64)[None]  # (1,k,3)
+    lab = _tap_to_lab_d50(pp)
+    L_expected = _lab_L_from_relative_Y(levels)
+    np.testing.assert_allclose(lab[:, 0], L_expected, atol=0.3)
+    assert np.max(np.abs(lab[:, 1])) < 0.5, f"a* not neutral: {lab[:,1]}"
+    assert np.max(np.abs(lab[:, 2])) < 0.5, f"b* not neutral: {lab[:,2]}"
 
 
-def test_colorimetric_self_test_with_synthetic_chart():
-    """Harness round-trip: perfect synthetic chart → ΔE2000 ≈ 0.
+def test_measurement_chain_matches_independent_romm_matrix():
+    """Read injected chromatic ProPhoto (chart patches + pure primaries &
+    secondaries) through BOTH colour-science's ProPhoto matrix and the hardcoded
+    ROMM matrix. Agreement to a rounding floor proves the chain has no
+    transpose / wrong-matrix bug; the two matrices are independent sources, so a
+    real bug (which would corrupt both injection and read consistently under one
+    matrix) shows up as divergence here."""
+    _, refl = sc.chart_patches()
+    gt = sc.ground_truth(refl, "D65")
+    # Saturated stressors via direct injection (no spectral source needed):
+    # ProPhoto primaries + secondaries, the most demanding case for a transpose.
+    prims = np.array([
+        [1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 1, 1], [1, 0, 1], [1, 1, 0],
+    ], dtype=np.float64) * 0.7
+    pp = np.vstack([gt["XYZ_D50"] @ colour.RGB_COLOURSPACES["ProPhoto RGB"].matrix_XYZ_to_RGB.T,
+                    prims])[None]
 
-    This proves the JSON loader, the linear-Rec.2020 ↔ Lab(D55)
-    conversion, the patch sampler, and the ΔE2000 computation are all
-    wired together correctly. It does NOT prove the colour science
-    underneath them is correct — for that, the BT.2020-matrix
-    cross-check below is the second leg.
-    """
-    names, lab_ref = _load_reference()
-    assert len(names) == 24
-
-    image, centers = _synthesize_perfect_chart_u16(patch_size=60)
-    measured_rgb = _sample_patches_by_centers(image, centers, half_size=20)
-    lab_measured = _linear_rec2020_to_lab_d55(measured_rgb)
-    de = _delta_e2000(lab_ref, lab_measured)
-
-    assert de.shape == (24,)
-    assert np.all(np.isfinite(de)), "ΔE2000 must be finite for all patches"
-    assert de.max() < SELF_TEST_MAX_DE_TOLERANCE, (
-        f"self-test max ΔE2000 = {de.max():.4f}, expected < "
-        f"{SELF_TEST_MAX_DE_TOLERANCE} (u16 quantization should be ~0.01). "
-        f"Per-patch: {dict(zip(names, [round(float(x), 4) for x in de], strict=True))}"
-    )
-    assert de.mean() < SELF_TEST_MEAN_DE_TOLERANCE, (
-        f"self-test mean ΔE2000 = {de.mean():.4f}, expected < "
-        f"{SELF_TEST_MEAN_DE_TOLERANCE}"
-    )
-
-
-def test_self_test_matrix_cross_check_against_itu_r_bt2020_section_3_3():
-    """colour-science path vs. hand-rolled BT.2020 matrix must agree.
-
-    If colour-science changes its internal matrix, or our wiring picks
-    the wrong colourspace name / transposes the matrix, the two paths
-    disagree by orders of magnitude more than fp noise. The check
-    catches transposition / wrong-matrix bugs that the round-trip
-    self-test would silently absorb (because both paths use the same
-    matrix internally).
-    """
-    _, lab_ref = _load_reference()
-    rgb = _lab_d55_to_linear_rec2020(lab_ref)
-    rgb = np.clip(rgb, 0.0, 1.0)
-
-    lab_via_colour_science = _linear_rec2020_to_lab_d55(rgb)
-    lab_via_hardcoded = _linear_rec2020_to_lab_d55_hardcoded_matrix(rgb)
-    de = _delta_e2000(lab_via_colour_science, lab_via_hardcoded)
-
-    # ITU-R BT.2020 §3.3 lists the matrix to 7 decimal places; modest
-    # rounding drift vs colour-science's internal full-precision matrix
-    # is expected but should be well below 0.1 ΔE2000.
+    lab_colour = _tap_to_lab_d50(pp)
+    xyz_hard = pp.reshape(-1, 3) @ _M_PP_LIN_TO_XYZ_D50.T
+    lab_hard = colour.XYZ_to_Lab(xyz_hard, illuminant=sc.D50_XY)
+    de = _delta_e(lab_colour, lab_hard)
     assert de.max() < 0.1, (
-        f"colour-science and ITU-R BT.2020 §3.3 hand-rolled matrix "
-        f"diverge by max ΔE2000 = {de.max():.6f}. This indicates a "
-        f"transposed / wrong-colourspace bug in the harness, not a "
-        f"data problem. Per-patch: {de}"
+        f"measurement chain diverges from the independent ROMM matrix by "
+        f"max ΔE {de.max():.4f} — transpose / wrong-matrix bug in the chain, "
+        f"not a data problem."
     )
 
 
+# ---------------------------------------------------------------------------
+# Independent floor — pure SSF physics, no pipeline involved.
+# ---------------------------------------------------------------------------
+
+
+def test_ssf_lstsq_floor_is_nonzero_and_bounded():
+    """The Luther floor exists and is sane: a nonzero, sub-3 mean ΔE for the
+    D5100 SSF on the ISO chart, at every illuminant. Documents the number every
+    pipeline ΔE below is reported against, and guards the helper itself
+    (a zero floor would mean the SSF satisfies Luther — it doesn't)."""
+    _, refl = sc.chart_patches()
+    for illum in _ILLUMINANTS:
+        floor = sc.ssf_lstsq_floor(refl, illum)
+        assert 0.3 < floor["mean"] < 3.0, f"{illum}: implausible floor {floor['mean']}"
+        assert floor["max"] < 8.0, f"{illum}: implausible floor max {floor['max']}"
+
+
+# ---------------------------------------------------------------------------
+# (ii-a) Autonomous end-to-end: synthetic white-constrained FM → pipeline.
+# Proves the pipeline (a) applies WB→FM→ProPhoto correctly [point-4 oracle, ~0]
+# and (b) lands at the independent Luther floor [accuracy = profile fit].
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_camera_to_tap_matches_independent_oracle():
+    """IMPLEMENTATION CORRECTNESS for the camera→tap path. The Stage-4 tap must
+    equal an independent WB→FM→ProPhoto recompute to ~0. This is what lets the
+    nonzero ΔE in the accuracy test be attributed to SSF physics, not code: the
+    code is proven exact here, the residual is proven physics by the floor."""
+    _, refl = sc.chart_patches()
+    for illum in _ILLUMINANTS:
+        fm = sc.white_constrained_forward_matrix(refl, illum)
+        prof = DCPProfile(forward_matrix_1=fm)
+        syn = sc.synthesize_camera_rgb(refl, illum)
+        cam = syn["camera_rgb"][None].astype(np.float64)
+        asn = syn["as_shot_neutral"].astype(np.float64)
+
+        tap = apply_adobe_pipeline(
+            cam.astype(np.float32), prof, asn.astype(np.float32),
+            sc.ILLUMINANT_CCT[illum], stop_after_stage=4,
+        )
+        # Independent recompute: WB (G-normalised) → FM → ProPhoto.
+        wb = (1.0 / asn) / ((1.0 / asn)[1])
+        balanced = cam[0] * wb
+        xyz = balanced @ fm.T
+        prophoto = xyz @ colour.RGB_COLOURSPACES["ProPhoto RGB"].matrix_XYZ_to_RGB.T
+        np.testing.assert_allclose(tap.reshape(-1, 3), prophoto, atol=2e-5)
+
+
+def test_absolute_accuracy_autonomous_at_floor():
+    """End-to-end absolute accuracy with a synthetic-FM profile (no Adobe
+    install). Pipeline mean ΔE must sit at the independent SSF floor (it adds no
+    error of its own), reported as accuracy WITH its named floor."""
+    _, refl = sc.chart_patches()
+    report = {}
+    for illum in _ILLUMINANTS:
+        floor = sc.ssf_lstsq_floor(refl, illum)
+        fm = sc.white_constrained_forward_matrix(refl, illum)
+        lab_tap = _pipeline_tap_lab(DCPProfile(forward_matrix_1=fm), refl, illum)
+        de = _delta_e(lab_tap, sc.ground_truth(refl, illum)["Lab_D50"])
+        report[illum] = (de.mean(), floor["mean"])
+        # At or below the unconstrained XYZ-lstsq floor (a white-constrained fit
+        # can edge below it in ΔE terms); never far above (bug guard).
+        assert de.mean() < floor["mean"] + 0.5, (
+            f"{illum}: accuracy {de.mean():.3f} far exceeds floor "
+            f"{floor['mean']:.3f} — pipeline colour error, not profile fit."
+        )
+        assert de.mean() > 0.2, f"{illum}: ΔE {de.mean():.3f} implausibly low"
+    print("autonomous accuracy (mean ΔE / floor):",
+          {k: (round(v[0], 3), round(v[1], 3)) for k, v in report.items()})
+
+
+# ---------------------------------------------------------------------------
+# (ii-b) End-to-end through the SHIPPED Adobe DCP (the task's literal leg).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not _ADOBE_STANDARD_D5100.is_file(),
+    reason="Nikon D5100 Adobe Standard.dcp not installed (system Adobe CameraRaw).",
+)
+def test_absolute_accuracy_adobe_standard_dcp_at_floor():
+    """The shipped Nikon D5100 *Adobe Standard* profile, fed synthetic D5100-SSF
+    camera RGB, must reproduce CIE truth at the tap to within the independent
+    Luther floor. The Adobe ForwardMatrix is a real colorimetric fit, so it
+    lands essentially ON the floor — confirming both the profile and our
+    application of it are colorimetrically sound."""
+    profile = parse_dcp(_ADOBE_STANDARD_D5100)
+    _, refl = sc.chart_patches()
+    report = {}
+    for illum in _ILLUMINANTS:
+        floor = sc.ssf_lstsq_floor(refl, illum)
+        lab_tap = _pipeline_tap_lab(profile, refl, illum)
+        de = _delta_e(lab_tap, sc.ground_truth(refl, illum)["Lab_D50"])
+        report[illum] = (de.mean(), floor["mean"])
+        assert de.mean() < floor["mean"] + 1.0, (
+            f"{illum}: Adobe-Standard accuracy {de.mean():.3f} exceeds floor "
+            f"{floor['mean']:.3f} + 1.0 — investigate (FM mis-applied, wrong "
+            f"kelvin blend, or chart/illuminant mismatch)."
+        )
+    print("Adobe Standard accuracy (mean ΔE / floor):",
+          {k: (round(v[0], 3), round(v[1], 3)) for k, v in report.items()})
+
+
+@pytest.mark.skipif(
+    not _CAMERA_STANDARD_D5100.is_file(),
+    reason="Nikon D5100 Camera Standard.dcp not installed.",
+)
+def test_camera_standard_forward_matrix_is_not_colorimetric():
+    """Documents a footgun, as a guard. Adobe *Camera Standard* profiles set
+    ForwardMatrix to the ProPhoto→XYZ passthrough (the colour look lives in the
+    LookTable/ToneCurve), so using one for absolute accuracy gives a ΔE FAR
+    above the floor. If a future parser change made these look like real
+    colorimetric matrices, this test would start failing — flagging that the
+    accuracy harness must keep using Adobe Standard, not Camera Standard."""
+    profile = parse_dcp(_CAMERA_STANDARD_D5100)
+    _, refl = sc.chart_patches()
+    floor = sc.ssf_lstsq_floor(refl, "D65")
+    lab_tap = _pipeline_tap_lab(profile, refl, "D65")
+    de = _delta_e(lab_tap, sc.ground_truth(refl, "D65")["Lab_D50"])
+    assert de.mean() > 3.0 * floor["mean"], (
+        f"Camera Standard ΔE {de.mean():.3f} unexpectedly near the floor "
+        f"{floor['mean']:.3f} — its ForwardMatrix may no longer be the "
+        f"ProPhoto passthrough; re-confirm which profile is colorimetric."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Sensitivity — the accuracy axis MUST catch a real colour-pipeline bug.
+# ---------------------------------------------------------------------------
+
+
+def test_absolute_accuracy_detects_transposed_forward_matrix():
+    """A transposed ForwardMatrix (a classic real bug) must push accuracy far
+    above the floor — proves the axis discriminates, isn't a rubber stamp."""
+    _, refl = sc.chart_patches()
+    fm = sc.white_constrained_forward_matrix(refl, "D65")
+    good = _pipeline_tap_lab(DCPProfile(forward_matrix_1=fm), refl, "D65")
+    bad = _pipeline_tap_lab(DCPProfile(forward_matrix_1=fm.T.copy()), refl, "D65")
+    gt = sc.ground_truth(refl, "D65")["Lab_D50"]
+    floor = sc.ssf_lstsq_floor(refl, "D65")["mean"]
+    assert _delta_e(good, gt).mean() < floor + 0.5         # known-good at floor
+    assert _delta_e(bad, gt).mean() > 5.0 * floor          # bug detected
+
+
+# ---------------------------------------------------------------------------
+# Extremes — overrange / near-black / clip come from INJECTION, not the chart
+# (a spectral chart under a normal illuminant is always in-range). Mapped to
+# the layer that delivers them: the tap is linear + unclamped, so it passes
+# extremes through verbatim; clipping is a Stage-9 / output concern.
+# ---------------------------------------------------------------------------
+
+
+def test_tap_preserves_injected_extremes_unclamped():
+    """Inject near-black, overrange and pure-channel camera RGB; the Stage-4 tap
+    must carry them through linearly (no clamp). Absolute-accuracy ΔE is NOT
+    computed for these — they have no in-gamut CIE truth; the point is that the
+    tap is the right place to inject such extremes for downstream range tests."""
+    fm = colour.RGB_COLOURSPACES["ProPhoto RGB"].matrix_RGB_to_XYZ  # ProPhoto→XYZ
+    prof = DCPProfile(forward_matrix_1=fm)
+    asn = np.array([1.0, 1.0, 1.0], dtype=np.float32)
+    cam = np.array([[
+        [1e-4, 1e-4, 1e-4],   # near-black
+        [4.0, 4.0, 4.0],      # overrange (>1)
+        [3.0, 0.0, 0.0],      # saturated overrange red
+        [0.0, 0.0, 0.0],      # true black
+    ]], dtype=np.float32)
+    tap = apply_adobe_pipeline(cam, prof, asn, 6504.0, stop_after_stage=4)
+    # With FM = ProPhoto→XYZ and WB identity, the tap returns the camera RGB
+    # (a float32 XYZ round-trip, so ~1e-4 relative — the point is "no clamp").
+    np.testing.assert_allclose(tap[0], cam[0], rtol=2e-3, atol=1e-3)
+    assert tap.max() > 3.5, "overrange highlight was clamped at the tap"
+    # No lower clamp either — a saturated channel round-trips slightly negative
+    # (float noise) and the tap must NOT floor it to 0 (clipping is Stage-9 only).
+    assert np.isfinite(tap).all()
+    assert tap[0, 0, 0] > 1e-5, "near-black was floored to 0 at the tap"
