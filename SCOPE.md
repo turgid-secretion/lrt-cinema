@@ -134,6 +134,10 @@ documentation + sample XMPs from LRTimelapse Pro 7.5.3. See
 
 ## See also
 
+- **Standalone GUI app (LRT *replacement*) — separate future track, currently
+  ON HOLD / NO-GO** (needs a Vulkan/native-systems engineer and/or a design
+  originator first; not part of this CLI's scope):
+  [docs/research/v09-standalone-repo-plan.md](docs/research/v09-standalone-repo-plan.md).
 - [docs/research/v06-architecture.md](docs/research/v06-architecture.md)
   — the v0.6 architecture spec this build implements.
 - [docs/research/dng-pipeline-findings.md](docs/research/dng-pipeline-findings.md)

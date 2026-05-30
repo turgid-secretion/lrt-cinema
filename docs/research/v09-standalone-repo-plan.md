@@ -5,6 +5,17 @@ LRTimelapse *replacement* — own authoring, own colour science, own UI) is a
 **separate product and will live in its own repository.** It is **not** part of
 `lrt-cinema` and will not be built here.
 
+> ⛔ **SCRUTINY RESULT — NO-GO FOR NOW (2026-05-29).** The vkdt-fork feasibility +
+> UI strategy was put through an adversarial sanity-check (see
+> [`v09-vkdt-fork-ui-strategy.md`](v09-vkdt-fork-ui-strategy.md) §6). It **does not
+> pass as currently staffed.** The two hardest parts of the build — **native-systems
+> engineering** (the GPLv2 `qvk` rewrite that gates every UI path, the GPU↔UI
+> viewport bridge, MoltenVK validation, the proxy/cache) and **originating a
+> class-leading aesthetic** — are exactly the two things neither a non-engineer/
+> non-designer lead nor Claude reliably provides. "Mostly Claude" covers only the
+> non-critical-path *chrome*. **Do not begin building the standalone in any repo
+> until the gate below is met.**
+
 ## Why separate
 | | lrt-cinema (this repo) | standalone app (future repo) |
 |---|---|---|
@@ -24,10 +35,23 @@ Different product, stack, and licence ⇒ different repo.
   language). lrt-cinema does not depend on the standalone.
 - Shared only by reference (the math) and by these research docs until spin-out.
 
-## Spin-out trigger
-Create the new repo **only when the vkdt-fork feasibility + UI strategy passes
-scrutiny** (see `v09-vkdt-fork-ui-strategy.md` + the spawned R&D task). No empty
-repo before there is a GO — that's premature fragmentation.
+## Spin-out trigger  →  NOT MET (scrutiny failed 2026-05-29)
+The trigger was "create the new repo **only when the vkdt-fork feasibility + UI
+strategy passes scrutiny**." **Scrutiny was run and the answer is NO-GO for now.**
+Revisit ONLY when **both** gates pass:
+
+1. **Team secured** — at minimum (a) a competent **Vulkan / native-systems
+   engineer** (non-negotiable; Claude cannot substitute — the failures are GPU
+   hangs, black frames, and silently-corrupt HDR, none of which a screenshot loop
+   can catch), and (b) **design origination** — a 2–4-week designer engagement to
+   set tokens + direction + the un-clonable timelapse surfaces, and/or a decision
+   to clone a proven pro aesthetic wholesale as the fixed reference.
+2. **Evidence gate** — the Phase-1 viewport-latency spike
+   (`v09-vkdt-fork-ui-strategy.md` §5.4) has actually been **run**, not assumed.
+
+Until both pass, the standalone is a **funded option, not a plan**: no empty repo,
+no standalone code, no "let's just start the UI." No empty repo before there is a
+GO — that's premature fragmentation.
 
 ## What moves at spin-out
 - `docs/research/v09-standalone-app-build-vs-not.md` → new repo (R&D seed).
