@@ -79,7 +79,7 @@ def test_dropped_flags_no_longer_accepted(capsys, tmp_path):
         with pytest.raises(SystemExit) as exc:
             main([
                 "render", "--input", str(src), "--output", str(out),
-                "--preset", "cinema-linear", old_flag, "x",
+                "--preset", "cinema-linear-finished", old_flag, "x",
             ])
         assert exc.value.code != 0, f"{old_flag} should be rejected"
 
@@ -111,7 +111,7 @@ def test_render_rejects_same_input_and_output(tmp_path, capsys):
     src.mkdir()
     rc = main([
         "render", "--input", str(src), "--output", str(src),
-        "--preset", "cinema-linear", "--dry-run",
+        "--preset", "cinema-linear-finished", "--dry-run",
     ])
     assert rc == 2
     assert "must differ" in capsys.readouterr().err
@@ -136,7 +136,7 @@ def test_dry_run_reports_what_would_render(tmp_path, capsys):
 
     rc = main([
         "render", "--input", str(src), "--output", str(out),
-        "--preset", "cinema-linear", "--dry-run", "--quiet",
+        "--preset", "cinema-linear-finished", "--dry-run", "--quiet",
     ])
     assert rc == 0
     err = capsys.readouterr().err
@@ -157,7 +157,7 @@ def test_dry_run_does_not_touch_source_xmp(tmp_path):
     out = tmp_path / "output"
     main([
         "render", "--input", str(src), "--output", str(out),
-        "--preset", "cinema-linear", "--dry-run", "--quiet",
+        "--preset", "cinema-linear-finished", "--dry-run", "--quiet",
     ])
     assert lrt_xmp.read_bytes() == original
 
@@ -170,7 +170,7 @@ def test_from_to_frame_validation(tmp_path, capsys):
     out = tmp_path / "output"
     rc = main([
         "render", "--input", str(src), "--output", str(out),
-        "--preset", "cinema-linear", "--dry-run",
+        "--preset", "cinema-linear-finished", "--dry-run",
         "--from-frame", "10",
     ])
     assert rc == 2

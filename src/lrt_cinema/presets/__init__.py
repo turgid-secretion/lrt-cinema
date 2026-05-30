@@ -1,20 +1,21 @@
 """Output preset names. The render dispatch lives in `lrt_cinema.output`.
 
-Presets:
+Presets (only standards-aligned colour spaces — see CLAUDE.md allowlist):
   lrtimelapse            → 16-bit sRGB display TIFF (embedded ICC).
                            v0.8 DEFAULT. Display-referred, full LRT look baked;
                            the only emission LRT's video renderer re-ingests
                            (LRT → Render from Intermediate → Motion Blur).
-  cinema-linear-finished → 16-bit half EXR DWAB, ACEScg.
-                           Scene-linear master for DaVinci Resolve / ACES
-                           (bypasses LRT). Full DCP shape baked.
-  cinema-linear-master   → 16-bit half EXR DWAB, linear Rec.2020.
-                           β (Option B, v0.7.1). Stage 7 emission;
-                           skips LookTable + ProfileToneCurve for HDR
-                           headroom. LR PV2012 ops still apply.
-  cinema-linear          → 32-bit float TIFF, linear Rec.2020. v0.6 back-compat.
-  cinema-aces            → 32-bit float EXR PIZ, linear Rec.2020. Deprecated.
-  stills-finished        → 16-bit int TIFF, Rec.2020 gamma + AgX. NotImplemented.
+  cinema-linear-finished → 16-bit half EXR DWAB, scene-linear ACEScg (AP1).
+                           Master for DaVinci Resolve / ACES (bypasses LRT).
+                           Full DCP shape baked.
+  cinema-linear-master   → 16-bit half EXR DWAB, scene-linear ACEScg (AP1).
+                           β; Stage 7 emission; skips LookTable +
+                           ProfileToneCurve for HDR headroom.
+  stills-finished        → display Rec.2020 gamma + AgX. NotImplemented.
+
+Removed: cinema-linear / cinema-aces — both emitted *linear Rec.2020*, a
+delivery gamut misused as scene-referred (a colour-science error). ACEScg /
+ACES2065-1 are the only standards-aligned scene-linear gamuts.
 """
 
 from __future__ import annotations
@@ -23,8 +24,6 @@ PRESETS: frozenset[str] = frozenset({
     "lrtimelapse",
     "cinema-linear-finished",
     "cinema-linear-master",
-    "cinema-linear",
-    "cinema-aces",
     "stills-finished",
 })
 
