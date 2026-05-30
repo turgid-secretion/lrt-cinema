@@ -64,24 +64,35 @@ test scenes through `pipeline.render_frame` and asserts mean ΔE2000
 < 1.0 against Adobe `dng_validate` (their own DNG SDK reference
 renderer).
 
-Current measurements (v0.6 tip):
+Current measurements (v0.8 head, re-run 2026-05-30):
 
 | Scene | DCP | Mean ΔE | P50 | < 1 ΔE pixels |
 |---|---|---:|---:|---:|
-| Gym (DSC_4053.NEF, D750) | Camera Standard | **0.79** | 0.20 | 76.8% |
-| Rose (d750_sample.NEF) | Adobe Standard | **0.84** | — | 69.6% |
+| Gym (DSC_4053, D750) | Camera Standard | **0.789** | 0.198 | 76.8% |
+| Rose (d750_sample) | Adobe Standard | **0.844** | 0.803 | 69.6% |
+
+The gym mean is dragged by demosaic-edge pixels; **flat non-edge pixels match
+`dng_validate` exactly (median ΔE 0.000 over 94% of px)** — the colour maths
+bit-match the open-spec reference. See `docs/VALIDATION.md` for the decomposition.
 
 ## Floors
 
-Quantified maxima beyond which open-source Adobe-DCP-spec compliance
-cannot reach (per `docs/research/dng-pipeline-findings.md`):
+Reference-comparison floors (characterized, not ship-gating). Distinguish the
+part we *own and can tune* from the reference's own irreducible look:
 
-- vs LRT preview JPEG: **2.03 ΔE** (LR PV5 adds processing beyond the
-  public DCP spec).
-- vs in-camera JPEG: **6.32 ΔE** (camera uses Nikon Picture Control,
-  not Adobe DCP).
+- **vs `dng_validate` (the north-star): 0.789 gym / 0.844 rose mean — but
+  median 0.000.** No theoretical floor on the colour maths; the real-scene mean
+  floor is the **demosaic-algorithm choice** (libraw LINEAR vs Adobe; the DNG
+  spec mandates no demosaic) at edges (~1.6 ΔE, ~6% of px). A synthetic
+  flat-patch chart can drive the measured colour-math gap toward ~0.
+- **vs LRT preview: ~2 ΔE** post-affine (was mislabelled 2.03 from the
+  darktable era; re-measured 2026-05-30: raw 2.92 / affine-residual ~2.18).
+  Decomposes as **0.79 (our-vs-Adobe-DNG, closeable) + ~2 (LR closed-source PV5
+  look + 8-bit JPEG — the reference's, not ours)**.
+- vs in-camera JPEG: ~6 ΔE (camera uses Nikon Picture Control, not Adobe DCP).
 
-Both are characterized, not ship-gating.
+For the Adobe purge, `dng_validate` stays a test-only oracle and the proven
+**0.789** is the target to tune open-DCP renders back toward.
 
 ## CLI surface (9 flags)
 

@@ -131,12 +131,17 @@ End-to-end gate: `tests/test_pipeline.py` renders the project's test
 scenes through the pipeline and asserts mean ΔE2000 < 1.0 against
 Adobe's own `dng_validate` reference renderer.
 
-Latest measurement (gym + rose, vs `dng_validate`):
+Latest measurement (v0.8 head, re-run 2026-05-30, gym + rose vs `dng_validate`):
 
 | Scene | Mean ΔE | P50 | P95 | < 1 ΔE pixels |
 |---|---:|---:|---:|---:|
-| Gym (D750 Camera Standard) | **0.79** | 0.20 | 4.19 | 76.8% |
-| Rose (D750 Adobe Standard) | **0.84** | — | — | 69.6% |
+| Gym (D750 Camera Standard) | **0.789** | 0.198 | 4.19 | 76.8% |
+| Rose (D750 Adobe Standard) | **0.844** | 0.803 | 1.70 | 69.6% |
+
+The gym mean is dragged by demosaic-edge pixels (libraw LINEAR vs Adobe);
+**flat non-edge pixels match `dng_validate` exactly (median ΔE 0.000, 94% of
+px)** — the colour science bit-matches the open-spec reference. See
+[docs/VALIDATION.md](docs/VALIDATION.md).
 
 ## License
 
