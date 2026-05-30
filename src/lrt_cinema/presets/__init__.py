@@ -1,9 +1,13 @@
 """Output preset names. The render dispatch lives in `lrt_cinema.output`.
 
-v0.7 presets (per `docs/research/v07-spec-revision-plan.md` +
-`docs/research/v07-beta-xml-deadend.md`):
-  cinema-linear-finished → 16-bit half EXR DWAB, linear Rec.2020.
-                           γ / v0.7 default. Full DCP shape baked.
+Presets:
+  lrtimelapse            → 16-bit sRGB display TIFF (embedded ICC).
+                           v0.8 DEFAULT. Display-referred, full LRT look baked;
+                           the only emission LRT's video renderer re-ingests
+                           (LRT → Render from Intermediate → Motion Blur).
+  cinema-linear-finished → 16-bit half EXR DWAB, ACEScg.
+                           Scene-linear master for DaVinci Resolve / ACES
+                           (bypasses LRT). Full DCP shape baked.
   cinema-linear-master   → 16-bit half EXR DWAB, linear Rec.2020.
                            β (Option B, v0.7.1). Stage 7 emission;
                            skips LookTable + ProfileToneCurve for HDR
@@ -16,6 +20,7 @@ v0.7 presets (per `docs/research/v07-spec-revision-plan.md` +
 from __future__ import annotations
 
 PRESETS: frozenset[str] = frozenset({
+    "lrtimelapse",
     "cinema-linear-finished",
     "cinema-linear-master",
     "cinema-linear",
@@ -23,7 +28,7 @@ PRESETS: frozenset[str] = frozenset({
     "stills-finished",
 })
 
-DEFAULT_PRESET = "cinema-linear-finished"
+DEFAULT_PRESET = "lrtimelapse"
 
 # Presets that emit at Stage 7 (pre-LookTable, pre-ProfileToneCurve).
 # Consumed by the CLI worker to choose `stop_after_stage` for `render_frame`.

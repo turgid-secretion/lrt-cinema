@@ -13,9 +13,32 @@ from pathlib import Path
 
 import pytest
 
-from lrt_cinema.cli import main
+from lrt_cinema.cli import _output_stem, main
+from lrt_cinema.presets import DEFAULT_PRESET
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+# ---------------------------------------------------------------------------
+# Output naming — LRTimelapse strict convention vs source stem
+# ---------------------------------------------------------------------------
+
+
+def test_default_preset_is_lrtimelapse():
+    assert DEFAULT_PRESET == "lrtimelapse"
+
+
+def test_lrtimelapse_uses_lrt_strict_naming(tmp_path):
+    """LRT requires LRT_00001, 5-digit, 1-based, to recognise the sequence."""
+    assert _output_stem(tmp_path, "lrtimelapse", 0, "DSC_0001.NEF").name == "LRT_00001"
+    assert _output_stem(tmp_path, "lrtimelapse", 9, "DSC_9.NEF").name == "LRT_00010"
+    assert _output_stem(tmp_path, "lrtimelapse", 99, "x.NEF").name == "LRT_00100"
+
+
+def test_non_lrt_targets_keep_source_stem(tmp_path):
+    assert _output_stem(
+        tmp_path, "cinema-linear-finished", 5, "DSC_0042.NEF",
+    ).name == "DSC_0042"
 
 
 # ---------------------------------------------------------------------------

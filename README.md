@@ -1,9 +1,13 @@
 # lrt-cinema
 
 Self-contained Python implementation of the Adobe DNG 1.7.1 render pipeline,
-driven by [LRTimelapse](https://lrtimelapse.com/) XMP develop intent. Produces
-cinema-native intermediates — linear Rec.2020 TIFF or ACES OpenEXR — without
-shelling out to darktable, Lightroom, or any other RAW pipeline.
+driven by [LRTimelapse](https://lrtimelapse.com/) XMP develop intent. By default
+it emits an **LRTimelapse-ready 16-bit sRGB TIFF sequence** (`LRT_00001.tif…`,
+embedded sRGB ICC) — the only format LRT's video renderer re-ingests, so you
+take the frames straight back into LRT for video + **Motion Blur** — without
+shelling out to Lightroom or any other RAW pipeline. Scene-linear ACEScg OpenEXR
+(for DaVinci Resolve / ACES) is an opt-in target. See
+[docs/LRT_ROUNDTRIP.md](docs/LRT_ROUNDTRIP.md).
 
 **Status:** Pre-alpha. Color science gates < 1 ΔE2000 mean against Adobe
 `dng_validate` on the project test scenes. Workflow polish, third-camera
@@ -28,9 +32,11 @@ LRT workflow renders those XMPs through Adobe Lightroom Classic.
 3. Run each frame through an Adobe DNG 1.7.1 reference pipeline:
    demosaic → AsShotNeutral → ColorMatrix/ForwardMatrix → HueSatMap
    → ExposureRamp (carries TotalBaselineExposure) → LookTable
-   → ProfileToneCurve → LR-authored develop ops → ProPhoto → Rec.2020
-   → TIFF / EXR.
-4. Write a frame sequence ready for DaVinci Resolve / ACES timelines.
+   → ProfileToneCurve → LR-authored develop ops → ProPhoto → display sRGB
+   (default) / scene-linear ACEScg.
+4. Write an **LRT-ready 16-bit sRGB TIFF sequence** (`LRT_00001.tif…`, embedded
+   sRGB ICC) you load straight back into LRTimelapse for video + Motion Blur.
+   (Scene-linear ACEScg EXR for DaVinci Resolve / ACES is an opt-in `--preset`.)
 
 Per-frame color is within < 1 ΔE2000 of `dng_validate` (Adobe's own DNG
 SDK reference renderer) on the project's test scenes. See
@@ -42,7 +48,8 @@ for the empirical journey.
 
 | Preset | Container | Color space | Notes |
 |---|---|---|---|
-| `cinema-linear-finished` | 16-bit half OpenEXR (DWAB) at Stage 13 | Linear Rec.2020 | **v0.7 default (γ).** Full DCP shape baked. Cinema scene-referred compressed intermediate; 10–18× smaller than `cinema-aces` with the same LRT-authored look. |
+| `lrtimelapse` | 16-bit sRGB TIFF (embedded ICC), `LRT_NNNNN` naming | sRGB (Rec.709 + sRGB OETF), display-referred | **v0.8 DEFAULT.** The only emission LRT's video renderer re-ingests — take it back into LRT for video + Motion Blur. Full LRT look baked. |
+| `cinema-linear-finished` | 16-bit half OpenEXR (DWAB) at Stage 13 | scene-linear ACEScg (AP1) | Scene-linear master for DaVinci Resolve / ACES (bypasses LRT). Full DCP shape baked; 10–18× smaller than `cinema-aces`. |
 | `cinema-linear-master` | 16-bit half OpenEXR (DWAB) at Stage 7 | Linear Rec.2020 | **v0.7.1 (β).** Skips DCP LookTable + ProfileToneCurve for HDR headroom. LR PV2012 keyframes still bake into pixels. Pick this when highlight recovery matters more than the canned DCP look. |
 | `cinema-linear` | 32-bit float TIFF | Linear Rec.2020 | Uncompressed reference master; v0.6 back-compat. |
 | `cinema-aces` | 32-bit float OpenEXR (PIZ) | Linear Rec.2020 | **Deprecated.** Emits one-time `DeprecationWarning`; planned removal in v0.8. Use `cinema-linear-finished` instead. |
@@ -80,8 +87,9 @@ Runtime deps: `rawpy`, `colour-science`, `scipy`, `tifffile`, `OpenEXR`,
 ```bash
 lrt-cinema render \
   --input  /path/to/source-and-xmp-folder \
-  --output /path/to/output-exr-sequence
-# defaults to --preset cinema-linear-finished (half-float DWAB EXR).
+  --output /path/to/lrt-ready-tiff-sequence
+# defaults to --preset lrtimelapse (16-bit sRGB TIFF, LRT_00001.tif…).
+# Take the output folder back into LRTimelapse → Render from Intermediate.
 ```
 
 Power-user knobs:

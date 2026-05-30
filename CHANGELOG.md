@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] — v0.8 prep
 
 ### Changed
+- **New default emission: `lrtimelapse` — a 16-bit sRGB display TIFF for the
+  LRTimelapse round-trip.** This is the format LRT's video renderer re-ingests
+  ("Render from Intermediate"), so frames go straight back into LRT for video +
+  Motion Blur — the canonical LRT workflow. Display-referred sRGB (Rec.709
+  primaries + sRGB OETF, Bradford D50→D65), **embedded sRGB ICC**, strict
+  `LRT_00001.tif…` naming, full LRT look baked, self-describing provenance
+  metadata. `DEFAULT_PRESET` is now `lrtimelapse`. The scene-linear ACEScg EXR
+  masters (`cinema-linear-finished` / `-master`) remain as opt-in targets for
+  DaVinci Resolve / ACES (which bypass LRT — no LRT Motion Blur). New writer
+  `output.write_tiff_display(colorspace=…)`; refuses a non-sRGB target without an
+  ICC to avoid LRT colour/gamma shifts. See `docs/LRT_ROUNDTRIP.md`.
 - **Cinema masters now emit scene-linear ACEScg (AP1), not linear Rec.2020.**
   `cinema-linear-finished` / `cinema-linear-master` write half-float DWAB EXR in
   ACEScg (AP1 primaries, ~D60 white) with the OpenEXR `chromaticities` header
