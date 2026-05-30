@@ -183,15 +183,15 @@ def write_tiff_linear_rec2020(
 
 
 def _srgb_icc_bytes() -> bytes:
-    """Standard sRGB ICC profile bytes (built via littleCMS through Pillow).
+    """Standard sRGB ICC profile bytes (embedded; no Pillow runtime dependency).
 
     Embedding this in the output TIFF is what makes the LRT round-trip robust:
     Gunther Wegner's documented gamma/contrast shifts come from viewers/LRT
     *misinterpreting* an untagged or wide-gamut file. A correct sRGB ICC removes
-    that ambiguity."""
-    from PIL import ImageCms
+    that ambiguity. Source bytes live in `lrt_cinema._srgb_icc`."""
+    from lrt_cinema._srgb_icc import srgb_icc_bytes
 
-    return ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+    return srgb_icc_bytes()
 
 
 def _prophoto_to_display(
