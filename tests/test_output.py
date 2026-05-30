@@ -13,9 +13,12 @@ import numpy as np
 import pytest
 
 from lrt_cinema.output import (
+    DISPLAY_COLORSPACES,
+    _prophoto_to_display,
     _prophoto_to_rec2020,
     write_exr_linear_rec2020,
     write_preset_output,
+    write_tiff_display,
     write_tiff_linear_rec2020,
 )
 
@@ -109,6 +112,111 @@ def test_tiff_clips_overrange(tmp_path):
     write_tiff_linear_rec2020(x, dst, bit_depth=16)
     rt = tifffile.imread(str(dst))
     assert rt.max() == 65535  # clamped to top of 16-bit range
+
+
+# ---------------------------------------------------------------------------
+# Display-referred TIFF writer (LRTimelapse round-trip) — v0.8 default
+# ---------------------------------------------------------------------------
+
+_ICC_TAG = 34675  # InterColorProfile
+
+
+def test_display_srgb_encodes_neutral_correctly(tmp_path):
+    """Linear ProPhoto(D50) 0.18 mid-gray → sRGB-encoded ~0.461 (the sRGB OETF
+    of 0.18), staying neutral. This is the core display-encode contract."""
+    tifffile = pytest.importorskip("tifffile")
+    x = np.full((4, 4, 3), 0.18, dtype=np.float32)
+    dst = write_tiff_display(x, tmp_path / "g.tif", colorspace="srgb", bit_depth=16)
+    rt = tifffile.imread(str(dst)).astype(np.float64) / 65535.0
+    assert 0.45 < rt[0, 0, 0] < 0.47          # sRGB OETF(0.18) ≈ 0.461
+    np.testing.assert_allclose(rt[0, 0, 0], rt[0, 0, 2], atol=2e-3)  # neutral
+
+
+def test_display_srgb_white_and_black(tmp_path):
+    tifffile = pytest.importorskip("tifffile")
+    x = np.zeros((2, 2, 3), dtype=np.float32)
+    x[0] = 1.0
+    rt = tifffile.imread(str(
+        write_tiff_display(x, tmp_path / "wb.tif"),
+    ))
+    assert rt[0, 0, 0] >= 65500   # white near top of range
+    assert rt[1, 0, 0] == 0       # black is zero
+
+
+def test_display_tiff_embeds_icc_and_provenance(tmp_path):
+    """The embedded sRGB ICC + provenance are what de-risk the LRT round-trip
+    (untagged/wide-gamut files cause LRT gamma shifts)."""
+    tifffile = pytest.importorskip("tifffile")
+    x = np.full((3, 3, 3), 0.5, dtype=np.float32)
+    dst = write_tiff_display(
+        x, tmp_path / "m.tif",
+        provenance={"source_frame": "DSC_0001.NEF", "frame_index": 0},
+    )
+    with tifffile.TiffFile(dst) as tf:
+        page = tf.pages[0]
+        codes = [t.code for t in page.tags]
+        assert _ICC_TAG in codes                       # ICC embedded
+        assert len(page.tags.get(_ICC_TAG).value) > 0
+        assert "lrt-cinema" in page.tags.get(305).value  # Software
+        desc = page.tags.get(270).value                  # ImageDescription
+        assert "DSC_0001.NEF" in desc and "sRGB" in desc
+
+
+def test_display_tiff_is_16bit_uint(tmp_path):
+    tifffile = pytest.importorskip("tifffile")
+    x = np.full((2, 2, 3), 0.5, dtype=np.float32)
+    rt = tifffile.imread(str(write_tiff_display(x, tmp_path / "d.tif")))
+    assert rt.dtype == np.uint16
+
+
+def test_display_tiff_8bit_supported(tmp_path):
+    tifffile = pytest.importorskip("tifffile")
+    x = np.full((2, 2, 3), 0.5, dtype=np.float32)
+    rt = tifffile.imread(str(
+        write_tiff_display(x, tmp_path / "d8.tif", bit_depth=8),
+    ))
+    assert rt.dtype == np.uint8
+
+
+def test_display_tiff_rejects_bad_bit_depth(tmp_path):
+    x = np.zeros((2, 2, 3), dtype=np.float32)
+    with pytest.raises(ValueError, match="bit_depth"):
+        write_tiff_display(x, tmp_path / "x.tif", bit_depth=32)
+
+
+def test_display_tiff_refuses_nonsrgb_without_icc(tmp_path):
+    """Emitting a wide-gamut TIFF without an ICC is the LRT gamma-shift footgun;
+    the writer must refuse rather than guess."""
+    x = np.full((2, 2, 3), 0.5, dtype=np.float32)
+    with pytest.raises(ValueError, match="ICC profile is required"):
+        write_tiff_display(x, tmp_path / "pp.tif", colorspace="prophoto")
+
+
+def test_display_tiff_overrange_clips_to_white(tmp_path):
+    tifffile = pytest.importorskip("tifffile")
+    x = np.full((2, 2, 3), 1.8, dtype=np.float32)  # overrange highlight
+    rt = tifffile.imread(str(write_tiff_display(x, tmp_path / "o.tif")))
+    assert rt.max() == 65535  # display deliverable clips; recovery is the EXR path
+
+
+def test_lrtimelapse_preset_writes_tif(tmp_path):
+    """The default preset emits a .tif with ICC via write_preset_output."""
+    tifffile = pytest.importorskip("tifffile")
+    x = np.full((4, 4, 3), 0.5, dtype=np.float32)
+    out = write_preset_output(x, tmp_path / "LRT_00001", "lrtimelapse")
+    assert out.suffix == ".tif"
+    with tifffile.TiffFile(out) as tf:
+        assert _ICC_TAG in [t.code for t in tf.pages[0].tags]
+
+
+def test_display_colorspaces_exposed():
+    assert "srgb" in DISPLAY_COLORSPACES
+
+
+def test_prophoto_to_display_shape_preserved():
+    x = np.random.rand(5, 7, 3).astype(np.float32)
+    out = _prophoto_to_display(x, "srgb")
+    assert out.shape == (5, 7, 3)
 
 
 def test_tiff_creates_parent_dir(tmp_path):

@@ -87,10 +87,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--preset", default=DEFAULT_PRESET, choices=sorted(PRESETS),
         help=(
             f"Output preset (default: {DEFAULT_PRESET}). "
-            "Choices: cinema-linear-finished (v0.7 γ; half-float DWAB EXR, "
-            "full DCP shape), cinema-linear-master (v0.7.1 β; half-float "
-            "DWAB EXR at Stage 7, skips DCP LookTable + ProfileToneCurve "
-            "for HDR headroom), cinema-linear (32-bit float TIFF), "
+            "lrtimelapse (DEFAULT; 16-bit sRGB display TIFF, embedded ICC, "
+            "LRT_NNNNN naming — re-ingestible by LRT's video renderer for "
+            "Motion Blur), cinema-linear-finished (half-float DWAB EXR, "
+            "ACEScg; scene-linear master for DaVinci Resolve), "
+            "cinema-linear-master (half-float DWAB EXR at Stage 7 for HDR "
+            "headroom), cinema-linear (32-bit float TIFF), "
             "cinema-aces (deprecated; 32-bit float PIZ EXR), "
             "stills-finished (v0.6.x)."
         ),
@@ -215,7 +217,13 @@ def _render_one_frame(job: _RenderJob) -> _RenderResult:
             stop_after_stage=stop_after_stage,
         )
         with_dev_ops = apply_develop_ops(result.prophoto, job.ops)
-        write_preset_output(with_dev_ops, job.dst_stem, job.preset)
+        write_preset_output(
+            with_dev_ops, job.dst_stem, job.preset,
+            provenance={
+                "source_frame": job.src_raw.name,
+                "frame_index": job.frame_index,
+            },
+        )
         return _RenderResult(job.frame_index, job.src_raw, ok=True)
     except Exception as exc:
         return _RenderResult(
@@ -326,6 +334,22 @@ def _resolve_dcp(args: argparse.Namespace, first_raw: Path) -> tuple[Path | None
     return src_path, f"info: auto-detected DCP: {src_path}\n"
 
 
+def _output_stem(
+    output_dir: Path, preset: str, frame_index: int, source_name: str,
+) -> Path:
+    """Destination path stem (no extension) for a rendered frame.
+
+    The `lrtimelapse` target REQUIRES LRT's strict naming — `LRT_00001`,
+    5-digit zero-padded, 1-based — for LRT to recognise the folder as a
+    renderable intermediate sequence (LRT → Render from Intermediate). Other
+    targets keep the source stem so frames map back to their RAW. Render the
+    whole sequence (default range) so the LRT sequence starts at `LRT_00001`.
+    """
+    if preset == "lrtimelapse":
+        return output_dir / f"LRT_{frame_index + 1:05d}"
+    return output_dir / Path(source_name).stem
+
+
 def _cmd_render(args: argparse.Namespace) -> int:
     if args.output.resolve() == args.input.resolve():
         sys.stderr.write(
@@ -380,7 +404,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
     jobs = []
     for i in range(args.from_frame, to_frame):
         src_raw = args.input / seq.source_frames[i]
-        dst_stem = args.output / Path(seq.source_frames[i]).stem
+        dst_stem = _output_stem(args.output, args.preset, i, seq.source_frames[i])
         jobs.append(_RenderJob(
             frame_index=i,
             src_raw=src_raw,

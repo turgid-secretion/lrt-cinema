@@ -3,11 +3,15 @@
 Stage 13 of the pipeline (per `docs/research/v06-architecture.md` §"Pipeline
 stage order" and `docs/research/v07-spec-revision-plan.md`).
 
-v0.7.0 presets:
+Presets:
 
-  cinema-linear-finished → 16-bit half EXR (DWAB), linear Rec.2020 — γ; v0.7
-                           default; 10-18× smaller than v0.6 cinema-aces
-                           with full LRT intent baked.
+  lrtimelapse            → 16-bit sRGB display TIFF (embedded ICC) — v0.8
+                           DEFAULT. Display-referred, full LRT look baked;
+                           the only emission LRT's video renderer re-ingests
+                           (LRT → Render from Intermediate → Motion Blur).
+  cinema-linear-finished → 16-bit half EXR (DWAB), ACEScg — γ; scene-linear
+                           master for DaVinci Resolve / ACES (bypasses LRT);
+                           full LRT intent baked.
   cinema-linear          → 32-bit float TIFF, linear Rec.2020 — v0.6
                            back-compat; uncompressed reference master.
   cinema-aces            → 32-bit float EXR (PIZ), linear Rec.2020 — v0.6
@@ -28,11 +32,14 @@ Library boundary:
 
 from __future__ import annotations
 
+import json
 import warnings
 from pathlib import Path
 from typing import Literal
 
 import numpy as np
+
+from lrt_cinema import __version__
 
 # --- Color-space transforms (ProPhoto(D50) → scene-linear target) ----------
 
@@ -49,6 +56,37 @@ _COLOURSPACE_NAMES = {
     "aces2065": "ACES2065-1",     # AP0, ~D60 — archival / interchange
 }
 EXR_COLORSPACES = tuple(_COLOURSPACE_NAMES)
+
+# Display-referred (gamma-encoded) emission colourspaces for the LRTimelapse
+# round-trip and other display deliverables. Unlike the scene-linear EXR path,
+# these apply the output space's encoding CCTF (e.g. the sRGB OETF) so the file
+# is display-referred — exactly what LRT's video renderer expects. `srgb`
+# (Rec.709 primaries) is the LRT-safe default per Gunther Wegner's guidance;
+# wider gamuts round-trip into LRT only with a correct embedded ICC, so the
+# writer refuses a non-sRGB target unless an ICC profile is supplied.
+_DISPLAY_COLOURSPACE_NAMES = {
+    "srgb": "sRGB",                  # Rec.709 primaries + sRGB OETF — LRT default
+    "adobergb": "Adobe RGB (1998)",  # wider gamut; needs bundled ICC
+    "prophoto": "ProPhoto RGB",      # widest; needs bundled ICC
+    "rec2020": "ITU-R BT.2020",      # HDR-ish display; needs bundled ICC
+}
+DISPLAY_COLORSPACES = tuple(_DISPLAY_COLOURSPACE_NAMES)
+
+# Human/machine-readable colour facts embedded in every display TIFF so the
+# file is self-describing (missing colour info is the root cause of LRT's
+# documented gamma/contrast shifts).
+_DISPLAY_PRIMARIES = {
+    "srgb": "Rec.709", "adobergb": "Adobe RGB",
+    "prophoto": "ProPhoto", "rec2020": "Rec.2020",
+}
+_DISPLAY_TRANSFER = {
+    "srgb": "sRGB", "adobergb": "gamma2.2",
+    "prophoto": "gamma1.8", "rec2020": "BT.2020",
+}
+
+# TIFF tag 34675 = ICC Profile ("InterColorProfile"); TIFF datatype 7 = UNDEFINED.
+_ICC_PROFILE_TAG = 34675
+_TIFF_TYPE_UNDEFINED = 7
 
 
 def _prophoto_to_linear(
@@ -137,6 +175,133 @@ def write_tiff_linear_rec2020(
         str(dst),
         pixels,
         photometric="rgb",
+    )
+    return dst
+
+
+# --- Display-referred TIFF writer (LRTimelapse round-trip) -----------------
+
+
+def _srgb_icc_bytes() -> bytes:
+    """Standard sRGB ICC profile bytes (built via littleCMS through Pillow).
+
+    Embedding this in the output TIFF is what makes the LRT round-trip robust:
+    Gunther Wegner's documented gamma/contrast shifts come from viewers/LRT
+    *misinterpreting* an untagged or wide-gamut file. A correct sRGB ICC removes
+    that ambiguity."""
+    from PIL import ImageCms
+
+    return ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+
+
+def _prophoto_to_display(
+    prophoto_d50: np.ndarray, colorspace: str = "srgb",
+) -> np.ndarray:
+    """Linear ProPhoto(D50) → display-referred `colorspace`, gamma-encoded.
+
+    Bradford-adapts D50→the target whitepoint (D65 for sRGB) and applies the
+    target's encoding CCTF (sRGB OETF for `srgb`). `colorspace` ∈
+    DISPLAY_COLORSPACES. Output is nominally [0, 1] before clipping."""
+    import colour
+
+    if colorspace not in _DISPLAY_COLOURSPACE_NAMES:
+        raise ValueError(
+            f"colorspace must be one of {DISPLAY_COLORSPACES}, got {colorspace!r}",
+        )
+    h, w, _ = prophoto_d50.shape
+    out = colour.RGB_to_RGB(
+        prophoto_d50.reshape(-1, 3).astype(np.float64),
+        input_colourspace="ProPhoto RGB",
+        output_colourspace=_DISPLAY_COLOURSPACE_NAMES[colorspace],
+        chromatic_adaptation_transform="Bradford",
+        apply_cctf_decoding=False,   # our data is already linear
+        apply_cctf_encoding=True,    # encode to the display transfer function
+    )
+    return out.reshape(h, w, 3)
+
+
+def write_tiff_display(
+    prophoto: np.ndarray,
+    dst: Path | str,
+    colorspace: str = "srgb",
+    bit_depth: Literal[8, 16] = 16,
+    icc_profile: bytes | None = None,
+    provenance: dict | str | None = None,
+) -> Path:
+    """Write a display-referred, gamma-encoded integer TIFF for the LRT
+    round-trip (LRT → Render from Intermediate → Motion Blur).
+
+    Pipeline: linear ProPhoto(D50) → `colorspace` (Bradford CAT) → encoding CCTF
+    → clip [0, 1] → integer quantise → TIFF with an **embedded ICC profile** and
+    provenance metadata.
+
+    `colorspace` (default `"srgb"`, the LRT-safe Rec.709/sRGB target). For any
+    non-sRGB display target an `icc_profile` MUST be supplied — emitting a
+    wide-gamut TIFF *without* a profile is the exact footgun behind LRT's
+    documented gamma/colour shifts, so the writer refuses it rather than guess.
+
+    `bit_depth` 16 (default) or 8. 16-bit is the point of replacing LRT's 8-bit
+    internal path; 8-bit matches LRT's internal-render equivalent.
+
+    `provenance` is embedded in ImageDescription (JSON if a dict). It carries
+    colour space / transfer / range so downstream tools self-describe; no
+    timestamps, so renders are byte-reproducible.
+    """
+    import tifffile
+
+    if bit_depth not in (8, 16):
+        raise ValueError(f"display TIFF bit_depth must be 8 or 16, got {bit_depth}")
+    if colorspace not in _DISPLAY_COLOURSPACE_NAMES:
+        raise ValueError(
+            f"colorspace must be one of {DISPLAY_COLORSPACES}, got {colorspace!r}",
+        )
+    if icc_profile is None:
+        if colorspace == "srgb":
+            icc_profile = _srgb_icc_bytes()
+        else:
+            raise ValueError(
+                f"an ICC profile is required for non-sRGB display colourspace "
+                f"{colorspace!r}; pass icc_profile=<bytes> (emitting a wide-gamut "
+                f"TIFF without a profile causes LRT colour/gamma shifts).",
+            )
+
+    encoded = _prophoto_to_display(prophoto, colorspace)
+    clipped = np.clip(encoded, 0.0, 1.0)
+    if bit_depth == 16:
+        pixels = (clipped * 65535.0 + 0.5).astype(np.uint16)
+    else:
+        pixels = (clipped * 255.0 + 0.5).astype(np.uint8)
+
+    dst = Path(dst)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+
+    if isinstance(provenance, str):
+        description = provenance
+    else:
+        # Always self-describe the colour encoding; merge any caller context.
+        meta = {
+            "tool": f"lrt-cinema {__version__}",
+            "colorspace": _DISPLAY_COLOURSPACE_NAMES[colorspace],
+            "primaries": _DISPLAY_PRIMARIES[colorspace],
+            "transfer": _DISPLAY_TRANSFER[colorspace],
+            "range": "full",
+            "bit_depth": bit_depth,
+        }
+        if provenance:
+            meta.update(provenance)
+        description = json.dumps(meta, sort_keys=True)
+
+    tifffile.imwrite(
+        str(dst),
+        pixels,
+        photometric="rgb",
+        software=f"lrt-cinema {__version__}",
+        description=description,
+        extratags=[(
+            _ICC_PROFILE_TAG, _TIFF_TYPE_UNDEFINED, len(icc_profile),
+            icc_profile, True,
+        )],
+        metadata=None,  # suppress tifffile's own JSON in ImageDescription
     )
     return dst
 
@@ -248,17 +413,35 @@ def _warn_cinema_aces_once() -> None:
 
 
 def write_preset_output(
-    prophoto: np.ndarray, dst_stem: Path | str, preset: str,
+    prophoto: np.ndarray,
+    dst_stem: Path | str,
+    preset: str,
+    provenance: dict | None = None,
 ) -> Path:
     """Dispatch to the right writer based on preset name.
 
     `dst_stem` is the path WITHOUT extension; the writer appends .tif / .exr.
     Returns the final written path.
 
+    `provenance` (optional) is per-frame context (source frame, frame index)
+    merged into the emitted file metadata for the display-TIFF target.
+
     `stills-finished` raises NotImplementedError in v0.7 — AgX port is
     still v0.6.x scope.
     """
     dst_stem = Path(dst_stem)
+    if preset == "lrtimelapse":
+        # Default target: display-referred 16-bit sRGB TIFF for the LRTimelapse
+        # round-trip (LRT → Render from Intermediate → Motion Blur). Full LRT
+        # look baked at Stage 9 + develop ops; sRGB ICC embedded. The writer
+        # self-describes the colour encoding; we add per-frame context.
+        meta = {"preset": preset}
+        if provenance:
+            meta.update(provenance)
+        return write_tiff_display(
+            prophoto, dst_stem.with_suffix(".tif"),
+            colorspace="srgb", bit_depth=16, provenance=meta,
+        )
     if preset in ("cinema-linear-finished", "cinema-linear-master"):
         # Identical writer: both presets ship half-float DWAB EXR. The
         # difference is upstream — γ (cinema-linear-finished) emits
