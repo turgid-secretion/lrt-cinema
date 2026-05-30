@@ -175,9 +175,13 @@ def write_synthetic_dng(uncompressed_src: Path, dst: Path, cfa: np.ndarray, layo
 
 
 # Neutral grey step-wedge levels (linear, in *balanced* space — multiplied by
-# AsShotNeutral per channel below) + a few in-range colour patches. Spans
-# near-black to upper-midtone after the steep Camera-Standard tone curve.
-_WEDGE_LEVELS = (0.45, 0.30, 0.18, 0.10, 0.06, 0.03, 0.015, 0.007)
+# AsShotNeutral per channel below). For the D750 Camera-Standard profile the
+# ForwardMatrix is the ProPhoto passthrough, so balanced == ProPhoto: these
+# levels bracket the chromatic patches' max per-channel ProPhoto value (~0.6),
+# so neutrals matching at every level exonerates the PER-CHANNEL ExposureRamp +
+# ProfileToneCurve across the chromatic channel range — leaving the (h,s,v)-joint
+# LookTable as the only stage neutrals can't verify (see test docstring).
+_WEDGE_LEVELS = (0.65, 0.55, 0.45, 0.30, 0.18, 0.10, 0.06, 0.03, 0.015, 0.007)
 # Colour patches are kept MILD / desaturated (realistic surface colours, like a
 # ColorChecker) and given as camera RGB. Highly-saturated synthetic colours that
 # render outside the sRGB gamut diverge in the 8-bit sRGB comparison space
@@ -200,7 +204,7 @@ class ChartLayout:
     cols: int = 0
 
 
-def default_chart(as_shot_neutral: np.ndarray, rows: int = 3, cols: int = 4) -> ChartLayout:
+def default_chart(as_shot_neutral: np.ndarray, rows: int = 4, cols: int = 4) -> ChartLayout:
     """A `rows`×`cols` flat-patch chart: a neutral wedge (camera_rgb = L·ASN, so
     it white-balances neutral) plus colour patches. Patches are fractional
     rectangles with a margin gutter so interiors are sampled clear of edges."""

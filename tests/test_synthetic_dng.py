@@ -122,10 +122,15 @@ def test_flat_patches_match_dng_validate():
     assert de_neutral.max() < 0.5, f"neutral flat-patch max ΔE {de_neutral.max():.3f}"
 
     # CHROMATIC patches isolate a real, known divergence: ~4-8 ΔE, confirmed in
-    # wide-gamut ProPhoto too (NOT sRGB-gamut clipping), on the only stage that
-    # treats chromatic ≠ neutral — the LookTable (HSV cube). This is the source
-    # of the gym's documented "~5% flat-region colour tail" (CLAUDE.md / docs/
-    # VALIDATION.md). The synthetic chart surfaces it cleanly because the gym's
+    # wide-gamut ProPhoto too (NOT sRGB-gamut clipping). It is localised to the
+    # LookTable (HSV cube) by elimination: the ExposureRamp + ProfileToneCurve
+    # are PURE PER-CHANNEL functions, and the neutral wedge matches at every
+    # level up to ProPhoto 0.65 — above the chromatic patches' max per-channel
+    # value (~0.58) — so those per-channel ops are verified across the chromatic
+    # channel range. The (h,s,v)-joint LookTable is the only chromatic-affecting
+    # stage neutrals (sat=0) cannot exercise, hence the only remaining suspect.
+    # This is the source of the gym's documented "~5% flat-region colour tail"
+    # (CLAUDE.md / docs/VALIDATION.md), surfaced cleanly because the gym's
     # real-scene colours are too desaturated to probe these LookTable cells.
     # Upper-bound only (a future LookTable fix that drives this toward 0 must NOT
     # break the test); the headline neutral 0.000 stands regardless.
