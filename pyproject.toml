@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lrt-cinema"
-version = "0.6.0a0"
+version = "0.7.1a0"
 description = "Self-contained Python implementation of the Adobe DNG 1.7.1 render pipeline for LRTimelapse-driven timelapse sequences."
 readme = "README.md"
 requires-python = ">=3.10"

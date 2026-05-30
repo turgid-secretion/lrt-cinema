@@ -1,13 +1,14 @@
-"""Adobe DNG Converter subprocess wrapper tests.
+"""RAW→DNG converter wrapper tests (dnglab default, Adobe fallback).
 
-Pure mock-based — CI does not require Adobe DNG Converter to be installed.
-Real-binary smoke test (skipped when binary is absent) is included so dev
-runs catch breakage if the converter CLI surface changes.
+Pure mock-based for the subprocess paths — CI needs no converter installed.
+Real-binary smoke tests (skipped when the binary/NEF are absent) catch CLI-
+surface breakage on dev boxes.
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -18,7 +19,9 @@ from lrt_cinema.dng_convert import (
     DngConverterNotFound,
     cached_dng_path,
     convert_nef_to_dng,
+    find_converter,
     find_dng_converter,
+    find_dnglab,
     resolve_render_input,
 )
 
@@ -30,20 +33,16 @@ from lrt_cinema.dng_convert import (
 def test_cache_key_stable_for_same_file(tmp_path):
     src = tmp_path / "frame.nef"
     src.write_bytes(b"x" * 1024)
-    p1 = cached_dng_path(src, tmp_path / "cache")
-    p2 = cached_dng_path(src, tmp_path / "cache")
-    assert p1 == p2
+    assert cached_dng_path(src, tmp_path / "cache") == cached_dng_path(src, tmp_path / "cache")
 
 
 def test_cache_key_changes_when_file_changes(tmp_path):
     src = tmp_path / "frame.nef"
     src.write_bytes(b"x" * 1024)
     p1 = cached_dng_path(src, tmp_path / "cache")
-    # Modify file → mtime changes → cache key changes.
     src.write_bytes(b"y" * 2048)
     os.utime(src, (src.stat().st_atime + 10, src.stat().st_mtime + 10))
-    p2 = cached_dng_path(src, tmp_path / "cache")
-    assert p1 != p2
+    assert p1 != cached_dng_path(src, tmp_path / "cache")
 
 
 def test_cache_key_distinct_per_nef(tmp_path):
@@ -55,22 +54,52 @@ def test_cache_key_distinct_per_nef(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# find_dng_converter
+# Converter discovery
 # ---------------------------------------------------------------------------
 
 
-def test_find_raises_when_no_binary_available(tmp_path, monkeypatch):
-    """Force find to fail by clearing env + pointing at impossible paths."""
+def test_find_dnglab_respects_env_var(tmp_path, monkeypatch):
+    fake = tmp_path / "dnglab"
+    fake.write_text("fake")
+    fake.chmod(0o755)
+    monkeypatch.setenv("LRT_CINEMA_DNGLAB", str(fake))
+    assert find_dnglab() == fake
+
+
+def test_find_converter_prefers_dnglab(tmp_path, monkeypatch):
+    fake = tmp_path / "dnglab"
+    fake.write_text("fake")
+    fake.chmod(0o755)
+    monkeypatch.setenv("LRT_CINEMA_DNGLAB", str(fake))
+    binary, kind = find_converter()
+    assert kind == "dnglab" and binary == fake
+
+
+def test_find_converter_falls_back_to_adobe(tmp_path, monkeypatch):
+    """No dnglab anywhere, but Adobe present via env → kind 'adobe'."""
+    monkeypatch.delenv("LRT_CINEMA_DNGLAB", raising=False)
+    adobe = tmp_path / "adobe_dngc"
+    adobe.write_text("fake")
+    adobe.chmod(0o755)
+    monkeypatch.setenv("LRT_CINEMA_DNG_CONVERTER", str(adobe))
+    with patch("lrt_cinema.dng_convert.find_dnglab", return_value=None):
+        binary, kind = find_converter()
+    assert kind == "adobe" and binary == adobe
+
+
+def test_find_converter_raises_when_none(tmp_path, monkeypatch):
+    monkeypatch.delenv("LRT_CINEMA_DNGLAB", raising=False)
     monkeypatch.delenv("LRT_CINEMA_DNG_CONVERTER", raising=False)
     with (
+        patch("lrt_cinema.dng_convert.find_dnglab", return_value=None),
         patch("lrt_cinema.dng_convert._DNG_CONVERTER_PATHS", (str(tmp_path / "nope"),)),
-        pytest.raises(DngConverterNotFound, match="not found"),
+        pytest.raises(DngConverterNotFound, match="No RAW.*converter found"),
     ):
-        find_dng_converter()
+        find_converter()
 
 
-def test_find_respects_env_var(tmp_path, monkeypatch):
-    fake = tmp_path / "fakedngc"
+def test_find_dng_converter_env_var_back_compat(tmp_path, monkeypatch):
+    fake = tmp_path / "adobe"
     fake.write_text("fake")
     monkeypatch.setenv("LRT_CINEMA_DNG_CONVERTER", str(fake))
     assert find_dng_converter() == fake
@@ -84,93 +113,96 @@ def test_find_respects_env_var(tmp_path, monkeypatch):
 def test_resolve_passes_through_dng_unchanged(tmp_path):
     dng = tmp_path / "frame.dng"
     dng.write_bytes(b"dummy")
-    out = resolve_render_input(dng, tmp_path / "cache")
-    assert out == dng
+    assert resolve_render_input(dng, tmp_path / "cache") == dng
 
 
 def test_resolve_passes_through_nef_when_no_convert(tmp_path):
     nef = tmp_path / "frame.nef"
     nef.write_bytes(b"dummy")
-    out = resolve_render_input(nef, tmp_path / "cache", no_convert=True)
-    assert out == nef
+    assert resolve_render_input(nef, tmp_path / "cache", no_convert=True) == nef
 
 
 # ---------------------------------------------------------------------------
-# convert_nef_to_dng (mocked subprocess)
+# convert_nef_to_dng (mocked subprocess; dnglab `convert <in> <out>` shape)
 # ---------------------------------------------------------------------------
-
-
-def _fake_converter(stem: str, cache_dir: Path) -> None:
-    """Emulate Adobe DNG Converter's output side-effect."""
-    (cache_dir / f"{stem}.dng").write_bytes(b"\x49\x49\x2a\x00" + b"\x00" * 1000)
 
 
 def test_convert_runs_subprocess_and_caches(tmp_path):
     nef = tmp_path / "frame.nef"
     nef.write_bytes(b"raw bytes")
     cache_dir = tmp_path / "cache"
-
-    fake_binary = tmp_path / "fake_dngc"
+    fake_binary = tmp_path / "dnglab"
     fake_binary.write_text("#!/bin/sh\nexit 0\n")
     fake_binary.chmod(0o755)
 
     def fake_run(cmd, capture_output, timeout):
-        _fake_converter("frame", Path(cmd[-2]))  # -d <cache_dir> position
+        Path(cmd[-1]).write_bytes(b"\x49\x49\x2a\x00" + b"\x00" * 1000)  # dnglab: explicit out
         return subprocess.CompletedProcess(cmd, 0, b"", b"")
 
     with patch("lrt_cinema.dng_convert.subprocess.run", side_effect=fake_run):
         r1 = convert_nef_to_dng(nef, cache_dir, converter_binary=fake_binary)
-        assert r1.dng_path.is_file()
-        assert r1.from_cache is False
-        # Second call hits the cache — no subprocess.
+        assert r1.dng_path.is_file() and r1.from_cache is False
+        assert r1.converter_kind == "dnglab"
         with patch("lrt_cinema.dng_convert.subprocess.run") as run2:
             r2 = convert_nef_to_dng(nef, cache_dir, converter_binary=fake_binary)
             run2.assert_not_called()
-            assert r2.dng_path == r1.dng_path
-            assert r2.from_cache is True
+            assert r2.dng_path == r1.dng_path and r2.from_cache is True
+
+
+def test_convert_adobe_kind_cmd_shape(tmp_path):
+    """Adobe fallback uses `-c -d <dir>` and writes <stem>.dng into the dir."""
+    nef = tmp_path / "frame.nef"
+    nef.write_bytes(b"raw")
+    cache_dir = tmp_path / "cache"
+    fake = tmp_path / "adobe"
+    fake.write_text("")
+    fake.chmod(0o755)
+
+    def fake_run(cmd, capture_output, timeout):
+        assert cmd[1] == "-c" and cmd[2] == "-d"  # Adobe argv shape
+        (Path(cmd[3]) / f"{nef.stem}.dng").write_bytes(b"II*\x00" + b"\x00" * 100)
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+    with patch("lrt_cinema.dng_convert.subprocess.run", side_effect=fake_run):
+        r = convert_nef_to_dng(nef, cache_dir, converter_binary=fake, converter_kind="adobe")
+    assert r.converter_kind == "adobe" and r.dng_path.is_file()
 
 
 def test_convert_raises_on_subprocess_failure(tmp_path):
     nef = tmp_path / "frame.nef"
     nef.write_bytes(b"raw")
-    cache_dir = tmp_path / "cache"
-    fake_binary = tmp_path / "fakedngc"
-    fake_binary.write_text("")
-    fake_binary.chmod(0o755)
-
-    with patch(
-        "lrt_cinema.dng_convert.subprocess.run",
-        return_value=subprocess.CompletedProcess([], 1, b"", b"bang"),
-    ), pytest.raises(RuntimeError, match="Adobe DNG Converter failed"):
-        convert_nef_to_dng(nef, cache_dir, converter_binary=fake_binary)
+    fake = tmp_path / "dnglab"
+    fake.write_text("")
+    fake.chmod(0o755)
+    with (
+        patch(
+            "lrt_cinema.dng_convert.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 1, b"", b"bang"),
+        ),
+        pytest.raises(RuntimeError, match="conversion failed"),
+    ):
+        convert_nef_to_dng(nef, tmp_path / "cache", converter_binary=fake)
 
 
 def test_convert_raises_when_no_output_produced(tmp_path):
     nef = tmp_path / "frame.nef"
     nef.write_bytes(b"raw")
-    cache_dir = tmp_path / "cache"
-    fake_binary = tmp_path / "fakedngc"
-    fake_binary.write_text("")
-    fake_binary.chmod(0o755)
-
-    with patch(
-        "lrt_cinema.dng_convert.subprocess.run",
-        return_value=subprocess.CompletedProcess([], 0, b"", b""),
-    ), pytest.raises(RuntimeError, match="produced no file"):
-        convert_nef_to_dng(nef, cache_dir, converter_binary=fake_binary)
-
-
-# ---------------------------------------------------------------------------
-# Parallel-conversion regression (race against Adobe's fixed-name output)
-# ---------------------------------------------------------------------------
+    fake = tmp_path / "dnglab"
+    fake.write_text("")
+    fake.chmod(0o755)
+    with (
+        patch(
+            "lrt_cinema.dng_convert.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, b"", b""),
+        ),
+        pytest.raises(RuntimeError, match="produced no file"),
+    ):
+        convert_nef_to_dng(nef, tmp_path / "cache", converter_binary=fake)
 
 
 def test_convert_parallel_same_nef_serializes_on_lock(tmp_path):
-    """Four workers converting the same NEF in parallel must serialize on
-    the file lock: exactly one runs the subprocess, the rest see a populated
-    cache, and the cached DNG is intact. Without the lock, two workers can
-    both pass dst.exists(), race on Adobe's fixed `<stem>.dng` output, and
-    one fails ENOENT during rename — that's the bug this guards."""
+    """Four workers converting the same NEF must serialize on the file lock:
+    exactly one runs the subprocess; the rest see a populated cache."""
     import threading
     import time as _time
     from concurrent.futures import ThreadPoolExecutor
@@ -178,53 +210,40 @@ def test_convert_parallel_same_nef_serializes_on_lock(tmp_path):
     nef = tmp_path / "frame.nef"
     nef.write_bytes(b"raw bytes")
     cache_dir = tmp_path / "cache"
-    fake_binary = tmp_path / "fake_dngc"
-    fake_binary.write_text("#!/bin/sh\nexit 0\n")
-    fake_binary.chmod(0o755)
+    fake = tmp_path / "dnglab"
+    fake.write_text("#!/bin/sh\nexit 0\n")
+    fake.chmod(0o755)
 
-    n_workers = 4
     invocations: list[list[str]] = []
     inv_lock = threading.Lock()
-    barrier = threading.Barrier(n_workers)
+    barrier = threading.Barrier(4)
 
     def fake_run(cmd, capture_output, timeout):
         with inv_lock:
             invocations.append(list(cmd))
-        # Sleep widens the overlap window — without the file lock, all four
-        # workers would be inside the subprocess concurrently here.
         _time.sleep(0.05)
-        _fake_converter(Path(cmd[-1]).stem, Path(cmd[-2]))
+        Path(cmd[-1]).write_bytes(b"\x49\x49\x2a\x00" + b"\x00" * 1000)
         return subprocess.CompletedProcess(cmd, 0, b"", b"")
 
     def worker(_):
         barrier.wait()
-        return convert_nef_to_dng(nef, cache_dir, converter_binary=fake_binary)
+        return convert_nef_to_dng(nef, cache_dir, converter_binary=fake)
 
     with (
         patch("lrt_cinema.dng_convert.subprocess.run", side_effect=fake_run),
-        ThreadPoolExecutor(max_workers=n_workers) as pool,
+        ThreadPoolExecutor(max_workers=4) as pool,
     ):
-        results = list(pool.map(worker, range(n_workers)))
+        results = list(pool.map(worker, range(4)))
 
-    assert len(invocations) == 1, (
-        f"expected exactly 1 subprocess call under lock; got {len(invocations)}"
-    )
-    paths = {r.dng_path for r in results}
-    assert len(paths) == 1, f"workers disagreed on dst path: {paths}"
-    fresh = [r for r in results if not r.from_cache]
-    assert len(fresh) == 1, f"expected exactly one fresh convert, got {len(fresh)}"
-    dst = results[0].dng_path
-    assert dst.is_file()
-    assert dst.read_bytes()[:4] == b"\x49\x49\x2a\x00"
+    assert len(invocations) == 1
+    assert len({r.dng_path for r in results}) == 1
+    assert len([r for r in results if not r.from_cache]) == 1
+    assert results[0].dng_path.read_bytes()[:4] == b"\x49\x49\x2a\x00"
 
 
 def test_convert_parallel_same_stem_different_paths_no_clobber(tmp_path):
-    """Behavioural check: two NEFs sharing a stem in different folders
-    convert in parallel without corrupting each other's cache slot. They
-    have different cache keys (different locks) so subprocesses can run
-    concurrently — passes trivially under the worker-private temp dir
-    design, and would fail loudly if a future change re-introduces a
-    shared output directory."""
+    """Two NEFs sharing a stem in different folders convert in parallel without
+    corrupting each other's cache slot (distinct keys → distinct locks)."""
     import threading
     import time as _time
     from concurrent.futures import ThreadPoolExecutor
@@ -234,31 +253,26 @@ def test_convert_parallel_same_stem_different_paths_no_clobber(tmp_path):
     dir_a.mkdir()
     dir_b.mkdir()
     nef_a = dir_a / "frame.nef"
-    nef_b = dir_b / "frame.nef"
     nef_a.write_bytes(b"NEF_A_PAYLOAD")
+    nef_b = dir_b / "frame.nef"
     nef_b.write_bytes(b"NEF_B_PAYLOAD_DISTINCT")
     cache_dir = tmp_path / "cache"
-    fake_binary = tmp_path / "fake_dngc"
-    fake_binary.write_text("#!/bin/sh\nexit 0\n")
-    fake_binary.chmod(0o755)
-
+    fake = tmp_path / "dnglab"
+    fake.write_text("#!/bin/sh\nexit 0\n")
+    fake.chmod(0o755)
     barrier = threading.Barrier(2)
 
     def fake_run(cmd, capture_output, timeout):
-        # Tag each fake DNG with its input bytes so we can prove the right
-        # body ended up in the right cache slot.
-        in_path = Path(cmd[-1])
-        out_dir = Path(cmd[-2])
+        in_path = Path(cmd[-2])
+        out = Path(cmd[-1])  # dnglab: convert <in> <out>
         tag = in_path.read_bytes()
         _time.sleep(0.05)
-        (out_dir / f"{in_path.stem}.dng").write_bytes(
-            b"\x49\x49\x2a\x00" + tag + b"\x00" * 100
-        )
+        out.write_bytes(b"\x49\x49\x2a\x00" + tag + b"\x00" * 100)
         return subprocess.CompletedProcess(cmd, 0, b"", b"")
 
     def worker(nef):
         barrier.wait()
-        return convert_nef_to_dng(nef, cache_dir, converter_binary=fake_binary)
+        return convert_nef_to_dng(nef, cache_dir, converter_binary=fake)
 
     with (
         patch("lrt_cinema.dng_convert.subprocess.run", side_effect=fake_run),
@@ -270,34 +284,24 @@ def test_convert_parallel_same_stem_different_paths_no_clobber(tmp_path):
         res_b = fut_b.result()
 
     assert res_a.dng_path != res_b.dng_path
-    assert res_a.dng_path.is_file()
-    assert res_b.dng_path.is_file()
     assert b"NEF_A_PAYLOAD" in res_a.dng_path.read_bytes()
     assert b"NEF_B_PAYLOAD_DISTINCT" in res_b.dng_path.read_bytes()
 
 
 # ---------------------------------------------------------------------------
-# Optional: real-binary smoke (only when Adobe DNG Converter is installed)
+# Real-binary smoke (runs only when dnglab + a test NEF are present)
 # ---------------------------------------------------------------------------
 
-
-_REAL_BINARY = Path(
-    "/Applications/Adobe DNG Converter.app/Contents/MacOS/Adobe DNG Converter",
-)
-_REAL_NEF = Path("/tmp/v04_test_input/DSC_4053.NEF")
+_REAL_NEF = Path(__file__).parent / "fixtures" / "raw" / "sample.NEF"
 
 
 @pytest.mark.skipif(
-    not (_REAL_BINARY.is_file() and _REAL_NEF.is_file()),
-    reason="Adobe DNG Converter binary or test NEF unavailable",
+    not (shutil.which("dnglab") and _REAL_NEF.exists()),
+    reason="dnglab binary or test NEF unavailable",
 )
-def test_real_binary_smoke(tmp_path):
-    """Convert a real NEF → DNG via the real Adobe DNG Converter. Checks
-    the subprocess invocation actually works on the dev box."""
+def test_real_dnglab_smoke(tmp_path):
+    """Convert a real NEF → DNG via the real dnglab binary (Adobe-free path)."""
     r = convert_nef_to_dng(_REAL_NEF, tmp_path)
+    assert r.converter_kind == "dnglab"
     assert r.dng_path.is_file()
-    # Adobe DNG Converter produces ~17 MB DNGs for D750 (sensor size).
-    size_mb = r.dng_path.stat().st_size / (1024 * 1024)
-    assert 10 < size_mb < 25, f"unexpected DNG size: {size_mb:.1f} MB"
-    # TIFF header magic — DNG is TIFF-shaped.
     assert r.dng_path.read_bytes()[:4] in (b"II*\x00", b"MM\x00*")

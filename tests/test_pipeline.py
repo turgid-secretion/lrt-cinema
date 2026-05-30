@@ -199,3 +199,60 @@ def test_holy_grail_kelvin_override_changes_render():
     )
     assert tungsten.scene_kelvin == 3500.0
     assert shade.scene_kelvin == 8000.0
+
+
+# --- Stage 7 early-exit (v0.7.1 cinema-linear-master) ----------------------
+
+
+def test_stage_7_emission_rejects_other_stops():
+    """`stop_after_stage` accepts only 7 or 9 — any other value is a bug
+    in the caller and must fail fast at the validation check, before any
+    matrix math runs."""
+    from lrt_cinema.dcp import DCPProfile
+    from lrt_cinema.pipeline import apply_adobe_pipeline
+
+    camera_rgb = np.zeros((4, 4, 3), dtype=np.float32)
+    asn = np.array([0.5, 1.0, 0.7], dtype=np.float32)
+    with pytest.raises(ValueError, match="stop_after_stage"):
+        apply_adobe_pipeline(
+            camera_rgb, DCPProfile(), asn, 5500.0, stop_after_stage=11,
+        )
+
+
+@pytest.mark.skipif(
+    not _fixture_available(_GYM_DNG, _GYM_DCP),
+    reason="Gym DNG + DCP required for Stage 7 emission test.",
+)
+def test_stage_7_emission_preserves_more_overrange_than_stage_9():
+    """Stage 7 (cinema-linear-master) emits scene-referred data with the
+    ExposureRamp's overrange (>1.0) preserved, so half-float EXR carries
+    recoverable highlight headroom. Stage 9 (cinema-linear-finished) feeds
+    a ProfileToneCurve that clamps to [0, 1], discarding that headroom.
+    This is the load-bearing recovery claim of cinema-linear-master — and
+    the one the shipped v0.7.1 quietly failed (the ExposureRamp clamped at
+    1.0 before the Stage-7 emission point). See pipeline.py support_overrange
+    and tools/verify_emission_format.py check C3."""
+    profile = parse_dcp(_GYM_DCP)
+    stage9 = render_frame(_GYM_DNG, profile, dcp_path=_GYM_DCP)
+    stage7 = render_frame(
+        _GYM_DNG, profile, dcp_path=_GYM_DCP, stop_after_stage=7,
+    )
+    # Stage 9 clamps inside the tone-curve solver — no overrange survives.
+    assert stage9.prophoto.max() <= 1.0 + 1e-3
+    assert float((stage9.prophoto > 1.0).mean()) < 1e-4
+    # Stage 7 MUST preserve real overrange highlights (gym frame: ~1 stop,
+    # max ≈ 2.0). A regression to support_overrange=False shows up here as
+    # max == 1.0 and 0% overrange — the exact v0.7.1 defect.
+    assert stage7.prophoto.max() > 1.05, (
+        f"Stage 7 lost its overrange highlights (max {stage7.prophoto.max():.3f}); "
+        f"the ExposureRamp support_overrange flag is off for the stage-7 path "
+        f"— recovery is defeated."
+    )
+    assert float((stage7.prophoto > 1.0).mean()) > float((stage9.prophoto > 1.0).mean())
+    # And Stage 7 must still be materially different from Stage 9 in-gamut
+    # (it skips DCP LookTable + ProfileToneCurve).
+    diff = float(np.abs(np.clip(stage7.prophoto, 0, 1) - stage9.prophoto).mean())
+    assert diff > 0.005, (
+        f"Stage 7 and Stage 9 outputs are nearly identical in-gamut (mean abs "
+        f"diff {diff:.5f}); the tone curve / LookTable did not change the render."
+    )
