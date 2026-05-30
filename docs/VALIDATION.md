@@ -372,13 +372,16 @@ measurement point for both nonzero-floor axes.
   D750). A flat-patch synthetic DNG (dnglab uncompressed clone + raw-strip
   byte-patch honouring BlackLevel 600 / WhiteLevel 15520) rendered both sides
   with Camera Standard. **Neutral wedge: median ΔE 0.000** across the tonal
-  range — the clean isolation of the bit-match, free of the demosaic-edge tail.
-  **Chromatic flats diverge ~4–8 ΔE**, confirmed in wide-gamut ProPhoto (so NOT
-  sRGB-gamut clipping) and localised to the **LookTable** (the only
-  chromatic-vs-neutral stage). This IS the gym's documented "~5% flat-region
-  colour tail", now surfaced cleanly (real-scene colours are too desaturated to
-  probe these cells) and the concrete **drive-toward-0 target** for the open-DCP
-  transition.
+  range (incl. bright levels up to ProPhoto 0.65) — the clean isolation of the
+  bit-match, free of the demosaic-edge tail. **Chromatic flats diverge ~4–8 ΔE**,
+  confirmed in wide-gamut ProPhoto (so NOT sRGB-gamut clipping). Localised to the
+  **LookTable** by elimination: the per-channel ExposureRamp + ProfileToneCurve
+  are exonerated because the neutral wedge — pure per-channel inputs — matches at
+  every level *above* the chromatic patches' max per-channel value, leaving the
+  (h,s,v)-joint LookTable as the only chromatic-affecting stage neutrals (sat=0)
+  can't exercise. This IS the gym's documented "~5% flat-region colour tail",
+  now surfaced cleanly (real-scene colours are too desaturated to probe these
+  cells) and the concrete **drive-toward-0 target** for the open-DCP transition.
 
 ### Empirical finding 2026-05-23 — lrt-cinema vs LRT 7.5.3 preview (SUPERSEDED — darktable-era, pre-v0.6 Python pipeline; kept for history)
 

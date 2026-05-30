@@ -426,3 +426,19 @@ def test_hsv_cube_uniform_hue_rotation_is_exact():
     # Neutral pixel: sat≈0, so it must come back out neutral after hsv→rgb.
     out = _hsv_to_rgb_dcp(h2, s2, v2)
     np.testing.assert_allclose(out[0, 1], [0.3, 0.3, 0.3], atol=1e-5)
+
+
+def test_hsv_cube_rotation_detects_wrong_degree_scale():
+    """Sensitivity leg for the HSV cube: the hue shift converts degrees→[0,6)
+    via 6/360. A wrong scale (e.g. 6/180, a doubled rotation — a plausible
+    transcription bug) lands at a clearly different hue, so the real op's exact
+    match to the 6/360 expectation is discriminating, not a rubber stamp."""
+    rgb = np.array([[[0.6, 0.3, 0.2]]], dtype=np.float32)
+    cube = _uniform_cube(120.0, 1.0, 1.0)
+    h, s, v, _ = _rgb_to_hsv_dcp(rgb)
+    h2, _, _ = _apply_hsv_cube(h, s, v, cube.data_1, cube)
+    correct = (h[0, 0] + 120.0 * (6.0 / 360.0)) % 6.0
+    wrong = (h[0, 0] + 120.0 * (6.0 / 180.0)) % 6.0
+    assert abs(correct - wrong) > 0.5, "the two degree scales must be distinguishable"
+    assert abs(h2[0, 0] - correct) < 1e-5      # real op uses the correct scale
+    assert abs(h2[0, 0] - wrong) > 0.5         # ... and is NOT the buggy scale
