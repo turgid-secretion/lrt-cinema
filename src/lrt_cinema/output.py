@@ -3,37 +3,35 @@
 Stage 13 of the pipeline (per `docs/research/v06-architecture.md` §"Pipeline
 stage order" and `docs/research/v07-spec-revision-plan.md`).
 
-Presets:
+Presets (only standards-aligned colour spaces — see CLAUDE.md allowlist):
 
   lrtimelapse            → 16-bit sRGB display TIFF (embedded ICC) — v0.8
                            DEFAULT. Display-referred, full LRT look baked;
                            the only emission LRT's video renderer re-ingests
                            (LRT → Render from Intermediate → Motion Blur).
-  cinema-linear-finished → 16-bit half EXR (DWAB), ACEScg — γ; scene-linear
-                           master for DaVinci Resolve / ACES (bypasses LRT);
+  cinema-linear-finished → 16-bit half EXR (DWAB), scene-linear ACEScg (AP1) —
+                           γ; master for DaVinci Resolve / ACES (bypasses LRT);
                            full LRT intent baked.
-  cinema-linear          → 32-bit float TIFF, linear Rec.2020 — v0.6
-                           back-compat; uncompressed reference master.
-  cinema-aces            → 32-bit float EXR (PIZ), linear Rec.2020 — v0.6
-                           back-compat; one-time DeprecationWarning suggests
-                           cinema-linear-finished.
-  stills-finished        → 16-bit int TIFF, Rec.2020 (gamma) + AgX  —
-                           DEFERRED to v0.6.x.
+  cinema-linear-master   → 16-bit half EXR (DWAB), scene-linear ACEScg (AP1) —
+                           β; Stage-7 emit for HDR headroom.
+  stills-finished        → display Rec.2020 (gamma) + AgX — DEFERRED.
 
-Color conversion math:
-  ProPhoto(D50) → XYZ(D50) → [Bradford CAT] → XYZ(D65) → Rec.2020 linear
+(Removed: cinema-linear / cinema-aces — both emitted *linear Rec.2020*, a
+delivery gamut misused as scene-referred. ACEScg/ACES2065-1 are the only
+standards-aligned scene-linear gamuts; see CLAUDE.md.)
+
+Color conversion math (scene-linear EXR):
+  ProPhoto(D50) → XYZ(D50) → [Bradford CAT D50→~D60] → ACEScg (AP1) linear
 
 Library boundary:
   - tifffile for TIFF (battle-tested, ~300 ms for 24 MP 16-bit write).
-  - OpenEXR (capital-O, the ASWF PyPI binding) for EXR. PIZ (lossless,
-    v0.6 cinema-aces) and DWAB (visually-lossless cinema scene-referred
-    standard, v0.7 cinema-linear-finished default) both supported.
+  - OpenEXR (capital-O, the ASWF PyPI binding) for EXR. DWAB (visually-lossless
+    cinema scene-referred default) + PIZ/ZIP (lossless) supported.
 """
 
 from __future__ import annotations
 
 import json
-import warnings
 from pathlib import Path
 from typing import Literal
 
@@ -43,16 +41,14 @@ from lrt_cinema import __version__
 
 # --- Color-space transforms (ProPhoto(D50) → scene-linear target) ----------
 
-# Emission colourspaces. The live cinema masters (cinema-linear-finished /
-# -master) now target ACEScg (AP1) — the standards-aligned scene-referred
-# grading space: Resolve exposes a named "ACEScg" Input Color Space (one clean
-# click), whereas "linear Rec.2020" is a delivery gamut with NO matching Resolve
-# Input entry (only the gamut-agnostic "Linear", which inherits the timeline
-# gamut). See docs/research/v08-linear-exr-gamut-resolve-nuke.md. AP1/AP0 are
-# ~D60-white; Rec.2020 is D65 — the Bradford CAT adapts to each target.
+# Scene-referred (linear) emission colourspaces — the standards-aligned set ONLY.
+# Linear Rec.2020 is deliberately ABSENT: Rec.2020 (ITU-R BT.2020) is a
+# delivery/display gamut, and using it linear/scene-referred is a colour-science
+# error ("Franken-gamut") with no matching Resolve Input entry — see CLAUDE.md
+# §"Colour-space allowlist" and docs/research/v08-linear-exr-gamut-resolve-nuke.md.
+# AP1/AP0 are ~D60-white; the Bradford CAT adapts ProPhoto(D50)→target.
 _COLOURSPACE_NAMES = {
-    "rec2020": "ITU-R BT.2020",   # D65 — delivery gamut, v0.6/back-compat
-    "acescg": "ACEScg",           # AP1, ~D60 — scene-referred grading default
+    "acescg": "ACEScg",           # AP1, ~D60 — scene-referred grading DEFAULT
     "aces2065": "ACES2065-1",     # AP0, ~D60 — archival / interchange
 }
 EXR_COLORSPACES = tuple(_COLOURSPACE_NAMES)
@@ -90,12 +86,13 @@ _TIFF_TYPE_UNDEFINED = 7
 
 
 def _prophoto_to_linear(
-    prophoto_d50: np.ndarray, colorspace: str = "rec2020",
+    prophoto_d50: np.ndarray, colorspace: str = "acescg",
 ) -> np.ndarray:
     """Linear ProPhoto(D50) → scene-linear `colorspace`, Bradford-adapted to
-    that space's whitepoint (D65 for Rec.2020; ~D60 for ACEScg/ACES2065-1).
+    that space's whitepoint (~D60 for ACEScg/ACES2065-1).
 
-    `colorspace` ∈ EXR_COLORSPACES. Computed via `colour.RGB_to_RGB`.
+    `colorspace` ∈ EXR_COLORSPACES (acescg | aces2065). Computed via
+    `colour.RGB_to_RGB`.
     """
     import colour
 
@@ -115,11 +112,6 @@ def _prophoto_to_linear(
     return out.reshape(h, w, 3).astype(np.float32)
 
 
-def _prophoto_to_rec2020(prophoto_d50: np.ndarray) -> np.ndarray:
-    """Back-compat alias: ProPhoto(D50) → linear Rec.2020(D65)."""
-    return _prophoto_to_linear(prophoto_d50, "rec2020")
-
-
 def _exr_chromaticities(colorspace: str) -> tuple[float, ...]:
     """OpenEXR `chromaticities` attribute (Rx Ry Gx Gy Bx By Wx Wy) for
     `colorspace`, taken from colour-science so primaries/whitepoint are exact.
@@ -135,48 +127,6 @@ def _exr_chromaticities(colorspace: str) -> tuple[float, ...]:
         float(p[0, 0]), float(p[0, 1]), float(p[1, 0]), float(p[1, 1]),
         float(p[2, 0]), float(p[2, 1]), float(wp[0]), float(wp[1]),
     )
-
-
-# --- TIFF writer -----------------------------------------------------------
-
-
-def write_tiff_linear_rec2020(
-    prophoto: np.ndarray, dst: Path | str, bit_depth: int = 32,
-) -> Path:
-    """Convert linear ProPhoto(D50) → linear Rec.2020(D65) and write a TIFF.
-
-    `bit_depth=32` (default) writes 32-bit float — required for linear
-    scene-referred data; 16-bit linear has ~6 bits of precision in the
-    bottom stop, insufficient for Resolve grade. Float preserves the
-    overrange (>1) signal.
-
-    `bit_depth=16` writes 16-bit unsigned int, clipping to [0, 1] —
-    suitable only for already-graded display-referred content.
-
-    `bit_depth=8` writes 8-bit unsigned int — preview/contact-sheet use
-    only.
-    """
-    import tifffile
-
-    if bit_depth not in (8, 16, 32):
-        raise ValueError(f"bit_depth must be 8, 16, or 32, got {bit_depth}")
-    rec2020 = _prophoto_to_rec2020(prophoto)
-    if bit_depth == 32:
-        pixels = rec2020.astype(np.float32)
-    elif bit_depth == 16:
-        clipped = np.clip(rec2020, 0.0, 1.0)
-        pixels = (clipped * 65535.0 + 0.5).astype(np.uint16)
-    else:
-        clipped = np.clip(rec2020, 0.0, 1.0)
-        pixels = (clipped * 255.0 + 0.5).astype(np.uint8)
-    dst = Path(dst)
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    tifffile.imwrite(
-        str(dst),
-        pixels,
-        photometric="rgb",
-    )
-    return dst
 
 
 # --- Display-referred TIFF writer (LRTimelapse round-trip) -----------------
@@ -312,39 +262,38 @@ _EXR_BIT_DEPTHS = ("half", "float")
 _EXR_COMPRESSIONS = ("piz", "zip", "dwab")
 
 
-def write_exr_linear_rec2020(
+def write_exr_scene_linear(
     prophoto: np.ndarray,
     dst: Path | str,
     bit_depth: Literal["half", "float"] = "half",
     compression: Literal["piz", "zip", "dwab"] = "dwab",
-    colorspace: Literal["rec2020", "acescg", "aces2065"] = "rec2020",
+    colorspace: Literal["acescg", "aces2065"] = "acescg",
 ) -> Path:
-    """Write a scene-linear OpenEXR.
+    """Write a scene-linear OpenEXR in a standards-aligned gamut.
 
-    `colorspace` (default `"rec2020"` for back-compat; the live cinema presets
-    pass `"acescg"`): emission gamut/whitepoint, one of `EXR_COLORSPACES`. The
+    `colorspace` (default `"acescg"`): emission gamut/whitepoint, one of
+    `EXR_COLORSPACES` (`acescg` = AP1 grading; `aces2065` = AP0 archival). The
     matching `chromaticities` attribute is written to the header (and
     `acesImageContainerFlag=1` for `"aces2065"`). Resolve ignores these tags
     (gamut = the clip's Input Color Space) but Nuke/OIIO/archival honor them.
+    (Linear Rec.2020 is deliberately NOT an option — see CLAUDE.md allowlist.)
 
     `bit_depth`:
-      - `"half"` (default; v0.7 cinema-linear-finished) — 16-bit float.
-        Carries ~30 stops of headroom; cinema scene-referred standard.
-      - `"float"` (v0.6 cinema-aces back-compat) — 32-bit float. 2× the
-        bytes; recoverable past half's denormal floor (rare).
+      - `"half"` (default) — 16-bit float. ~30 stops of headroom; cinema
+        scene-referred standard.
+      - `"float"` — 32-bit float. 2× the bytes; recoverable past half's
+        denormal floor (rare).
 
     `compression`:
-      - `"dwab"` (default; v0.7) — DCT-based, visually-lossless lossy.
-        10-18× smaller than PIZ at half precision. Cinema scene-referred
-        compressed-intermediate default.
-      - `"piz"` (v0.6 cinema-aces back-compat) — wavelet, lossless.
+      - `"dwab"` (default) — DCT-based, visually-lossless lossy. 10-18× smaller
+        than PIZ at half precision. Cinema scene-referred intermediate default.
+      - `"piz"` — wavelet, lossless.
       - `"zip"` — deflate, lossless. Mid-pack size/speed.
 
     Channels MUST be C-contiguous arrays. Passing strided views of the
-    interleaved (H, W, 3) source (e.g. `rec2020[..., 0]`) silently
-    produces garbled per-channel data on real-sized renders — the binding
-    reads with a tight stride assumption. `np.ascontiguousarray` forces
-    a per-channel copy.
+    interleaved (H, W, 3) source silently produces garbled per-channel data on
+    real-sized renders — the binding reads with a tight stride assumption.
+    `np.ascontiguousarray` forces a per-channel copy.
     """
     import OpenEXR
 
@@ -388,29 +337,6 @@ def write_exr_linear_rec2020(
 
 # --- Preset dispatch -------------------------------------------------------
 
-_CINEMA_ACES_DEPRECATION_WARNED = False
-
-
-def _warn_cinema_aces_once() -> None:
-    """Emit the cinema-aces DeprecationWarning at most once per process.
-
-    Per `docs/research/v07-spec-revision-plan.md` §"Phase 1 — ship
-    cinema-linear-finished (γ)", the v0.6 cinema-aces preset continues to
-    work for one release cycle with a deprecation pointer to the v0.7
-    default. Module-level guard so a 5000-frame render emits one warning,
-    not 5000."""
-    global _CINEMA_ACES_DEPRECATION_WARNED
-    if _CINEMA_ACES_DEPRECATION_WARNED:
-        return
-    _CINEMA_ACES_DEPRECATION_WARNED = True
-    warnings.warn(
-        "preset 'cinema-aces' is deprecated; use 'cinema-linear-finished' "
-        "(half-float DWAB EXR — same color science, 10-18× smaller). "
-        "cinema-aces will be removed in v0.8.",
-        DeprecationWarning,
-        stacklevel=3,
-    )
-
 
 def write_preset_output(
     prophoto: np.ndarray,
@@ -452,26 +378,18 @@ def write_preset_output(
         # Emit scene-linear ACEScg (AP1) — the standards-aligned grading space
         # (named Resolve Input entry; linear Rec.2020 has none). Tag is written
         # for interchange; Resolve picks gamut from Input Color Space = ACEScg.
-        return write_exr_linear_rec2020(
+        return write_exr_scene_linear(
             prophoto, dst_stem.with_suffix(".exr"),
             bit_depth="half", compression="dwab", colorspace="acescg",
         )
-    if preset == "cinema-linear":
-        return write_tiff_linear_rec2020(prophoto, dst_stem.with_suffix(".tif"))
-    if preset == "cinema-aces":
-        _warn_cinema_aces_once()
-        return write_exr_linear_rec2020(
-            prophoto, dst_stem.with_suffix(".exr"),
-            bit_depth="float", compression="piz",
-        )
     if preset == "stills-finished":
         raise NotImplementedError(
-            "stills-finished preset (Rec.2020 + AgX) is deferred to v0.6.x. "
-            "Use cinema-linear-finished, cinema-linear-master, cinema-linear, "
-            "or cinema-aces."
+            "stills-finished preset (display Rec.2020 + AgX) is deferred. "
+            "Use lrtimelapse (default), cinema-linear-finished, or "
+            "cinema-linear-master."
         )
     raise ValueError(
-        f"Unknown preset {preset!r}. Valid: cinema-linear-finished, "
-        f"cinema-linear-master, cinema-linear, cinema-aces, "
-        f"stills-finished (v0.6.x)."
+        f"Unknown preset {preset!r}. Valid: lrtimelapse, "
+        f"cinema-linear-finished, cinema-linear-master, "
+        f"stills-finished (deferred)."
     )

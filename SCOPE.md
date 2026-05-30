@@ -43,19 +43,16 @@ for the authoritative roadmap.
 
 | Preset | Container | Color space | Library | Status |
 |---|---|---|---|---|
-| `cinema-linear-finished` | 16-bit half EXR (DWAB) at Stage 13 | linear Rec.2020 | `OpenEXR` ASWF | **v0.7 default (γ)** |
-| `cinema-linear-master` | 16-bit half EXR (DWAB) at Stage 7 | linear Rec.2020 | `OpenEXR` ASWF | **v0.7.1 (β, Option B)** |
-| `cinema-linear` | 32-bit float TIFF | linear Rec.2020 | `tifffile` | back-compat |
-| `cinema-aces` | 32-bit float EXR (PIZ) | linear Rec.2020 | `OpenEXR` ASWF | deprecated (v0.8 removal) |
-| `stills-finished` | 16-bit int TIFF | Rec.2020 + AgX | n/a | NotImplemented (v0.6.x) |
+| `lrtimelapse` | 16-bit sRGB display TIFF (embedded ICC), `LRT_NNNNN` | sRGB (display) | `tifffile` | **v0.8 DEFAULT** |
+| `cinema-linear-finished` | 16-bit half EXR (DWAB) at Stage 13 | scene-linear ACEScg (AP1) | `OpenEXR` ASWF | γ (Resolve/ACES) |
+| `cinema-linear-master` | 16-bit half EXR (DWAB) at Stage 7 | scene-linear ACEScg (AP1) | `OpenEXR` ASWF | β (HDR headroom) |
+| `stills-finished` | display Rec.2020 + AgX | display-referred | n/a | NotImplemented (deferred) |
 
-**β-XML deferred to v0.8.** The originally-planned `cinema-linear-master`
-sidecar variant (per-sequence Resolve project XML carrying LRT keyframes)
-proved infeasible — Resolve does not preserve per-frame grade keyframes
-through any documented import path. See
-[`docs/research/v07-beta-xml-deadend.md`](docs/research/v07-beta-xml-deadend.md).
-The v0.7.1 `cinema-linear-master` preset is the Option B pivot: Stage 7
-pixel bake without sidecar.
+**Removed in v0.8: `cinema-linear` / `cinema-aces`.** Both emitted *linear
+Rec.2020* — a delivery gamut misused as scene-referred (a colour-science error,
+no matching Resolve Input entry). ACEScg (AP1) / ACES2065-1 (AP0) are the only
+standards-aligned scene-linear gamuts; see CLAUDE.md §"Colour-space allowlist"
+and [`docs/research/v08-linear-exr-gamut-resolve-nuke.md`](docs/research/v08-linear-exr-gamut-resolve-nuke.md).
 
 ## Validation
 

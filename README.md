@@ -49,11 +49,14 @@ for the empirical journey.
 | Preset | Container | Color space | Notes |
 |---|---|---|---|
 | `lrtimelapse` | 16-bit sRGB TIFF (embedded ICC), `LRT_NNNNN` naming | sRGB (Rec.709 + sRGB OETF), display-referred | **v0.8 DEFAULT.** The only emission LRT's video renderer re-ingests — take it back into LRT for video + Motion Blur. Full LRT look baked. |
-| `cinema-linear-finished` | 16-bit half OpenEXR (DWAB) at Stage 13 | scene-linear ACEScg (AP1) | Scene-linear master for DaVinci Resolve / ACES (bypasses LRT). Full DCP shape baked; 10–18× smaller than `cinema-aces`. |
-| `cinema-linear-master` | 16-bit half OpenEXR (DWAB) at Stage 7 | Linear Rec.2020 | **v0.7.1 (β).** Skips DCP LookTable + ProfileToneCurve for HDR headroom. LR PV2012 keyframes still bake into pixels. Pick this when highlight recovery matters more than the canned DCP look. |
-| `cinema-linear` | 32-bit float TIFF | Linear Rec.2020 | Uncompressed reference master; v0.6 back-compat. |
-| `cinema-aces` | 32-bit float OpenEXR (PIZ) | Linear Rec.2020 | **Deprecated.** Emits one-time `DeprecationWarning`; planned removal in v0.8. Use `cinema-linear-finished` instead. |
-| `stills-finished` | 16-bit TIFF | Rec.2020 (gamma) + AgX | **v0.6.x** — `NotImplementedError`. |
+| `cinema-linear-finished` | 16-bit half OpenEXR (DWAB) at Stage 13 | scene-linear ACEScg (AP1) | Scene-linear master for DaVinci Resolve / ACES (bypasses LRT). Full DCP shape baked. |
+| `cinema-linear-master` | 16-bit half OpenEXR (DWAB) at Stage 7 | scene-linear ACEScg (AP1) | β. Skips DCP LookTable + ProfileToneCurve for HDR headroom. LR PV2012 keyframes still bake into pixels. Pick this when highlight recovery matters more than the canned DCP look. |
+| `stills-finished` | display Rec.2020 (gamma) + AgX | display-referred | **Deferred** — `NotImplementedError`. |
+
+> **Removed in v0.8:** `cinema-linear` / `cinema-aces` — both emitted *linear
+> Rec.2020*, a delivery gamut misused as scene-referred (a colour-science error).
+> ACEScg (AP1) / ACES2065-1 (AP0) are the only standards-aligned scene-linear
+> gamuts; see [CLAUDE.md](CLAUDE.md) §"Colour-space allowlist".
 
 ## Requirements
 

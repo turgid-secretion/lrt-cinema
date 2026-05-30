@@ -90,11 +90,9 @@ def _build_parser() -> argparse.ArgumentParser:
             "lrtimelapse (DEFAULT; 16-bit sRGB display TIFF, embedded ICC, "
             "LRT_NNNNN naming — re-ingestible by LRT's video renderer for "
             "Motion Blur), cinema-linear-finished (half-float DWAB EXR, "
-            "ACEScg; scene-linear master for DaVinci Resolve), "
-            "cinema-linear-master (half-float DWAB EXR at Stage 7 for HDR "
-            "headroom), cinema-linear (32-bit float TIFF), "
-            "cinema-aces (deprecated; 32-bit float PIZ EXR), "
-            "stills-finished (v0.6.x)."
+            "scene-linear ACEScg; master for DaVinci Resolve), "
+            "cinema-linear-master (half-float DWAB EXR, ACEScg, at Stage 7 for "
+            "HDR headroom), stills-finished (deferred)."
         ),
     )
     render.add_argument(
