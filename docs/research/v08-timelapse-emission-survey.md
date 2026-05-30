@@ -169,7 +169,13 @@ aesthetics/usability/speed. Full breakdown in v09; headlines:
   **BSD-2** (a few GPLv3 files to strip), GPU-resident **live preview already
   solved** — could cut **~30–40%** off v1.0. Costs: one-person upstream,
   **Vulkan-only**, **no Windows** (port needed), nuklear GUI replaced.
-  **Recommendation: seriously evaluate a vkdt fork before from-scratch.**
+  **Outcome (2026-05-29): a vkdt fork was put through adversarial scrutiny →
+  NO-GO for now.** The critical path (Vulkan/native-systems engineering + the
+  GPLv2 `qvk` rewrite + originating a class-leading aesthetic) is exactly what a
+  "mostly-Claude" build can't carry; reopen only when a Vulkan engineer + design
+  origination are secured and the viewport-latency spike is run. See
+  [v09-standalone-repo-plan.md](v09-standalone-repo-plan.md) +
+  [v09-vkdt-fork-ui-strategy.md](v09-vkdt-fork-ui-strategy.md) §6.
 
 **Identity consequence:** the standalone is **exempt from the represent-all
 ceiling (§X)** — own colour science — the only posture that escapes it entirely.
