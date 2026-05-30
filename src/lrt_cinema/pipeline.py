@@ -415,14 +415,23 @@ def apply_adobe_pipeline(
     `default_black_render`: 0 = Auto (Shadows=5.0), 1 = None (Shadows=0).
     Read via `read_dcp_default_black_render(dcp_path)`.
 
-    `stop_after_stage` (v0.7.1): early-exit toggle for the
-    `cinema-linear-master` preset. Default 9 = full pipeline (v0.6
+    `stop_after_stage`: early-exit toggle. Default 9 = full pipeline (v0.6
     behaviour). 7 = stop after ExposureRamp, skipping LookTable (Stage 8)
-    + ProfileToneCurve (Stage 9). The Stage 7 output preserves HDR
-    headroom that the tone curve would otherwise clip, at the cost of
-    losing the DCP's tone-shape look. See
+    + ProfileToneCurve (Stage 9) — the `cinema-linear-master` preset; the
+    Stage 7 output preserves HDR headroom that the tone curve would
+    otherwise clip, at the cost of losing the DCP's tone-shape look. See
     `docs/research/v07-spec-revision-plan.md` §3 for the rationale.
-    Only 7 and 9 are supported; other values raise ValueError.
+
+    3 and 4 (v0.8) are the **colorimetric tap** — the absolute-accuracy /
+    preview measurement point per docs/VALIDATION.md §"Validation axes".
+    3 returns XYZ(D50) and 4 returns linear ProPhoto(D50), both taken
+    immediately post-ForwardMatrix and BEFORE HueSatMap / ExposureRamp /
+    LookTable / ProfileToneCurve shape the pixels. Measuring absolute ΔE
+    here (not on the rendered image) isolates colour-pipeline error from
+    Adobe's pictorial tone/look. XYZ(D50) and linear ProPhoto(D50) are one
+    fixed matrix apart (`ProPhoto RGB` RGB↔XYZ). Used by
+    `tests/test_colorimetric.py` (Axis 2). Only 3, 4, 7 and 9 are
+    supported; other values raise ValueError.
 
     Module boundary: this function ends at Stage `stop_after_stage`
     (post-tone-curve when 9, post-ExposureRamp when 7), with
@@ -431,9 +440,9 @@ def apply_adobe_pipeline(
     color conversion (Stage 13) lives in `output.py`. Stage 10 (the prior
     standalone `2^TotalBE` scalar) is removed — see module docstring.
     """
-    if stop_after_stage not in (7, 9):
+    if stop_after_stage not in (3, 4, 7, 9):
         raise ValueError(
-            f"stop_after_stage must be 7 or 9, got {stop_after_stage}",
+            f"stop_after_stage must be 3, 4, 7, or 9, got {stop_after_stage}",
         )
     h, w, _ = camera_rgb.shape
 
@@ -472,11 +481,24 @@ def apply_adobe_pipeline(
         xyz = xyz / n_xyz[1]
         xyz = xyz.reshape(h, w, 3).astype(np.float32)
 
+    # Colorimetric tap (Stage 3): XYZ(D50) immediately post-ForwardMatrix —
+    # the absolute-accuracy / preview measurement point, BEFORE any HSM /
+    # ExposureRamp / LookTable / ProfileToneCurve shaping. See docstring +
+    # docs/VALIDATION.md §"Validation axes".
+    if stop_after_stage == 3:
+        return xyz
+
     # Stage 4: XYZ(D50) → linear ProPhoto(D50).
     import colour
     m_xyz_to_prophoto = colour.RGB_COLOURSPACES["ProPhoto RGB"].matrix_XYZ_to_RGB
     prophoto = xyz.reshape(-1, 3) @ m_xyz_to_prophoto.T
     prophoto = prophoto.reshape(h, w, 3).astype(np.float32)
+
+    # Colorimetric tap (Stage 4): linear ProPhoto(D50), still pre-HSM. The
+    # canonical Axis-2/Axis-3 tap consumed by tests/test_colorimetric.py; one
+    # fixed matrix (ProPhoto RGB↔XYZ) away from the Stage-3 XYZ(D50) tap.
+    if stop_after_stage == 4:
+        return prophoto
 
     # Stage 5: HueSatMap in HSV.
     rgb = prophoto
@@ -564,8 +586,16 @@ def apply_adobe_pipeline(
 
 @dataclass
 class FrameRenderResult:
-    """Output of `render_frame`. Contains linear ProPhoto(D50)
-    post-tone-curve plus rendering metadata for downstream stages."""
+    """Output of `render_frame` plus rendering metadata for downstream stages.
+
+    `prophoto` holds the array at the requested `stop_after_stage`:
+      - 9 (default): linear ProPhoto(D50), post-ProfileToneCurve;
+      - 7: linear ProPhoto(D50), post-ExposureRamp (overrange preserved);
+      - 4: linear ProPhoto(D50) at the colorimetric tap (pre-HSM);
+      - 3: XYZ(D50) at the colorimetric tap (pre-HSM) — despite the field
+        name, this is XYZ, one fixed matrix from ProPhoto.
+    The field name reflects the common case (9); for the tap stages the
+    caller knows which space it asked for."""
 
     prophoto: np.ndarray
     scene_kelvin: float
@@ -596,10 +626,12 @@ def render_frame(
     `develop_ops.temperature_k is not None`, the AsShotNeutral derived from
     libraw is replaced by `kelvin_to_neutral(profile, develop_ops.temperature_k)`.
 
-    `stop_after_stage` (v0.7.1): 9 (default) runs the full DCP-shaping
-    pipeline used by γ; 7 stops after ExposureRamp for the
-    `cinema-linear-master` preset, preserving HDR headroom that the
-    DCP's LookTable + ProfileToneCurve would otherwise consume.
+    `stop_after_stage`: 9 (default) runs the full DCP-shaping pipeline used
+    by γ; 7 stops after ExposureRamp for the `cinema-linear-master` preset,
+    preserving HDR headroom that the DCP's LookTable + ProfileToneCurve
+    would otherwise consume; 3 / 4 expose the colorimetric tap (XYZ(D50) /
+    linear ProPhoto(D50) immediately post-ForwardMatrix, pre-HSM) for the
+    Axis-2 absolute-accuracy harness — see `apply_adobe_pipeline`.
     """
     asn = read_as_shot_neutral(raw_path)
 
