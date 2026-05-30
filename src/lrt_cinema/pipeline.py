@@ -404,8 +404,10 @@ def apply_adobe_pipeline(
     scene_kelvin: float,
     dng_baseline_exposure: float = 0.0,
     default_black_render: int = 0,
+    stop_after_stage: int = 9,
 ) -> np.ndarray:
-    """Apply DNG 1.7.1 §"Mapping Camera Color Space" stages 2–9.
+    """Apply DNG 1.7.1 §"Mapping Camera Color Space" stages 2 through
+    `stop_after_stage`.
 
     Input: linear camera RGB (H, W, 3), [0, 1+], post-demosaic / black-subtract.
     Output: linear ProPhoto RGB (D50), (H, W, 3), [0, 1+].
@@ -413,12 +415,26 @@ def apply_adobe_pipeline(
     `default_black_render`: 0 = Auto (Shadows=5.0), 1 = None (Shadows=0).
     Read via `read_dcp_default_black_render(dcp_path)`.
 
-    Module boundary: this function ends at Stage 9 (post-tone-curve, with
-    TotalBaselineExposure already folded into Stage 7's ExposureRamp).
+    `stop_after_stage` (v0.7.1): early-exit toggle for the
+    `cinema-linear-master` preset. Default 9 = full pipeline (v0.6
+    behaviour). 7 = stop after ExposureRamp, skipping LookTable (Stage 8)
+    + ProfileToneCurve (Stage 9). The Stage 7 output preserves HDR
+    headroom that the tone curve would otherwise clip, at the cost of
+    losing the DCP's tone-shape look. See
+    `docs/research/v07-spec-revision-plan.md` §3 for the rationale.
+    Only 7 and 9 are supported; other values raise ValueError.
+
+    Module boundary: this function ends at Stage `stop_after_stage`
+    (post-tone-curve when 9, post-ExposureRamp when 7), with
+    TotalBaselineExposure already folded into Stage 7's ExposureRamp.
     LR-authored develop ops (Stages 11–12) live in `develop_ops.py`. Output
     color conversion (Stage 13) lives in `output.py`. Stage 10 (the prior
     standalone `2^TotalBE` scalar) is removed — see module docstring.
     """
+    if stop_after_stage not in (7, 9):
+        raise ValueError(
+            f"stop_after_stage must be 7 or 9, got {stop_after_stage}",
+        )
     h, w, _ = camera_rgb.shape
 
     # Stage 2: AsShotNeutral inverse → balanced camera RGB.
@@ -487,14 +503,33 @@ def apply_adobe_pipeline(
     # (dng_image_writer.cpp:2658 only writes tcBaselineExposureOffset).
     exposure_value = dng_baseline_exposure + profile.baseline_exposure_offset
     shadows = 0.0 if default_black_render == 1 else 5.0
+    # Stage-7 emission (cinema-linear-master) is scene-referred and is NOT
+    # followed by a clamping ProfileToneCurve, so the ExposureRamp must keep
+    # its overrange (>1.0) — that is the recoverable highlight headroom the
+    # half-float EXR carries. The Adobe SDK exposes this exact mode via
+    # `dng_function_exposure_ramp`'s overrange support. Stage-9 (γ) feeds a
+    # ProfileToneCurve that clamps to [0, 1] regardless, so it stays False
+    # and remains bit-identical to the validated v0.6 reference (< 1 ΔE vs
+    # dng_validate). Verified: tools/verify_emission_format.py check C3.
     ramp = make_exposure_ramp(
         exposure=exposure_value,
         shadows=shadows,
         shadow_scale=1.0,
         stage3_gain=1.0,
-        support_overrange=False,
+        support_overrange=(stop_after_stage == 7),
     )
     rgb = ramp(rgb)
+
+    if stop_after_stage == 7:
+        # cinema-linear-master emission point: post-ExposureRamp (overrange
+        # preserved), pre-LookTable + pre-ProfileToneCurve. Caller writes
+        # this to half-float EXR; LR PV2012 ops still apply downstream in
+        # develop_ops.apply_develop_ops on scene-referred data that hasn't
+        # been tone-shaped by the DCP. Of those ops only a keyframed
+        # ToneCurvePV2012 re-clips to [0, 1] (Class-B drop, same pattern as
+        # the v0.6 Highlights/Shadows/Whites drops); the Holy-Grail core
+        # (exposure/WB/blacks/contrast/sat/vib) keeps the headroom.
+        return rgb
 
     # Stage 8: LookTable in HSV.
     if profile.look_table is not None:
@@ -543,8 +578,10 @@ def render_frame(
     profile: DCPProfile,
     dcp_path: str | Path | None = None,
     develop_ops: DevelopOps | None = None,
+    stop_after_stage: int = 9,
 ) -> FrameRenderResult:
-    """End-to-end render of a single RAW frame through pipeline stages 1–9.
+    """End-to-end render of a single RAW frame through pipeline stages 1
+    through `stop_after_stage`.
 
     `raw_path` should point to an Adobe-converted DNG (use `dng_convert.py`
     to produce one from a NEF). NEF input works but loses the embedded
@@ -558,6 +595,11 @@ def render_frame(
     `develop_ops` carries per-frame Holy Grail kelvin override. When
     `develop_ops.temperature_k is not None`, the AsShotNeutral derived from
     libraw is replaced by `kelvin_to_neutral(profile, develop_ops.temperature_k)`.
+
+    `stop_after_stage` (v0.7.1): 9 (default) runs the full DCP-shaping
+    pipeline used by γ; 7 stops after ExposureRamp for the
+    `cinema-linear-master` preset, preserving HDR headroom that the
+    DCP's LookTable + ProfileToneCurve would otherwise consume.
     """
     asn = read_as_shot_neutral(raw_path)
 
@@ -578,6 +620,7 @@ def render_frame(
         scene_kelvin=scene_kelvin,
         dng_baseline_exposure=dng_be,
         default_black_render=dbr,
+        stop_after_stage=stop_after_stage,
     )
     return FrameRenderResult(
         prophoto=prophoto,

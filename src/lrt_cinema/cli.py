@@ -42,7 +42,7 @@ from lrt_cinema.interpolation import (
     materialize_all_frames,
 )
 from lrt_cinema.ir import DevelopOps
-from lrt_cinema.presets import PRESETS
+from lrt_cinema.presets import DEFAULT_PRESET, PRESETS, STAGE_7_PRESETS
 from lrt_cinema.xmp_parser import parse_sequence
 
 # ---------------------------------------------------------------------------
@@ -84,8 +84,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Folder to write rendered frames into.",
     )
     render.add_argument(
-        "--preset", required=True, choices=sorted(PRESETS),
-        help="Output preset (cinema-linear | cinema-aces | stills-finished).",
+        "--preset", default=DEFAULT_PRESET, choices=sorted(PRESETS),
+        help=(
+            f"Output preset (default: {DEFAULT_PRESET}). "
+            "Choices: cinema-linear-finished (v0.7 γ; half-float DWAB EXR, "
+            "full DCP shape), cinema-linear-master (v0.7.1 β; half-float "
+            "DWAB EXR at Stage 7, skips DCP LookTable + ProfileToneCurve "
+            "for HDR headroom), cinema-linear (32-bit float TIFF), "
+            "cinema-aces (deprecated; 32-bit float PIZ EXR), "
+            "stills-finished (v0.6.x)."
+        ),
     )
     render.add_argument(
         "--from-frame", type=int, default=0,
@@ -198,8 +206,13 @@ def _render_one_frame(job: _RenderJob) -> _RenderResult:
         dng_path = resolve_render_input(
             job.src_raw, job.dng_cache_dir, no_convert=job.no_dng_convert,
         )
+        # cinema-linear-master skips DCP LookTable + ProfileToneCurve
+        # (Stages 8 + 9) for HDR headroom. LR PV2012 ops (Stages 11+12)
+        # still apply on top of the Stage 7 output.
+        stop_after_stage = 7 if job.preset in STAGE_7_PRESETS else 9
         result = render_frame(
             dng_path, profile, dcp_path=job.dcp_path, develop_ops=job.ops,
+            stop_after_stage=stop_after_stage,
         )
         with_dev_ops = apply_develop_ops(result.prophoto, job.ops)
         write_preset_output(with_dev_ops, job.dst_stem, job.preset)
