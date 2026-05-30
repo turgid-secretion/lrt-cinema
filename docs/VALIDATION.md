@@ -301,7 +301,57 @@ The decomposition tells you what *class* of fix would close the gap:
 
 If the per-channel gain ratios diverge by >5% (e.g. green-gain ≠ R-gain), that's a white-balance or camera-matrix divergence flag — not just an exposure offset.
 
-### Empirical finding 2026-05-23 — lrt-cinema vs LRT 7.5.3 preview
+### Validation axes — never conflate them
+
+| Axis | Question | Ground truth | Expected |
+|---|---|---|---|
+| **Implementation correctness** | Faithful to our own defined maths? | independent reimpl of our matrices/curves, hardcoded — NOT via colour-science (`tests/test_color_oracle.py`) | **~0** (rounding floor). The bug-finder; the only axis that validates a new render-math op with certitude. |
+| **Absolute colorimetric accuracy** | How close to CIE truth? | CIE XYZ/Lab from spectra (ISO 17321-1) | **nonzero floor** — real sensors violate the Luther condition, so the DCP matrix is a least-squares fit. Report the floor; never call it bug magnitude. |
+| **Appearance vs LRT preview** | Match what the colorist saw? | LRT `.lrtpreview` JPEG (`tools/diagnose_vs_lrt_preview.py`) | **nonzero floor** — LR's closed-source PV5 look + 8-bit JPEG. |
+
+Absolute-accuracy and preview ΔE must be taken at a **colorimetric tap**
+(post-ForwardMatrix linear ProPhoto/XYZ, *before* HSM / ExposureRamp / LookTable
+/ ProfileToneCurve). Comparing the *rendered* image to Lab measures the DCP tone
+curve, not pipeline error.
+
+### Empirical finding 2026-05-30 (v0.8 head) — current state; SUPERSEDES the 2026-05-23 finding below
+
+Head pipeline (in-process Python DNG). Gym DSC_4053 + rose, Adobe-converted DNGs
+vs `dng_validate`; v0.8 `lrtimelapse` sRGB default vs LRT 7.5.3 preview.
+
+**vs `dng_validate` (Adobe's own DNG reference renderer — the north-star):**
+
+| Scene | mean ΔE | P50 (all) | P95 | max | <1 ΔE |
+|---|---:|---:|---:|---:|---:|
+| Gym (Camera Standard) | **0.789** | 0.198 | 4.19 | 10.55 | 76.8% |
+| Rose (Adobe Standard) | **0.844** | 0.803 | 1.70 | 7.72 | 69.6% |
+
+Decomposition (gym): **flat non-edge pixels match Adobe EXACTLY — median ΔE
+0.000 over 94% of pixels.** The colour maths (matrix + tone curve + HueSatMap +
+LookTable) bit-match the open-spec reference. The mean is dragged by **edge
+pixels (1.62 ΔE, ~6% — a real demosaic-algorithm difference, libraw LINEAR vs
+Adobe; crop misalignment ruled out by an offset sweep, center-crop is optimal)**
+and a small flat-region colour tail (~5% of flat px above 4 ΔE). There is **no
+theoretical floor on the colour maths**; the real-scene mean floor is the
+demosaic choice (the DNG spec does not mandate a demosaic algorithm). A
+synthetic flat-patch chart (the planned Axis-2/3 harness) measures the pure
+colour-math agreement without edge/demosaic noise and can be driven toward ~0.
+
+**vs LRT preview (v0.8 sRGB default, gym, identity develop):**
+- RAW: mean 2.92, P50 2.55, P95 7.36.
+- AFFINE residual (per-channel gain 0.83/0.84/0.84 ≈ a benign ~0.3 EV global
+  offset, not a defect): mean ~2.18, P50 1.71.
+- This ~2 is the **closed-source PV5 look + 8-bit JPEG floor**, not pipeline
+  error: **preview gap ≈ 0.79 (our-vs-Adobe-DNG — the part we own and can tune)
+  + ~2 (PV5 + JPEG — the reference's own look).**
+
+**North-star for the open-tool transition (Adobe purge):** keep `dng_validate`
+as a test-only oracle and tune open-DCP renders back toward the **proven 0.789**
+(median 0.000 — the maths already bit-match). The preview is the human-facing
+end-to-end check, reported as raw + affine-residual with the PV5 floor named so
+it is never mistaken for our error or chased past what is closed-source.
+
+### Empirical finding 2026-05-23 — lrt-cinema vs LRT 7.5.3 preview (SUPERSEDED — darktable-era, pre-v0.6 Python pipeline; kept for history)
 
 Test frame: DSC_4053 (neutral keyframe, EV=0 per user's LRT XMP). After Visual Preview re-render in LRT.
 
