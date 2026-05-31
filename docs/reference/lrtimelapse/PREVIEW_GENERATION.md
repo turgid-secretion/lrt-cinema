@@ -110,7 +110,7 @@ this is in our project's current scope.
 
 We do not consume `.lrtpreview` files at runtime. They are a debugging
 reference for "what LRT thinks this frame looks like." When our
-darktable-rendered TIFF diverges visibly from LRT's preview, the
+rendered TIFF diverges visibly from LRT's preview, the
 preview-pipeline behaviors above become candidates for the divergence
 source — which is why this reference exists. We previously inferred
 behaviors that may not hold; that inference is now flagged explicitly

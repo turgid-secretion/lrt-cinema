@@ -112,10 +112,14 @@ This field is a point list (`<rdf:Seq>` of `(x, y)` pairs). How LRT
 interpolates a varying tone curve between keyframes is not
 documented. Possible models: point-wise interpolation of matched
 points; resample-to-common-x-axis then interpolate y; cross-fade
-between two LUT-shaped curves. `STATUS: UNKNOWN.` Our project does
-not currently emit a darktable `tonecurve` module from these (the
-parser carries the curve through; the emitter does not consume it
-yet), so this is also future-work.
+between two LUT-shaped curves. `STATUS: UNKNOWN.` Our renderer *does*
+apply a per-frame `crs:ToneCurvePV2012` (Stage 12 of the in-process
+pipeline, per-channel), and our keyframe interpolation point-wise-lerps
+the curve when adjacent keyframes carry matched point counts (otherwise
+holds-from-prior; `ir.DevelopOps.blend`). But because LRT's own model
+for interpolating a *varying* curve is undocumented, ours is a
+best-effort guess rather than a verified match — validating it against
+an LRT sample remains future-work.
 
 ## What does `Auto Transition with 2 Keyframes corrected` (LRT 7.4.1) mean?
 

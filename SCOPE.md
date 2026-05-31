@@ -1,10 +1,12 @@
-# Implementation Scope (v0.7)
+# Implementation Scope (v0.8)
 
-Honest per-feature status. v0.7.0 ships the γ preset
-(`cinema-linear-finished`, half-float DWAB EXR). β-XML
-(`cinema-linear-master`, Stage-7 EXR + Resolve project sidecar) lands
-in v0.7.1; the §2.B free-upgrade increments (X1–X6) extend β-XML
-coverage in subsequent v0.7.x releases.
+Honest per-feature status. v0.8 makes `lrtimelapse` (16-bit sRGB display
+TIFF, for the LRT round-trip) the default emission and keeps the
+scene-linear ACEScg EXR masters (`cinema-linear-finished` γ /
+`cinema-linear-master` β) as opt-in targets. The earlier β-XML Resolve
+project-sidecar plan — and the §2.B X1–X6 increments built around it —
+was ruled out: Resolve preserves no per-frame grade keyframes through any
+documented import path (see [docs/DECISIONS.md](docs/DECISIONS.md) §4).
 
 See [CHANGELOG.md](CHANGELOG.md) for the release history.
 
@@ -29,11 +31,11 @@ See [CHANGELOG.md](CHANGELOG.md) for the release history.
 
 | Item | Owner | Notes |
 |---|---|---|
-| `stills-finished` preset (Rec.2020 + AgX) | v0.6.x | `NotImplementedError` in v0.6. AgX port from Blender reference or `colour-science` primitives. |
-| `scene_kelvin` computation regression at high K | v0.6.x | Currently hardcoded 5500K. `neutral_to_kelvin` solver lives in `pipeline.py` but converges to values that regress ΔE on rose via HSM mired-blend divergence. |
+| `stills-finished` preset (Rec.2020 + AgX) | deferred | `NotImplementedError`. AgX port from Blender reference or `colour-science` primitives. |
+| `scene_kelvin` computation regression at high K | deferred | Currently hardcoded 5500K. `neutral_to_kelvin` solver lives in `pipeline.py` but converges to values that regress ΔE on rose via HSM mired-blend divergence. |
 | `Highlights2012`, `Shadows2012`, `Whites2012` | dropped | LR PV2012 parametric tone math is closed-source. Render-time warning surfaces them. |
-| `Sharpness` | no-op | Sharpening belongs in the grade stage. v0.6.x may revisit. |
-| Third test scene (tungsten / fluorescent) | v0.6.x | Surfaces whether 5500K is load-bearing or coincidental on the current gym + rose pair. |
+| `Sharpness` | no-op | Sharpening belongs in the grade stage; may revisit later. |
+| Third test scene (tungsten / fluorescent) | deferred | Surfaces whether 5500K is load-bearing or coincidental on the current gym + rose pair. |
 | Smooth (Catmull-Rom) keyframe interpolation | future | Was in v0.2 plan; deferred until real-LRT-sequence preference signal arrives. |
 | Linux RAW→DNG | resolved | dnglab ships official Linux builds (Adobe never did) — it is now the sole converter on every platform. `--no-dng-convert` remains a fallback for boxes with no dnglab binary. |
 
@@ -63,31 +65,36 @@ Current measurements (v0.8 head, re-run 2026-05-30):
 
 | Scene | DCP | Mean ΔE | P50 | < 1 ΔE pixels |
 |---|---|---:|---:|---:|
-| Gym (DSC_4053, D750) | Camera Standard | **0.789** | 0.198 | 76.8% |
-| Rose (d750_sample) | Adobe Standard | **0.844** | 0.803 | 69.6% |
+| Gym (DSC_4053, D750) | Camera Standard | **0.026** | 0.000 | 100% |
+| Rose (d750_sample) | Adobe Standard | **0.545** | 0.577 | 97.8% |
 
-The gym mean is dragged by demosaic-edge pixels; **flat non-edge pixels match
-`dng_validate` exactly (median ΔE 0.000 over 94% of px)** — the colour maths
-bit-match the open-spec reference. See `docs/VALIDATION.md` for the decomposition.
+Gym is an effective bit-match (P50 0.000, 100% of px under 1 ΔE). The drop from
+the pre-fix 0.789 was a single Stage-9 change: the DCP ProfileToneCurve is now
+applied as Adobe's hue/saturation-preserving `RefBaselineRGBTone` (curve the
+max+min channel, interpolate the middle) instead of per-channel. The old
+per-channel tone error fired wherever channels differ (edges + saturated
+colour) and was invisible on neutrals (r=g=b), so the flat-pixel median was
+already 0.000. See `docs/VALIDATION.md` for the decomposition.
 
 ## Floors
 
 Reference-comparison floors (characterized, not ship-gating). Distinguish the
 part we *own and can tune* from the reference's own irreducible look:
 
-- **vs `dng_validate` (the north-star): 0.789 gym / 0.844 rose mean — but
-  median 0.000.** No theoretical floor on the colour maths; the real-scene mean
-  floor is the **demosaic-algorithm choice** (libraw LINEAR vs Adobe; the DNG
-  spec mandates no demosaic) at edges (~1.6 ΔE, ~6% of px). A synthetic
-  flat-patch chart can drive the measured colour-math gap toward ~0.
+- **vs `dng_validate` (the north-star): 0.026 gym / 0.545 rose mean** (gym P50
+  0.000, 100% of px < 1 ΔE — an effective bit-match). No theoretical floor on
+  the colour maths: the pre-fix 0.789 gym was a per-channel ProfileToneCurve
+  error at Stage 9, not a demosaic-edge floor; switching to Adobe's
+  hue/saturation-preserving `RefBaselineRGBTone` collapsed it. The synthetic
+  flat-patch chart confirms it (neutral median 0.000, chromatic mean 0.05).
 - **vs LRT preview: ~2 ΔE** post-affine (was mislabelled 2.03 from the
   darktable era; re-measured 2026-05-30: raw 2.92 / affine-residual ~2.18).
-  Decomposes as **0.79 (our-vs-Adobe-DNG, closeable) + ~2 (LR closed-source PV5
-  look + 8-bit JPEG — the reference's, not ours)**.
+  Decomposes as **our-vs-Adobe-DNG (now an effective bit-match, gym 0.026) + ~2
+  (LR closed-source PV5 look + 8-bit JPEG — the reference's, not ours)**.
 - vs in-camera JPEG: ~6 ΔE (camera uses Nikon Picture Control, not Adobe DCP).
 
 For the Adobe purge, `dng_validate` stays a test-only oracle and the proven
-**0.789** is the target to tune open-DCP renders back toward.
+**0.026** (gym, median 0.000) is the target to tune open-DCP renders back toward.
 
 ## CLI surface
 

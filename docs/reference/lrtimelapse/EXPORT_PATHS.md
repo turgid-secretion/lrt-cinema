@@ -91,10 +91,11 @@ two LRT-native paths' Adobe dependencies:
 - **Lightroom path**: requires Lightroom Classic outright (Adobe
   Camera Raw on the critical path).
 
-`lrt-cinema` substitutes `darktable-cli` for both. It reads LRT-written
-XMP sidecars (the LRT-rendered nothing, only XMP-authored) and renders
-the intermediate sequence with darktable's RCD/AMaZE demosaic +
-darktable color pipeline. The final video encode step is out of scope
+`lrt-cinema` replaces both. It reads the LRT-written XMP sidecars (LRT
+authors the develop intent; it renders nothing for us) and renders the
+intermediate sequence through an in-process Python implementation of the
+Adobe DNG 1.7.1 pipeline (dnglab RAW→DNG → libraw demosaic → DCP colour
+→ LR-authored develop ops). The final video encode step is out of scope
 for v0.x (a `ffmpeg` shell is the obvious downstream).
 
 ## Is "Export & Render (Internal)" CLI / headless invocable?

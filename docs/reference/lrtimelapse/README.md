@@ -64,10 +64,12 @@ audit.
 
 ## Project context
 
-lrt-cinema is a CLI that translates LRT-written XMP sidecars into a
-darktable history stack and renders via `darktable-cli`. Our value-add
-is high-quality cinema-format intermediates from an LRT workflow
-*without Adobe products on the critical path*. We depend on LRT for:
+lrt-cinema is a CLI that parses LRT-written XMP sidecars into per-frame
+develop intent and renders it through an in-process Python implementation
+of the Adobe DNG 1.7.1 reference pipeline (no external renderer is shelled
+out to). Our value-add is high-quality cinema-format intermediates from an
+LRT workflow *without Adobe products on the critical path*. We depend on
+LRT for:
 
 - XMP-authoring: keyframe rating, Auto Transition interpolation,
   Visual Deflicker exposure-delta computation, Holy Grail compensation.
@@ -75,12 +77,12 @@ is high-quality cinema-format intermediates from an LRT workflow
 
 We deliberately do not depend on:
 
-- LRT's preview pipeline (we are not the consumer; we substitute
-  darktable's).
-- LRT's internal render path (we replace it with `darktable-cli` for
-  the high-quality intermediate sequence).
-- LRT's bundled Adobe DNG Converter (we read raws directly via dt's
-  RawSpeed / LibRaw).
+- LRT's preview pipeline (we are not the consumer; we render frames
+  ourselves).
+- LRT's internal render path (we replace it with our own in-process
+  Python renderer for the high-quality intermediate sequence).
+- LRT's bundled Adobe DNG Converter (we convert raws to DNG with the
+  open-source dnglab, then demosaic via libraw/rawpy).
 
 ## Notable refutations and closed gaps from prior project assumptions
 
