@@ -11,6 +11,18 @@ the canonical LRT round-trip: lrt-cinema → TIFF → back into LRT → video + 
 Blur. Scene-linear ACEScg EXR is the opt-in DaVinci Resolve / ACES path. See
 [docs/LRT_ROUNDTRIP.md](docs/LRT_ROUNDTRIP.md).
 
+## Render engine — READ [docs/PIPELINE.md] BEFORE TOUCHING IT
+[docs/PIPELINE.md] is the canonical as-built engine reference: every stage
+(1–13), the file/function that owns it, colour space in→out, the load-bearing
+invariants, where tests tap in, and current repo-truth numbers. **Mandatory
+ingest before changing `src/lrt_cinema/{pipeline,dcp,lut3d_baker,develop_ops,
+output}.py`.** If a change contradicts a documented invariant, you must preserve
+it OR update PIPELINE.md + the guarding test in the same change, citing
+primary-source evidence (the DNG SDK at `/private/tmp/dng_sdk`, or a ΔE
+measurement vs `dng_validate`). **Neutrals passing ≠ correct** — a grey wedge is
+blind to the tone-curve application mode and the camera-matrix chromatic
+rotation; verify Stage 3/5/8/9 changes against *saturated* colour.
+
 ## Colour-space allowlist — DO NOT emit anything else
 A colour space = (primaries, white point, transfer). Authoritative research:
 [docs/research/v08-linear-exr-gamut-resolve-nuke.md]. Only these emissions are correct:
@@ -55,11 +67,18 @@ Three axes — never conflate (detail: [docs/VALIDATION.md]):
    PV5 look + 8-bit JPEG.
 
 **North-star (Adobe purge):** ship gate = mean ΔE2000 < 1.0 vs `dng_validate`
-(Adobe's DNG reference renderer; test-only oracle). Head: gym **0.789**, rose
-**0.844** mean — but **flat-pixel median ΔE 0.000** (maths bit-match the open spec;
-mean dragged by demosaic-edge differences, NOT colour science). The Luther floor
-cancels vs dng_validate (same DCP both sides) → ~0 is reachable on the maths. As
-open DCPs replace Adobe-derived ones, tune back toward the proven 0.789.
+(Adobe's DNG reference renderer; test-only oracle). Head: gym **0.026**, rose
+**0.545** mean (was 0.789 / 0.844). The gym near-bit-match landed on 2026-05-30 by
+fixing Stage 9 to apply the ProfileToneCurve as Adobe's **hue/saturation-preserving
+`RefBaselineRGBTone`** (curve max+min, interpolate the middle channel) instead of
+per-channel — the old "demosaic-edge tail" was mostly this per-channel tone error
+firing where channels differ (edges + saturated colour). The synthetic flat-patch
+harness (`test_synthetic_dng.py`) drove the residual: neutral ΔE 0.000, chromatic
+**0.05** (sRGB-quantisation floor). NB: `dnglab` strips the ForwardMatrix from the
+synthetic clone, so that path exercises the ColorMatrix + **MapWhiteMatrix** branch
+(`dcp.colormatrix_camera_to_pcs`); the real D750 Camera-Matching DCPs ship a
+ProPhoto-passthrough ForwardMatrix (LookTable does the colour) — see
+[docs/research/v08-synthetic-chromatic-rootcause.md] for the full trace.
 
 ## Build / test
 - `python3 -m pytest -q` — full suite. Render/ΔE tests skip without `/tmp/dng_out`

@@ -1,5 +1,14 @@
 # v0.6 Architecture: Python DNG Render Pipeline
 
+> ⚠️ **HISTORICAL pre-implementation spec. Superseded as the pipeline reference
+> by [../PIPELINE.md](../PIPELINE.md)** (canonical as-built). Known-wrong here:
+> the **Stage 9 ProfileToneCurve is documented as "per-channel" and presented as
+> correct — it is NOT.** Adobe applies it as the hue/saturation-preserving
+> `RefBaselineRGBTone` (curve max+min, interpolate the middle channel); per-channel
+> was the bug fixed 2026-05-30 (gym 0.789→0.026). The gym/rose numbers below
+> (0.79/0.84) are also pre-fix (now 0.026/0.545). The spline-solver *shape* match
+> is still valid — only the application *mode* changed.
+
 **Status:** Spec (advisory) — 2026-05-27
 **Implements:** v0.6 — switch off `darktable-cli`; render in-process via a
 first-principles Adobe DNG 1.7.1 pipeline.
@@ -131,10 +140,14 @@ conversion. Stage 10 is intentionally absent — see Stage 6 / Stage 7.
    in linear ProPhoto. Pulled ExposureRamp port from `pipeline.py`
    verbatim.
 8. **LookTable (LT)** — applied in HSV; single cube (no per-illuminant).
-9. **ProfileToneCurve** — **per-R, per-G, per-B independently** in linear
-   ProPhoto, NOT per-V as DNG 1.7.1 spec text suggests. Per
-   `dng-pipeline-findings` §3: SDK `dng_render.cpp::DoBaselineRGBTone`
-   applies it per-channel. Solved via **ported `dng_spline_solver`**
+9. **ProfileToneCurve** — ⚠️ **CORRECTION (2026-05-30):** this said
+   "per-R/G/B independently" — WRONG. `DoBaselineRGBTone` →
+   `RefBaselineRGBTone` (`dng_reference.cpp:1871`) is **hue/saturation-preserving**:
+   curve the max & min channels, *interpolate* the middle one
+   (`mid = min_o + (max_o−min_o)·(mid−min)/(max−min)`). Per-channel matched on
+   neutrals but diverged on chromatic colour; the fix took gym 0.789→0.026. See
+   [../PIPELINE.md §5](../PIPELINE.md). The spline shape below is still correct —
+   only the application mode changed. Solved via **ported `dng_spline_solver`**
    (Hermite C2 spline, matches Adobe SDK bit-for-bit per
    `dng_render.cpp::Solve`). For profiles WITHOUT a ProfileToneCurve
    (e.g. Adobe Standard), fall back to the **ACR3 default tone curve**
