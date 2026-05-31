@@ -247,6 +247,32 @@ it** — gamut comes from the clip's Input Color Space). **Linear Rec.2020 is
 deliberately absent** (the "Franken-gamut" error). Full allowlist rationale:
 CLAUDE.md §"Colour-space allowlist" + `docs/research/v08-linear-exr-gamut-resolve-nuke.md`.
 
+**ACES Reference Gamut Compression (RGC) — the single gated AP1 gamut-safety
+pass.** On the **ACEScg (AP1) EXR path only**, `write_exr_scene_linear` applies
+`output._aces_rgc_compress_ap1` to the AP1-linear pixels (after the
+ProPhoto→AP1 Bradford + NaN scrub, before the float→half encode). The
+perceptual develop ops (DR-compression — shipped; OKLCh / CDL — coming) can push
+pixels outside AP1, which present here as **negative AP1 channels**; RGC rolls
+them smoothly back toward the achromatic axis instead of letting them hard-clip
+at the encode. It is the canonical Academy 1.3 transform (`LMT.Academy.
+GamutCompress`, hand-coded from the spec + aces-dev DCTL — `colour` 0.4.x has no
+general gamut compression), with the **exact published reference constants**
+(per-channel threshold `[0.815, 0.803, 0.880]`, limit `[1.147, 1.264, 1.312]`,
+power `1.2`). **Always-on for ACEScg** (general gamut safety, not intent-gated)
+but **gated on actual out-of-AP1 content** — a no-op (returns the literal input,
+byte-exact) when no channel-distance reaches threshold, so an in-gamut EXR is
+bit-identical to the pre-RGC build. The max (achromatic) channel is invariant
+(its distance is 0), so grey→grey and the luminance peak never darkens; an
+excursion beyond the per-channel limit stays compressed-but-negative by design
+(the asymptote is `threshold+scale ≈ 1.03–1.14`, never 1.0 — RGC is
+*compression*, not a clamp, so residual negatives are NOT clipped).
+**`aces2065` (AP0) is NOT compressed** (AP0 is wider; the limits are
+AP1-specific). The sRGB/TIFF path is untouched (it has its own `[0,1]` clip).
+Axis-1 oracle: `tests/test_color_oracle.py::test_rgc_*` (independent per-pixel
+reimpl ~0 + disabled / wrong-threshold / missing-`/ach` sensitivity legs).
+Method/params authority: `docs/research/v10-local-tone-mapping-dr-compression.md`
+§3.5; DECISIONS.md §7 (contract 2).
+
 The default `lrtimelapse` TIFF is the only emission LRT's video renderer
 re-ingests (LRT → Render from Intermediate → Motion Blur); see
 `docs/LRT_ROUNDTRIP.md`.
