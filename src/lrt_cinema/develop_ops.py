@@ -336,8 +336,12 @@ def apply_dr_compression(
         return prophoto  # byte-exact identity — short-circuit before any log math
 
     c_lo, c_hi, c_top = _dr_slopes(highlights, shadows, whites)
-    rgb = prophoto.astype(np.float64)
-    lum = rgb @ _PROPHOTO_LUMINANCE
+    # Luminance is computed in float64 (the matmul against the float64
+    # _PROPHOTO_LUMINANCE promotes a float32 frame), so the log/exp law keeps full
+    # precision — but we never hold a float64 copy of the whole RGB frame: the
+    # ratio reapply runs on the original array (the multiply promotes per-line and
+    # is recast back). Avoids a ~2× full-frame allocation per worker.
+    lum = prophoto @ _PROPHOTO_LUMINANCE
     log_l = np.log2(np.maximum(lum, 0.0) + _DR_EPS)
 
     # Adaptive box radius: clamp so the (2r+1) window fits the smaller spatial
@@ -353,7 +357,7 @@ def apply_dr_compression(
     lum_out = np.maximum(np.exp2(log_l_out) - _DR_EPS, 0.0)
 
     ratio = lum_out / np.maximum(lum, _DR_EPS)
-    out = np.maximum(rgb * ratio[..., None], 0.0)  # floor 0; NO top clamp (overrange survives)
+    out = np.maximum(prophoto * ratio[..., None], 0.0)  # floor 0; NO top clamp (overrange survives)
     return out.astype(prophoto.dtype)
 
 
@@ -672,6 +676,8 @@ def _box_sum(img: np.ndarray, r: int) -> np.ndarray:
         return img.astype(np.float64, copy=True)
     a = img.astype(np.float64)
     h, w = a.shape
+    if 2 * r + 1 > min(h, w):
+        raise ValueError(f"box radius {r} too large for image shape {a.shape}")
     cum = np.cumsum(a, axis=0)
     out = np.empty_like(cum)
     out[0:r + 1, :] = cum[r:2 * r + 1, :]
