@@ -20,15 +20,23 @@ collapses all spatial info into one scalar, dragged by outliers,
 and conflates uniform shifts with localized defects.
 
 Usage:
-    python3 tools/diagnose_vs_lrt_preview.py <our.tif> <lrt_preview.jpg> [output_dir]
+    python3 tools/diagnose_vs_lrt_preview.py <our.tif> <lrt_preview.jpg> [output_dir] [--linear-rec2020]
 
 Defaults: output_dir = ./diagnostic_output/
 
 Input expectations:
-    <our.tif>          16-bit linear Rec.2020 TIFF as emitted by lrt-cinema
-                       cinema-linear preset.
+    <our.tif>          v0.8 default: 8/16-bit **display sRGB** TIFF as emitted
+                       by lrt-cinema `lrtimelapse` preset (preview and emission
+                       are both sRGB → apples-to-apples). Pass --linear-rec2020
+                       for the back-compat `cinema-linear` (linear Rec.2020) path.
     <lrt_preview.jpg>  sRGB JPEG from .lrt/visual/*.lrtpreview or
                        .lrt/previews/*.lrtpreview.
+
+Read this with the affine-fit decomposition in mind: the *post-affine residual*
+is the structural gap to optimise; a large per-channel gain is a benign global
+grade/exposure offset. The raw gap also carries an irreducible floor — LR's
+closed-source PV5 look in the preview + 8-bit JPEG noise — that is the
+reference's, not ours. See docs/VALIDATION.md.
 
 Dependencies: numpy, tifffile, Pillow, colour-science, scipy.
 """
@@ -64,23 +72,29 @@ M_REC2020_TO_XYZ = np.array([
 D65 = colour.CCS_ILLUMINANTS["CIE 1931 2 Degree Standard Observer"]["D65"]
 
 
-def _load_tif_16bit(path: Path, target_w: int, target_h: int) -> np.ndarray:
-    """Read 16-bit uint16 RGB TIFF, downsample to target dims, return float64 0..1."""
+def _load_tif(path: Path, target_w: int, target_h: int) -> np.ndarray:
+    """Read an 8- or 16-bit RGB TIFF, downsample to target dims, return float64 0..1.
+
+    Accepts the v0.8 default `lrtimelapse` sRGB TIFF (16-bit) and the back-compat
+    `cinema-linear` path; colour-space interpretation is the caller's job."""
     arr = tifffile.imread(str(path))
-    if arr.dtype != np.uint16:
-        raise SystemExit(
-            f"expected 16-bit TIFF at {path}, got dtype={arr.dtype}. "
-            "Render via lrt-cinema cinema-linear preset which writes 16-bit linear Rec.2020."
-        )
     if arr.ndim != 3 or arr.shape[2] != 3:
         raise SystemExit(f"expected 3-channel RGB TIFF at {path}, got shape={arr.shape}")
-    # PIL can't fromarray uint16 RGB directly — resize per channel via I;16 mode.
+    if arr.dtype == np.uint16:
+        maxv, mode = 65535.0, "I;16"
+    elif arr.dtype == np.uint8:
+        maxv, mode = 255.0, "L"
+    else:
+        raise SystemExit(
+            f"expected 8/16-bit integer TIFF at {path}, got dtype={arr.dtype}.",
+        )
+    # PIL can't fromarray multichannel uint16 directly — resize per channel.
     channels = []
     for c in range(3):
-        ch = Image.fromarray(arr[:, :, c], mode="I;16")
+        ch = Image.fromarray(arr[:, :, c], mode=mode)
         ch = ch.resize((target_w, target_h), Image.LANCZOS)
         channels.append(np.array(ch))
-    return np.stack(channels, axis=2).astype(np.float64) / 65535.0
+    return np.stack(channels, axis=2).astype(np.float64) / maxv
 
 
 def _load_lrt_preview(path: Path) -> np.ndarray:
@@ -96,8 +110,15 @@ def _to_lab_d65_from_linear_rec2020(arr: np.ndarray) -> np.ndarray:
 
 def _to_lab_d65_from_srgb_uint8(arr: np.ndarray) -> np.ndarray:
     """sRGB-encoded uint8 → linear sRGB → CIE Lab(D65)."""
-    norm = arr.astype(np.float64) / 255.0
-    linear = colour.models.eotf_sRGB(norm)
+    return _to_lab_d65_from_srgb_float(arr.astype(np.float64) / 255.0)
+
+
+def _to_lab_d65_from_srgb_float(arr01: np.ndarray) -> np.ndarray:
+    """sRGB-encoded (float 0..1) → linear sRGB → CIE Lab(D65).
+
+    The v0.8 default `lrtimelapse` emission is display sRGB, so this is the
+    apples-to-apples path: both our frame and the LRT preview are sRGB."""
+    linear = colour.models.eotf_sRGB(arr01)
     xyz = colour.RGB_to_XYZ(linear, "sRGB", apply_cctf_decoding=False)
     return colour.XYZ_to_Lab(xyz, illuminant=D65)
 
@@ -236,12 +257,17 @@ def _per_channel_report(ours_lab: np.ndarray, tgt_lab: np.ndarray) -> str:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) < 3 or len(argv) > 4:
+    pos = [a for a in argv[1:] if not a.startswith("--")]
+    flags = {a for a in argv[1:] if a.startswith("--")}
+    # Default: ours is display sRGB (the v0.8 `lrtimelapse` default emission).
+    # Pass --linear-rec2020 for the back-compat `cinema-linear` TIFF path.
+    linear_rec2020 = "--linear-rec2020" in flags
+    if len(pos) < 2 or len(pos) > 3:
         print(__doc__, file=sys.stderr)
         return 2
-    our_tif = Path(argv[1])
-    lrt_preview = Path(argv[2])
-    outdir = Path(argv[3]) if len(argv) == 4 else Path("./diagnostic_output")
+    our_tif = Path(pos[0])
+    lrt_preview = Path(pos[1])
+    outdir = Path(pos[2]) if len(pos) == 3 else Path("./diagnostic_output")
     if not our_tif.is_file():
         print(f"error: {our_tif} not found", file=sys.stderr)
         return 2
@@ -252,24 +278,30 @@ def main(argv: list[str]) -> int:
 
     preview_arr = _load_lrt_preview(lrt_preview)
     H, W = preview_arr.shape[:2]
-    ours_arr = _load_tif_16bit(our_tif, W, H)
+    ours_arr = _load_tif(our_tif, W, H)
 
-    ours_lab = _to_lab_d65_from_linear_rec2020(ours_arr)
+    if linear_rec2020:
+        ours_lab = _to_lab_d65_from_linear_rec2020(ours_arr)
+        ours_linear_srgb = colour.RGB_to_RGB(
+            ours_arr, "ITU-R BT.2020", "sRGB",
+            apply_cctf_decoding=False, apply_cctf_encoding=False,
+        )
+        ours_desc = "linear Rec.2020"
+    else:
+        ours_lab = _to_lab_d65_from_srgb_float(ours_arr)
+        ours_linear_srgb = colour.models.eotf_sRGB(ours_arr)
+        ours_desc = "display sRGB"
     preview_lab = _to_lab_d65_from_srgb_uint8(preview_arr)
     de = colour.delta_E(ours_lab, preview_lab, method="CIE 2000")
 
     print("Comparing:")
-    print(f"  ours    {our_tif} ({ours_arr.shape[0]}x{ours_arr.shape[1]}, 16-bit linear Rec.2020)")
+    print(f"  ours    {our_tif} ({ours_arr.shape[0]}x{ours_arr.shape[1]}, {ours_desc})")
     print(f"  target  {lrt_preview} ({preview_arr.shape[0]}x{preview_arr.shape[1]}, 8-bit sRGB)")
     print()
     print(_percentile_report(de))
     print()
 
-    # Convert both into linear-sRGB-encoded for the affine fit
-    ours_linear_srgb = colour.RGB_to_RGB(
-        ours_arr, "ITU-R BT.2020", "sRGB",
-        apply_cctf_decoding=False, apply_cctf_encoding=False,
-    )
+    # Affine fit operates in linear sRGB (ours_linear_srgb computed per input above)
     preview_linear_srgb = colour.models.eotf_sRGB(preview_arr.astype(np.float64) / 255.0)
     params, pre, post = _affine_fit(ours_linear_srgb, preview_linear_srgb)
     print(_affine_report(params, pre, post))

@@ -1,9 +1,13 @@
 # lrt-cinema
 
 Self-contained Python implementation of the Adobe DNG 1.7.1 render pipeline,
-driven by [LRTimelapse](https://lrtimelapse.com/) XMP develop intent. Produces
-cinema-native intermediates — linear Rec.2020 TIFF or ACES OpenEXR — without
-shelling out to darktable, Lightroom, or any other RAW pipeline.
+driven by [LRTimelapse](https://lrtimelapse.com/) XMP develop intent. By default
+it emits an **LRTimelapse-ready 16-bit sRGB TIFF sequence** (`LRT_00001.tif…`,
+embedded sRGB ICC) — the only format LRT's video renderer re-ingests, so you
+take the frames straight back into LRT for video + **Motion Blur** — without
+shelling out to Lightroom or any other RAW pipeline. Scene-linear ACEScg OpenEXR
+(for DaVinci Resolve / ACES) is an opt-in target. See
+[docs/LRT_ROUNDTRIP.md](docs/LRT_ROUNDTRIP.md).
 
 **Status:** Pre-alpha. Color science gates < 1 ΔE2000 mean against Adobe
 `dng_validate` on the project test scenes. Workflow polish, third-camera
@@ -28,41 +32,50 @@ LRT workflow renders those XMPs through Adobe Lightroom Classic.
 3. Run each frame through an Adobe DNG 1.7.1 reference pipeline:
    demosaic → AsShotNeutral → ColorMatrix/ForwardMatrix → HueSatMap
    → ExposureRamp (carries TotalBaselineExposure) → LookTable
-   → ProfileToneCurve → LR-authored develop ops → ProPhoto → Rec.2020
-   → TIFF / EXR.
-4. Write a frame sequence ready for DaVinci Resolve / ACES timelines.
+   → ProfileToneCurve → LR-authored develop ops → ProPhoto → display sRGB
+   (default) / scene-linear ACEScg.
+4. Write an **LRT-ready 16-bit sRGB TIFF sequence** (`LRT_00001.tif…`, embedded
+   sRGB ICC) you load straight back into LRTimelapse for video + Motion Blur.
+   (Scene-linear ACEScg EXR for DaVinci Resolve / ACES is an opt-in `--preset`.)
 
 Per-frame color is within < 1 ΔE2000 of `dng_validate` (Adobe's own DNG
 SDK reference renderer) on the project's test scenes. See
-[docs/research/v06-architecture.md](docs/research/v06-architecture.md) for
-the full pipeline spec and [docs/research/dng-pipeline-findings.md](docs/research/dng-pipeline-findings.md)
-for the empirical journey.
+[docs/PIPELINE.md](docs/PIPELINE.md) for the full as-built pipeline reference
+and [CHANGELOG.md](CHANGELOG.md) for the empirical journey from 6.37 ΔE
+(darktable) to the in-process Python pipeline.
 
 ## Output presets
 
 | Preset | Container | Color space | Notes |
 |---|---|---|---|
-| `cinema-linear-finished` | 16-bit half OpenEXR (DWAB) at Stage 13 | Linear Rec.2020 | **v0.7 default (γ).** Full DCP shape baked. Cinema scene-referred compressed intermediate; 10–18× smaller than `cinema-aces` with the same LRT-authored look. |
-| `cinema-linear-master` | 16-bit half OpenEXR (DWAB) at Stage 7 | Linear Rec.2020 | **v0.7.1 (β).** Skips DCP LookTable + ProfileToneCurve for HDR headroom. LR PV2012 keyframes still bake into pixels. Pick this when highlight recovery matters more than the canned DCP look. |
-| `cinema-linear` | 32-bit float TIFF | Linear Rec.2020 | Uncompressed reference master; v0.6 back-compat. |
-| `cinema-aces` | 32-bit float OpenEXR (PIZ) | Linear Rec.2020 | **Deprecated.** Emits one-time `DeprecationWarning`; planned removal in v0.8. Use `cinema-linear-finished` instead. |
-| `stills-finished` | 16-bit TIFF | Rec.2020 (gamma) + AgX | **v0.6.x** — `NotImplementedError`. |
+| `lrtimelapse` | 16-bit sRGB TIFF (embedded ICC), `LRT_NNNNN` naming | sRGB (Rec.709 + sRGB OETF), display-referred | **v0.8 DEFAULT.** The only emission LRT's video renderer re-ingests — take it back into LRT for video + Motion Blur. Full LRT look baked. |
+| `cinema-linear-finished` | 16-bit half OpenEXR (DWAB) at Stage 13 | scene-linear ACEScg (AP1) | Scene-linear master for DaVinci Resolve / ACES (bypasses LRT). Full DCP shape baked. |
+| `cinema-linear-master` | 16-bit half OpenEXR (DWAB) at Stage 7 | scene-linear ACEScg (AP1) | β. Skips DCP LookTable + ProfileToneCurve for HDR headroom. LR PV2012 keyframes still bake into pixels. Pick this when highlight recovery matters more than the canned DCP look. |
+| `stills-finished` | display Rec.2020 (gamma) + AgX | display-referred | **Deferred** — `NotImplementedError`. |
+
+> **Removed in v0.8:** `cinema-linear` / `cinema-aces` — both emitted *linear
+> Rec.2020*, a delivery gamut misused as scene-referred (a colour-science error).
+> ACEScg (AP1) / ACES2065-1 (AP0) are the only standards-aligned scene-linear
+> gamuts; see [CLAUDE.md](CLAUDE.md) §"Colour-space allowlist".
 
 ## Requirements
 
 - Python 3.10+
-- macOS or Windows with Adobe DNG Converter installed (free, from Adobe)
-  — required for the < 1 ΔE result. On Linux pass `--no-dng-convert` to
-  read NEFs directly via libraw (expect ~0.5 ΔE regression).
-- A per-camera DCP profile. Auto-detected from `$LRT_CINEMA_PROFILES`,
-  `~/.config/lrt-cinema/profiles/`, or the system Adobe DNG Converter
-  install. Pass `--dcp PATH` to override.
+- **dnglab** (open-source, LGPL-2.1) — the RAW→DNG converter, required for the
+  < 1 ΔE result. No Adobe software is needed. Install with `brew install
+  dnglab` (macOS), `cargo install dnglab`, or grab a Linux/macOS/Windows build
+  from https://github.com/dnglab/dnglab. Point `$LRT_CINEMA_DNGLAB` at the
+  binary if it isn't on `PATH`. To skip conversion entirely, pass
+  `--no-dng-convert` (reads NEFs directly via libraw; expect ~0.5 ΔE
+  regression).
+- A per-camera DCP profile. Auto-detected from `$LRT_CINEMA_PROFILES` or
+  `~/.config/lrt-cinema/profiles/`; pass `--dcp PATH` to supply one explicitly
+  (a `.dcp`, read clean-room, or an extracted `.npz`). Populate the profile
+  cache from any `.dcp` source you are licensed to use — an Adobe
+  CameraProfiles directory if you happen to have one, or profiles built with
+  [dcamprof](https://torger.se/anders/dcamprof.html) / RawTherapee — via
+  `python3 tools/extract_dcp_library.py <source_root>`.
 - Source RAW supported by libraw: NEF, DNG, CR3, ARW, RAF, ORF, RW2, FFF.
-
-Install Adobe DNG Converter:
-- **macOS:** https://helpx.adobe.com/camera-raw/digital-negative.html
-- **Windows:** Same URL.
-- **Linux:** Not officially supported by Adobe — use `--no-dng-convert`.
 
 ## Install
 
@@ -80,15 +93,16 @@ Runtime deps: `rawpy`, `colour-science`, `scipy`, `tifffile`, `OpenEXR`,
 ```bash
 lrt-cinema render \
   --input  /path/to/source-and-xmp-folder \
-  --output /path/to/output-exr-sequence
-# defaults to --preset cinema-linear-finished (half-float DWAB EXR).
+  --output /path/to/lrt-ready-tiff-sequence
+# defaults to --preset lrtimelapse (16-bit sRGB TIFF, LRT_00001.tif…).
+# Take the output folder back into LRTimelapse → Render from Intermediate.
 ```
 
 Power-user knobs:
 
 ```bash
 lrt-cinema render \
-  --input ... --output ... --preset cinema-aces \
+  --input ... --output ... --target resolve \
   --dcp /path/to/camera.dcp \
   --workers 4 \
   --from-frame 0 --to-frame 500 \
@@ -97,7 +111,7 @@ lrt-cinema render \
   --dry-run
 ```
 
-See `lrt-cinema render --help` for the full surface (9 flags).
+See `lrt-cinema render --help` for the full flag surface.
 
 ## Scope and non-goals
 
@@ -123,12 +137,17 @@ End-to-end gate: `tests/test_pipeline.py` renders the project's test
 scenes through the pipeline and asserts mean ΔE2000 < 1.0 against
 Adobe's own `dng_validate` reference renderer.
 
-Latest measurement (gym + rose, vs `dng_validate`):
+Latest measurement (v0.8 head, re-run 2026-05-30, gym + rose vs `dng_validate`):
 
 | Scene | Mean ΔE | P50 | P95 | < 1 ΔE pixels |
 |---|---:|---:|---:|---:|
-| Gym (D750 Camera Standard) | **0.79** | 0.20 | 4.19 | 76.8% |
-| Rose (D750 Adobe Standard) | **0.84** | — | — | 69.6% |
+| Gym (D750 Camera Standard) | **0.789** | 0.198 | 4.19 | 76.8% |
+| Rose (D750 Adobe Standard) | **0.844** | 0.803 | 1.70 | 69.6% |
+
+The gym mean is dragged by demosaic-edge pixels (libraw LINEAR vs Adobe);
+**flat non-edge pixels match `dng_validate` exactly (median ΔE 0.000, 94% of
+px)** — the colour science bit-matches the open-spec reference. See
+[docs/VALIDATION.md](docs/VALIDATION.md).
 
 ## License
 

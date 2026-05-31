@@ -1,11 +1,12 @@
-"""Command-line interface for lrt-cinema v0.6.
+"""Command-line interface for lrt-cinema.
 
 Render path is the in-process Python Adobe DNG 1.7.1 pipeline
 (`lrt_cinema.pipeline`); the dt-cli subprocess machinery is gone. See
-`docs/research/v06-architecture.md` for the full design.
+`docs/PIPELINE.md` for the as-built engine reference.
 
-Flag surface (9 flags, down from 12):
-  required:  --input  --output  --preset
+Flag surface:
+  required:  --input  --output
+  output:    --target {lrtimelapse,resolve,master}   (--preset overrides — advanced)
   range:     --from-frame  --to-frame
   io:        --dry-run  --quiet
   ops:       --apply-lrt-offsets / --no-lrt-offsets
@@ -50,6 +51,15 @@ from lrt_cinema.xmp_parser import parse_sequence
 # ---------------------------------------------------------------------------
 
 
+# Friendly output knob: --target expands to a preset bundle. --preset is the
+# advanced escape hatch that overrides it.
+_TARGET_TO_PRESET = {
+    "lrtimelapse": DEFAULT_PRESET,         # 16-bit sRGB display TIFF (LRT round-trip)
+    "resolve": "cinema-linear-finished",   # ACEScg EXR master for Resolve/ACES
+    "master": "cinema-linear-master",      # ACEScg EXR at Stage 7 (HDR headroom)
+}
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="lrt-cinema",
@@ -84,15 +94,24 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Folder to write rendered frames into.",
     )
     render.add_argument(
-        "--preset", default=DEFAULT_PRESET, choices=sorted(PRESETS),
+        "--target", default="lrtimelapse",
+        choices=("lrtimelapse", "resolve", "master"),
         help=(
-            f"Output preset (default: {DEFAULT_PRESET}). "
-            "Choices: cinema-linear-finished (v0.7 γ; half-float DWAB EXR, "
-            "full DCP shape), cinema-linear-master (v0.7.1 β; half-float "
-            "DWAB EXR at Stage 7, skips DCP LookTable + ProfileToneCurve "
-            "for HDR headroom), cinema-linear (32-bit float TIFF), "
-            "cinema-aces (deprecated; 32-bit float PIZ EXR), "
-            "stills-finished (v0.6.x)."
+            "Output target (default: lrtimelapse). Expands to a preset: "
+            "lrtimelapse → 16-bit sRGB display TIFF (LRT_NNNNN, embedded ICC) "
+            "re-ingestible by LRT's video renderer for Motion Blur; "
+            "resolve → half-float DWAB ACEScg EXR (scene-linear master for "
+            "DaVinci Resolve / ACES, bypasses LRT); "
+            "master → ACEScg EXR at Stage 7 for HDR headroom. "
+            "Override with --preset."
+        ),
+    )
+    render.add_argument(
+        "--preset", default=None, choices=sorted(PRESETS),
+        help=(
+            "Advanced: explicit output preset, overrides --target. Choices: "
+            "lrtimelapse, cinema-linear-finished, cinema-linear-master, "
+            "stills-finished (deferred)."
         ),
     )
     render.add_argument(
@@ -126,10 +145,10 @@ def _build_parser() -> argparse.ArgumentParser:
     render.add_argument(
         "--dcp", type=Path, default=None,
         help=(
-            "Explicit DCP path. Accepts Adobe `.dcp` or lrt-cinema's `.npz` "
-            "extracted profile. Auto-detected from $LRT_CINEMA_PROFILES / "
-            "~/.config/lrt-cinema/profiles / Adobe DNG Converter install "
-            "when not supplied."
+            "Explicit DCP path. Accepts a `.dcp` (clean-room reader) or "
+            "lrt-cinema's `.npz` extracted profile. Auto-detected from "
+            "$LRT_CINEMA_PROFILES / ~/.config/lrt-cinema/profiles when not "
+            "supplied."
         ),
     )
     render.add_argument(
@@ -143,11 +162,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-dng-convert", dest="no_dng_convert",
         action="store_true", default=False,
         help=(
-            "Skip Adobe DNG Converter preprocessing — read NEFs directly "
-            "via libraw. Expect ~0.5 ΔE regression vs default (libraw "
-            "lacks the DNG's embedded LinearizationTable + correct "
-            "WhiteLevel). Required on Linux where Adobe DNG Converter "
-            "has no official build."
+            "Skip the dnglab RAW→DNG step — read NEFs directly via libraw. "
+            "Expect ~0.5 ΔE regression vs default (libraw lacks the DNG's "
+            "embedded LinearizationTable + correct WhiteLevel). Use only when "
+            "no dnglab binary is available."
         ),
     )
 
@@ -215,7 +233,13 @@ def _render_one_frame(job: _RenderJob) -> _RenderResult:
             stop_after_stage=stop_after_stage,
         )
         with_dev_ops = apply_develop_ops(result.prophoto, job.ops)
-        write_preset_output(with_dev_ops, job.dst_stem, job.preset)
+        write_preset_output(
+            with_dev_ops, job.dst_stem, job.preset,
+            provenance={
+                "source_frame": job.src_raw.name,
+                "frame_index": job.frame_index,
+            },
+        )
         return _RenderResult(job.frame_index, job.src_raw, ok=True)
     except Exception as exc:
         return _RenderResult(
@@ -316,7 +340,16 @@ def _resolve_dcp(args: argparse.Namespace, first_raw: Path) -> tuple[Path | None
             f"DCP auto-detect skipped. Pass --dcp <path> to render with a profile.\n"
         )
     make, model = info
-    found = auto_detect_profile(first_raw)
+    try:
+        found = auto_detect_profile(first_raw)
+    except (FileNotFoundError, ValueError, struct.error, OSError) as exc:
+        # A corrupt/unreadable profile in an auto-detect root must not crash the
+        # CLI with a raw traceback (unlike --dcp, this path was unguarded).
+        # Treat as "no usable profile found" and fall through to the clear error.
+        return None, (
+            f"info: auto-detect found a profile for {make} {model} but it was "
+            f"malformed/unreadable ({type(exc).__name__}: {exc}). Pass --dcp <path>.\n"
+        )
     if found is None:
         return None, (
             f"info: no DCP found for {make} {model}. Pass --dcp or populate "
@@ -324,6 +357,22 @@ def _resolve_dcp(args: argparse.Namespace, first_raw: Path) -> tuple[Path | None
         )
     _, src_path = found
     return src_path, f"info: auto-detected DCP: {src_path}\n"
+
+
+def _output_stem(
+    output_dir: Path, preset: str, frame_index: int, source_name: str,
+) -> Path:
+    """Destination path stem (no extension) for a rendered frame.
+
+    The `lrtimelapse` target REQUIRES LRT's strict naming — `LRT_00001`,
+    5-digit zero-padded, 1-based — for LRT to recognise the folder as a
+    renderable intermediate sequence (LRT → Render from Intermediate). Other
+    targets keep the source stem so frames map back to their RAW. Render the
+    whole sequence (default range) so the LRT sequence starts at `LRT_00001`.
+    """
+    if preset == "lrtimelapse":
+        return output_dir / f"LRT_{frame_index + 1:05d}"
+    return output_dir / Path(source_name).stem
 
 
 def _cmd_render(args: argparse.Namespace) -> int:
@@ -377,17 +426,20 @@ def _cmd_render(args: argparse.Namespace) -> int:
     args.output.mkdir(parents=True, exist_ok=True)
     dng_cache_dir = args.output / ".dng-cache"
 
+    # --preset (advanced) overrides --target's preset bundle.
+    preset = args.preset or _TARGET_TO_PRESET[args.target]
+
     jobs = []
     for i in range(args.from_frame, to_frame):
         src_raw = args.input / seq.source_frames[i]
-        dst_stem = args.output / Path(seq.source_frames[i]).stem
+        dst_stem = _output_stem(args.output, preset, i, seq.source_frames[i])
         jobs.append(_RenderJob(
             frame_index=i,
             src_raw=src_raw,
             dst_stem=dst_stem,
             ops=per_frame[i],
             dcp_path=dcp_path,
-            preset=args.preset,
+            preset=preset,
             no_dng_convert=args.no_dng_convert,
             dng_cache_dir=dng_cache_dir,
         ))
@@ -396,7 +448,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
         sys.stderr.write(
             f"dry-run: would render {len(jobs)} frame(s) "
             f"[{args.from_frame}..{to_frame}) → {args.output} "
-            f"(preset={args.preset}, workers={args.workers}).\n",
+            f"(target={args.target}, preset={preset}, workers={args.workers}).\n",
         )
         return 0
 
@@ -415,7 +467,18 @@ def _run_jobs(jobs: list[_RenderJob], workers: int, quiet: bool) -> int:
         with ProcessPoolExecutor(max_workers=workers) as pool:
             futures = {pool.submit(_render_one_frame, j): j for j in jobs}
             for fut in as_completed(futures):
-                r = fut.result()
+                job = futures[fut]
+                try:
+                    r = fut.result()
+                except Exception as exc:
+                    # A worker that segfaults / OOMs raises BrokenProcessPool
+                    # here; unguarded it escapes _run_jobs and aborts the whole
+                    # batch, bypassing per-frame FAIL accounting. Count it as a
+                    # failed frame and keep going — already-written frames survive.
+                    r = _RenderResult(
+                        job.frame_index, job.src_raw, ok=False,
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
                 failures += _handle_result(r, total, quiet)
 
     if failures:

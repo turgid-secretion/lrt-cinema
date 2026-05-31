@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] — v0.8 prep
 
 ### Changed
+- **New default emission: `lrtimelapse` — a 16-bit sRGB display TIFF for the
+  LRTimelapse round-trip.** This is the format LRT's video renderer re-ingests
+  ("Render from Intermediate"), so frames go straight back into LRT for video +
+  Motion Blur — the canonical LRT workflow. Display-referred sRGB (Rec.709
+  primaries + sRGB OETF, Bradford D50→D65), **embedded sRGB ICC**, strict
+  `LRT_00001.tif…` naming, full LRT look baked, self-describing provenance
+  metadata. `DEFAULT_PRESET` is now `lrtimelapse`. The scene-linear ACEScg EXR
+  masters (`cinema-linear-finished` / `-master`) remain as opt-in targets for
+  DaVinci Resolve / ACES (which bypass LRT — no LRT Motion Blur). New writer
+  `output.write_tiff_display(colorspace=…)`; refuses a non-sRGB target without an
+  ICC to avoid LRT colour/gamma shifts. See `docs/LRT_ROUNDTRIP.md`.
 - **Cinema masters now emit scene-linear ACEScg (AP1), not linear Rec.2020.**
   `cinema-linear-finished` / `cinema-linear-master` write half-float DWAB EXR in
   ACEScg (AP1 primaries, ~D60 white) with the OpenEXR `chromaticities` header
@@ -20,12 +31,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `acesImageContainerFlag`. The < 1 ΔE pipeline ship gate is unaffected (output
   colourspace is independent of the validated render). See
   `docs/research/v08-linear-exr-gamut-resolve-nuke.md`.
-- **RAW→DNG conversion is now Adobe-free (dnglab).** `dng_convert.py` uses
-  **dnglab** (open, LGPL-2.1) by default — a verified drop-in for the Adobe DNG
-  Converter (dnglab-DNG vs Adobe-DNG on the same pipeline+DCP = mean ΔE 0.059,
-  100 % < 1 ΔE). Adobe DNG Converter retained only as a fallback
-  (`$LRT_CINEMA_DNG_CONVERTER`); discovery order is `$LRT_CINEMA_DNGLAB` → PATH →
-  common installs → Adobe. The render chain no longer requires any Adobe binary.
+- **The runtime is now fully Adobe-free (Phase 3).** dnglab (open-source,
+  LGPL-2.1) is the **sole** RAW→DNG converter — discovery is
+  `$LRT_CINEMA_DNGLAB` → PATH → common installs. The Adobe DNG Converter binary
+  discovery and the `$LRT_CINEMA_DNG_CONVERTER` fallback are **removed**
+  (`find_dng_converter`, `_DNG_CONVERTER_PATHS`). dnglab is a verified drop-in
+  (dnglab-DNG vs Adobe-DNG on the same pipeline+DCP = mean ΔE 0.059, 100 % < 1
+  ΔE) and ships Linux/macOS/Windows builds; `--no-dng-convert` remains the
+  libraw-direct fallback for boxes with no dnglab binary. DCP auto-detect no
+  longer scans an Adobe install directory (`find_dcp_for_camera`,
+  `_adobe_dcp_search_roots` removed) — profiles resolve only from the open
+  `.npz` roots (`$LRT_CINEMA_PROFILES`, `~/.config/lrt-cinema/profiles/`).
+  `--dcp` still accepts a `.dcp` (read by the clean-room `parse_dcp` reader, a
+  file-format reader — not an Adobe dependency) or an extracted `.npz`.
+  `tools/extract_dcp_library.py` now takes an **explicit** `<source_root>`
+  argument instead of hardcoding the Adobe install path. The `dng_validate`
+  reference renderer and system `.dcp` profiles remain **test-only** oracles
+  (the ΔE ship gate is unchanged). See `docs/PIPELINE.md` §8.
+
+### Security
+- **Fixed an EXIF→path-traversal in profile auto-detect (bug #8).** Camera
+  Make/Model read from untrusted RAW EXIF is interpolated into the
+  extracted-profile filename, so a hostile `Model` (e.g. `x/../../etc/evil`)
+  could make `find_extracted_profile_for_camera` probe a path outside the
+  profile search root. `_adobe_camera_label` now strips path separators and
+  NUL, keeping the label a single contained path segment. (Removing the
+  Adobe-install `.dcp` scan closed the sibling sink in the same class — the
+  original framing of bug #8.) Regression tests:
+  `test_camera_label_strips_path_separators_bug8`,
+  `test_find_extracted_profile_no_exif_path_traversal_bug8`.
 
 ### Verified (DaVinci Resolve Studio 21, headless — tools/resolve_verify/)
 - **ACEScg round-trip:** our ACEScg EXR, ingested via the named "ACEScg" Input
@@ -46,7 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 only full-sensor-raw option but trades away our colour science → offer later as
 an *optional* max-recovery preset (needs a `cdng_emit` writer + per-camera
 colour characterisation), not a default. See
-`docs/research/v08-timelapse-emission-survey.md` §2.6.
+[`docs/DECISIONS.md`](docs/DECISIONS.md) §3.
 
 ## [0.7.1a0] — 2026-05-28
 
@@ -91,13 +125,13 @@ colour characterisation), not a default. See
   strided-view garble class on real data, not 16×16 fixtures); half-DWAB
   is 19.5× vs float TIFF; DWAB is visually lossless (mean ΔE 0.25) on real
   content; Stage-7 preserves +1 stop of recovery; end-to-end colour is
-  0.789 ΔE vs `dng_validate`. See `docs/EMISSION_FORMAT_VERIFIED.md`.
+  0.789 ΔE vs `dng_validate`.
 
 ### Why this exists
 The v0.7 spec's Phase 2 (β-XML; Stage 7 EXR + Resolve project sidecar
 carrying LRT-authored keyframes) was deferred to v0.8 — Resolve does
 not preserve per-frame grade keyframes through any documented import
-path (see `docs/research/v07-beta-xml-deadend.md`). Option B is the
+path (see [`docs/DECISIONS.md`](docs/DECISIONS.md) §4). Option B is the
 pragmatic intermediate: the Stage 7 emission point (HDR headroom win)
 without the sidecar (which doesn't work). Users who want the v0.6 DCP
 shape stay on γ (`cinema-linear-finished`); users who want maximum
@@ -120,8 +154,7 @@ keyframes-in-pixels.
   optional. Existing `--preset cinema-linear-finished` invocations
   continue to work.
 - Test gate: ΔE2000 < 0.5 between DWAB-half and PIZ-half outputs on a
-  synthetic gradient+noise fixture (the visually-lossless gate per
-  `docs/research/v07-spec-revision-plan.md` §"Phase 1 — Validation").
+  synthetic gradient+noise fixture (the visually-lossless gate).
 
 ### Changed
 - `cinema-aces` preset now emits a one-time `DeprecationWarning` per
@@ -130,7 +163,7 @@ keyframes-in-pixels.
 - Version bumped from `0.6.0a0` to `0.7.0a0`.
 
 ### Why this exists
-Per `docs/research/v07-spec-revision-plan.md`, v0.6's emissions were
+v0.6's emissions were
 huge (~292 MiB / frame for `cinema-linear` 32-bit float TIFF, ~100 MiB
 for `cinema-aces` PIZ-float EXR). Cinema scene-referred workflows ship
 half-float DWAB EXR because it's the size/quality/decode-speed Pareto
@@ -145,8 +178,8 @@ verification (2026-05-28) found Resolve's documented import paths do
 not preserve per-frame grade keyframes: FCPXML colour data lands as
 static primary corrections only (Manual ~line 50884); Studio scripting
 API exposes `SetCDL` / `SetLUT` / `ApplyGradeFromDRX` only, with no
-per-frame setter. See `docs/research/v07-beta-xml-deadend.md` for the
-full finding and what v0.8 could re-open. The v0.7.x §2.B free-upgrade
+per-frame setter. See [`docs/DECISIONS.md`](docs/DECISIONS.md) §4 for the
+finding and what could re-open it. The v0.7.x §2.B free-upgrade
 roadmap (X1–X6: HSL, Color Grading wheels, parametric tone, user
 masks, Texture, Clarity) is correspondingly deferred — those
 increments were architected around the β-XML carrier.

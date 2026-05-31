@@ -1,4 +1,4 @@
-"""RAW → DNG conversion. Adobe-free by default via **dnglab**.
+"""RAW → DNG conversion. Adobe-free: the sole converter is **dnglab**.
 
 Why convert at all: the pipeline's < 1 ΔE result depends on libraw seeing the
 embedded LinearizationTable and the correct WhiteLevel (15520 for D750, vs
@@ -8,18 +8,16 @@ converted DNG and absent from a NEF read directly. See
 finding".
 
 Converter: **dnglab** (open-source, LGPL-2.1, https://github.com/dnglab/dnglab)
-is the default — it makes the chain Adobe-free, runs on Linux/macOS/Windows, and
-is a verified drop-in for the Adobe DNG Converter on this pipeline: rendering the
-same NEF through dnglab-DNG vs Adobe-DNG (identical pipeline + DCP) measured
-**mean ΔE2000 0.059, 100 % of pixels < 1 ΔE** (tools/resolve_verify, 2026-05-28).
-The Adobe DNG Converter is retained only as a fallback when dnglab is absent but
-Adobe is installed.
+is the only RAW→DNG path — it makes the chain Adobe-free and runs on
+Linux/macOS/Windows. It is a verified drop-in for the (now-removed) Adobe DNG
+Converter dependency: rendering the same NEF through dnglab-DNG vs Adobe-DNG
+(identical pipeline + DCP) measured **mean ΔE2000 0.059, 100 % of pixels < 1 ΔE**
+(tools/resolve_verify, 2026-05-28).
 
 Users invoke `lrt-cinema` with a folder of NEFs; this wrapper transparently runs
-the converter once per frame (mtime+size-keyed cache makes re-runs free) and
-routes the resulting DNG into the pipeline. `--no-dng-convert` bypasses it
-(direct libraw NEF read, ~0.5 ΔE regression — the original Linux fallback, now
-largely redundant since dnglab covers Linux).
+dnglab once per frame (mtime+size-keyed cache makes re-runs free) and routes the
+resulting DNG into the pipeline. `--no-dng-convert` bypasses it (direct libraw
+NEF read, ~0.5 ΔE regression) for environments without a dnglab binary.
 """
 
 from __future__ import annotations
@@ -35,8 +33,9 @@ from pathlib import Path
 
 from filelock import FileLock
 
-# dnglab — the Adobe-free default. Checked via $LRT_CINEMA_DNGLAB, then PATH,
-# then common install locations (Homebrew, cargo, /usr/local).
+# dnglab — the sole RAW→DNG converter (Adobe-free). Checked via
+# $LRT_CINEMA_DNGLAB, then PATH, then common install locations
+# (Homebrew, cargo, /usr/local).
 _DNGLAB_PATHS = (
     "/opt/homebrew/bin/dnglab",
     "/usr/local/bin/dnglab",
@@ -44,17 +43,9 @@ _DNGLAB_PATHS = (
     "/usr/bin/dnglab",
 )
 
-# Adobe DNG Converter — fallback only. macOS fixed path + Windows installs;
-# Linux users can point $LRT_CINEMA_DNG_CONVERTER at a Wine/Crossover bottle.
-_DNG_CONVERTER_PATHS = (
-    "/Applications/Adobe DNG Converter.app/Contents/MacOS/Adobe DNG Converter",
-    "C:\\Program Files\\Adobe\\Adobe DNG Converter\\Adobe DNG Converter.exe",
-    "C:\\Program Files (x86)\\Adobe\\Adobe DNG Converter\\Adobe DNG Converter.exe",
-)
-
 
 class DngConverterNotFound(RuntimeError):
-    """Raised when no RAW→DNG converter (dnglab or Adobe) can be located."""
+    """Raised when the dnglab RAW→DNG converter cannot be located."""
 
 
 @dataclass(frozen=True)
@@ -81,42 +72,23 @@ def find_dnglab() -> Path | None:
     return None
 
 
-def find_dng_converter() -> Path:
-    """Locate the Adobe DNG Converter binary (fallback). Checks
-    $LRT_CINEMA_DNG_CONVERTER first, then platform install paths.
-
-    Raises `DngConverterNotFound` if absent."""
-    env_path = os.environ.get("LRT_CINEMA_DNG_CONVERTER")
-    if env_path and Path(env_path).is_file():
-        return Path(env_path)
-    for candidate in _DNG_CONVERTER_PATHS:
-        if Path(candidate).is_file():
-            return Path(candidate)
-    raise DngConverterNotFound(
-        "Adobe DNG Converter not found. (It is only a fallback — prefer dnglab.)"
-    )
-
-
 def find_converter() -> tuple[Path, str]:
-    """Locate a RAW→DNG converter. Returns (binary, kind) where kind is
-    `"dnglab"` (preferred, Adobe-free) or `"adobe"` (fallback).
+    """Locate the RAW→DNG converter. Returns `(binary, "dnglab")`.
 
-    Raises `DngConverterNotFound` (with a dnglab-first install hint) if neither
-    is available."""
+    dnglab is the only converter (the chain is Adobe-free). Raises
+    `DngConverterNotFound` (with an install hint) when no dnglab binary is
+    available. The `"dnglab"` second element is retained so callers and the
+    `DngConvertResult.converter_kind` field have a stable shape."""
     dnglab = find_dnglab()
-    if dnglab is not None:
-        return dnglab, "dnglab"
-    try:
-        return find_dng_converter(), "adobe"
-    except DngConverterNotFound:
+    if dnglab is None:
         raise DngConverterNotFound(
-            "No RAW→DNG converter found. Install dnglab (open, Adobe-free): "
+            "dnglab not found. Install it (open-source, Adobe-free): "
             "`brew install dnglab` (macOS) or see "
             "https://github.com/dnglab/dnglab; or set $LRT_CINEMA_DNGLAB to the "
-            "binary path. (Adobe DNG Converter also works as a fallback via "
-            "$LRT_CINEMA_DNG_CONVERTER.) Or pass --no-dng-convert to read NEFs "
-            "directly (expect ~0.5 ΔE regression)."
-        ) from None
+            "binary path. Or pass --no-dng-convert to read NEFs directly "
+            "(expect ~0.5 ΔE regression)."
+        )
+    return dnglab, "dnglab"
 
 
 def _cache_key(nef_path: Path) -> str:
@@ -132,16 +104,10 @@ def cached_dng_path(nef_path: Path, cache_dir: Path) -> Path:
     return cache_dir / f"{nef_path.stem}.{_cache_key(nef_path)}.dng"
 
 
-def _converter_cmd(kind: str, binary: Path, nef_path: Path, out_dng: Path) -> list[str]:
-    """Build the subprocess argv for the chosen converter. Both write the DNG
-    to `out_dng` (dnglab takes an explicit output path; Adobe writes
-    `<stem>.dng` into the -d directory, which we point at out_dng's parent and
-    name accordingly)."""
-    if kind == "dnglab":
-        # `dnglab convert <in> <out>` — explicit output, default lossless JPEG.
-        return [str(binary), "convert", str(nef_path), str(out_dng)]
-    # Adobe DNG Converter: -c lossless JPEG, -d output dir (fixed <stem>.dng).
-    return [str(binary), "-c", "-d", str(out_dng.parent), str(nef_path)]
+def _converter_cmd(binary: Path, nef_path: Path, out_dng: Path) -> list[str]:
+    """Build the dnglab subprocess argv. `dnglab convert <in> <out>` writes the
+    DNG to the explicit `out_dng` path (default lossless JPEG compression)."""
+    return [str(binary), "convert", str(nef_path), str(out_dng)]
 
 
 def convert_nef_to_dng(
@@ -154,9 +120,9 @@ def convert_nef_to_dng(
     """Convert a single NEF (or any supported RAW) → DNG, Adobe-free via dnglab
     by default. Caches by NEF mtime+size+path; re-conversion is O(stat).
 
-    `converter_binary`/`converter_kind`: override the auto-detected converter
-    (kind ∈ {"dnglab","adobe"}). When `converter_binary` is given without a
-    kind, dnglab semantics are assumed.
+    `converter_binary`/`converter_kind`: override the auto-detected converter.
+    dnglab is the only supported kind; `converter_kind` defaults to `"dnglab"`
+    and is carried through to the result for a stable API shape.
 
     Raises: DngConverterNotFound, subprocess.TimeoutExpired, RuntimeError.
     """
@@ -179,7 +145,7 @@ def convert_nef_to_dng(
         # we atomically move it into the shared cache slot.
         with tempfile.TemporaryDirectory(prefix="dngc-", dir=cache_dir) as tmpdir:
             produced = Path(tmpdir) / f"{nef_path.stem}.dng"
-            cmd = _converter_cmd(converter_kind, converter_binary, nef_path, produced)
+            cmd = _converter_cmd(converter_binary, nef_path, produced)
             t0 = time.monotonic()
             proc = subprocess.run(cmd, capture_output=True, timeout=timeout_seconds)
             elapsed = time.monotonic() - t0

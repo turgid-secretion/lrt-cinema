@@ -1,4 +1,4 @@
-"""RAW→DNG converter wrapper tests (dnglab default, Adobe fallback).
+"""RAW→DNG converter wrapper tests (dnglab — the sole, Adobe-free converter).
 
 Pure mock-based for the subprocess paths — CI needs no converter installed.
 Real-binary smoke tests (skipped when the binary/NEF are absent) catch CLI-
@@ -20,7 +20,6 @@ from lrt_cinema.dng_convert import (
     cached_dng_path,
     convert_nef_to_dng,
     find_converter,
-    find_dng_converter,
     find_dnglab,
     resolve_render_input,
 )
@@ -75,34 +74,14 @@ def test_find_converter_prefers_dnglab(tmp_path, monkeypatch):
     assert kind == "dnglab" and binary == fake
 
 
-def test_find_converter_falls_back_to_adobe(tmp_path, monkeypatch):
-    """No dnglab anywhere, but Adobe present via env → kind 'adobe'."""
+def test_find_converter_raises_when_no_dnglab(monkeypatch):
+    """dnglab is the only converter — its absence raises with an install hint."""
     monkeypatch.delenv("LRT_CINEMA_DNGLAB", raising=False)
-    adobe = tmp_path / "adobe_dngc"
-    adobe.write_text("fake")
-    adobe.chmod(0o755)
-    monkeypatch.setenv("LRT_CINEMA_DNG_CONVERTER", str(adobe))
-    with patch("lrt_cinema.dng_convert.find_dnglab", return_value=None):
-        binary, kind = find_converter()
-    assert kind == "adobe" and binary == adobe
-
-
-def test_find_converter_raises_when_none(tmp_path, monkeypatch):
-    monkeypatch.delenv("LRT_CINEMA_DNGLAB", raising=False)
-    monkeypatch.delenv("LRT_CINEMA_DNG_CONVERTER", raising=False)
     with (
         patch("lrt_cinema.dng_convert.find_dnglab", return_value=None),
-        patch("lrt_cinema.dng_convert._DNG_CONVERTER_PATHS", (str(tmp_path / "nope"),)),
-        pytest.raises(DngConverterNotFound, match="No RAW.*converter found"),
+        pytest.raises(DngConverterNotFound, match="dnglab not found"),
     ):
         find_converter()
-
-
-def test_find_dng_converter_env_var_back_compat(tmp_path, monkeypatch):
-    fake = tmp_path / "adobe"
-    fake.write_text("fake")
-    monkeypatch.setenv("LRT_CINEMA_DNG_CONVERTER", str(fake))
-    assert find_dng_converter() == fake
 
 
 # ---------------------------------------------------------------------------
@@ -147,25 +126,6 @@ def test_convert_runs_subprocess_and_caches(tmp_path):
             r2 = convert_nef_to_dng(nef, cache_dir, converter_binary=fake_binary)
             run2.assert_not_called()
             assert r2.dng_path == r1.dng_path and r2.from_cache is True
-
-
-def test_convert_adobe_kind_cmd_shape(tmp_path):
-    """Adobe fallback uses `-c -d <dir>` and writes <stem>.dng into the dir."""
-    nef = tmp_path / "frame.nef"
-    nef.write_bytes(b"raw")
-    cache_dir = tmp_path / "cache"
-    fake = tmp_path / "adobe"
-    fake.write_text("")
-    fake.chmod(0o755)
-
-    def fake_run(cmd, capture_output, timeout):
-        assert cmd[1] == "-c" and cmd[2] == "-d"  # Adobe argv shape
-        (Path(cmd[3]) / f"{nef.stem}.dng").write_bytes(b"II*\x00" + b"\x00" * 100)
-        return subprocess.CompletedProcess(cmd, 0, b"", b"")
-
-    with patch("lrt_cinema.dng_convert.subprocess.run", side_effect=fake_run):
-        r = convert_nef_to_dng(nef, cache_dir, converter_binary=fake, converter_kind="adobe")
-    assert r.converter_kind == "adobe" and r.dng_path.is_file()
 
 
 def test_convert_raises_on_subprocess_failure(tmp_path):

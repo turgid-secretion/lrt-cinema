@@ -13,9 +13,32 @@ from pathlib import Path
 
 import pytest
 
-from lrt_cinema.cli import main
+from lrt_cinema.cli import _output_stem, main
+from lrt_cinema.presets import DEFAULT_PRESET
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+# ---------------------------------------------------------------------------
+# Output naming — LRTimelapse strict convention vs source stem
+# ---------------------------------------------------------------------------
+
+
+def test_default_preset_is_lrtimelapse():
+    assert DEFAULT_PRESET == "lrtimelapse"
+
+
+def test_lrtimelapse_uses_lrt_strict_naming(tmp_path):
+    """LRT requires LRT_00001, 5-digit, 1-based, to recognise the sequence."""
+    assert _output_stem(tmp_path, "lrtimelapse", 0, "DSC_0001.NEF").name == "LRT_00001"
+    assert _output_stem(tmp_path, "lrtimelapse", 9, "DSC_9.NEF").name == "LRT_00010"
+    assert _output_stem(tmp_path, "lrtimelapse", 99, "x.NEF").name == "LRT_00100"
+
+
+def test_non_lrt_targets_keep_source_stem(tmp_path):
+    assert _output_stem(
+        tmp_path, "cinema-linear-finished", 5, "DSC_0042.NEF",
+    ).name == "DSC_0042"
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +79,7 @@ def test_dropped_flags_no_longer_accepted(capsys, tmp_path):
         with pytest.raises(SystemExit) as exc:
             main([
                 "render", "--input", str(src), "--output", str(out),
-                "--preset", "cinema-linear", old_flag, "x",
+                "--preset", "cinema-linear-finished", old_flag, "x",
             ])
         assert exc.value.code != 0, f"{old_flag} should be rejected"
 
@@ -88,7 +111,7 @@ def test_render_rejects_same_input_and_output(tmp_path, capsys):
     src.mkdir()
     rc = main([
         "render", "--input", str(src), "--output", str(src),
-        "--preset", "cinema-linear", "--dry-run",
+        "--preset", "cinema-linear-finished", "--dry-run",
     ])
     assert rc == 2
     assert "must differ" in capsys.readouterr().err
@@ -113,7 +136,7 @@ def test_dry_run_reports_what_would_render(tmp_path, capsys):
 
     rc = main([
         "render", "--input", str(src), "--output", str(out),
-        "--preset", "cinema-linear", "--dry-run", "--quiet",
+        "--preset", "cinema-linear-finished", "--dry-run", "--quiet",
     ])
     assert rc == 0
     err = capsys.readouterr().err
@@ -134,7 +157,7 @@ def test_dry_run_does_not_touch_source_xmp(tmp_path):
     out = tmp_path / "output"
     main([
         "render", "--input", str(src), "--output", str(out),
-        "--preset", "cinema-linear", "--dry-run", "--quiet",
+        "--preset", "cinema-linear-finished", "--dry-run", "--quiet",
     ])
     assert lrt_xmp.read_bytes() == original
 
@@ -147,7 +170,7 @@ def test_from_to_frame_validation(tmp_path, capsys):
     out = tmp_path / "output"
     rc = main([
         "render", "--input", str(src), "--output", str(out),
-        "--preset", "cinema-linear", "--dry-run",
+        "--preset", "cinema-linear-finished", "--dry-run",
         "--from-frame", "10",
     ])
     assert rc == 2
@@ -180,3 +203,42 @@ def test_inspect_show_fields_dumps_per_keyframe_ops(tmp_path, capsys):
     rc = main(["inspect", "--input", str(src), "--show-fields"])
     assert rc == 0
     assert "ev=" in capsys.readouterr().out
+
+
+def test_render_help_lists_target_flag(capsys):
+    with pytest.raises(SystemExit):
+        main(["render", "--help"])
+    assert "--target" in capsys.readouterr().out
+
+
+def _stub_seq(tmp_path):
+    src = tmp_path / "in"
+    src.mkdir()
+    (src / "frame_0001.CR3").write_bytes(b"raw-stub")
+    shutil.copy(FIXTURES / "synthetic_keyframe_a.xmp", src / "frame_0001.CR3.xmp")
+    return src
+
+
+def test_target_default_expands_to_lrtimelapse(tmp_path, capsys):
+    src = _stub_seq(tmp_path)
+    rc = main(["render", "--input", str(src), "--output", str(tmp_path / "out"),
+               "--dry-run", "--quiet"])
+    assert rc == 0
+    assert "preset=lrtimelapse" in capsys.readouterr().err
+
+
+def test_target_resolve_expands_to_cinema_linear_finished(tmp_path, capsys):
+    src = _stub_seq(tmp_path)
+    rc = main(["render", "--input", str(src), "--output", str(tmp_path / "out"),
+               "--target", "resolve", "--dry-run", "--quiet"])
+    assert rc == 0
+    assert "preset=cinema-linear-finished" in capsys.readouterr().err
+
+
+def test_preset_overrides_target(tmp_path, capsys):
+    src = _stub_seq(tmp_path)
+    rc = main(["render", "--input", str(src), "--output", str(tmp_path / "out"),
+               "--target", "resolve", "--preset", "lrtimelapse",
+               "--dry-run", "--quiet"])
+    assert rc == 0
+    assert "preset=lrtimelapse" in capsys.readouterr().err

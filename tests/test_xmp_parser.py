@@ -246,6 +246,47 @@ def test_parse_float_rejects_nan_and_inf():
     assert _parse_float("-0.5") == -0.5
 
 
+def test_parse_int_handles_non_finite_without_crashing():
+    """crs:Temperature='1e999'/'inf' would make int(round(float(...))) raise
+    OverflowError (an ArithmeticError, NOT a ValueError) → escapes
+    parse_sequence's skip-and-warn handler → aborts the whole batch. Must
+    degrade to None instead."""
+    from lrt_cinema.xmp_parser import _parse_int
+
+    assert _parse_int("1e999") is None
+    assert _parse_int("inf") is None
+    assert _parse_int("nan") is None
+    assert _parse_int("5500") == 5500
+    assert _parse_int("5500.0") == 5500
+
+
+def test_try_finite_float_drops_non_finite():
+    from lrt_cinema.xmp_parser import _try_finite_float
+
+    assert _try_finite_float("nan") is None
+    assert _try_finite_float("inf") is None
+    assert _try_finite_float("garbage") is None
+    assert _try_finite_float(None) is None
+    assert _try_finite_float("+1.5") == 1.5
+
+
+def test_parse_xmp_temperature_inf_degrades_to_none(tmp_path):
+    """End-to-end: a non-finite Temperature degrades to None, not an
+    OverflowError that aborts the batch (regression for the widened handler)."""
+    xmp = tmp_path / "f.xmp"
+    xmp.write_text(
+        '<?xml version="1.0"?>'
+        '<x:xmpmeta xmlns:x="adobe:ns:meta/">'
+        '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+        '<rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" '
+        'crs:Temperature="1e999" crs:Exposure2012="0.5"/>'
+        "</rdf:RDF></x:xmpmeta>",
+    )
+    ops, *_ = parse_xmp_file(xmp)
+    assert ops.temperature_k is None                 # degraded, not crashed
+    assert ops.exposure_ev == pytest.approx(0.5)      # the rest parses fine
+
+
 def test_parse_sequence_warns_on_corrupted_xmp(tmp_path, capsys):
     """A corrupted XMP must NOT silently degrade the frame to defaults
     (would produce a flat frame mid-graded-sequence with no diagnostic).
