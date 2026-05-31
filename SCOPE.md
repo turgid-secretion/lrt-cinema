@@ -35,7 +35,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the release history.
 |---|---|---|
 | `stills-finished` preset (Rec.2020 + AgX) | deferred | `NotImplementedError`. AgX port from Blender reference or `colour-science` primitives. |
 | `scene_kelvin` computation regression at high K | deferred | Currently hardcoded 5500K. `neutral_to_kelvin` solver lives in `pipeline.py` but converges to values that regress ΔE on rose via HSM mired-blend divergence. |
-| `Highlights2012`, `Shadows2012`, `Whites2012` | dropped | LR PV2012 parametric tone math is closed-source. Render-time warning surfaces them. |
+| `Highlights2012`, `Shadows2012`, `Whites2012` | dropped on faithful; perceptual op forthcoming | Adobe's PV2012 tone math is closed-source → **dropped + render-time warning on the faithful/sRGB path** (`cli._warn_dropped_ops`). **Reopened on the perceptual/ACEScg path** (DECISIONS §5 amendment): a scene-referred local DR-compression op driven by these same XMP knobs (Local Laplacian / guided filter), v0.9. |
 | `Sharpness` | no-op | Sharpening belongs in the grade stage; may revisit later. |
 | Third test scene (tungsten / fluorescent) | deferred | Surfaces whether 5500K is load-bearing or coincidental on the current gym + rose pair. |
 | Smooth (Catmull-Rom) keyframe interpolation | future | Was in v0.2 plan; deferred until real-LRT-sequence preference signal arrives. |
@@ -108,11 +108,11 @@ lrt-cinema render
   --preset NAME              advanced; overrides --target
                              (lrtimelapse | cinema-linear-finished |
                               cinema-linear-master | stills-finished)
-  --render-intent {faithful,perceptual}  default faithful; Stage-12 grading
-                             applicator (DECISIONS.md §7). faithful = Adobe look
-                             (sRGB TIFF / LRT round-trip); perceptual = modern
-                             primitives for the ACEScg master. perceptual aliases
-                             faithful until v0.9 steps 2-3 land (byte-exact today)
+  --render-intent {faithful,perceptual}  which grading MATH (DECISIONS.md §7), not
+                             a creative control — values come from the XMP knobs.
+                             Default per target: sRGB TIFF → faithful (Adobe look);
+                             ACEScg EXR → perceptual (our math). Flag overrides.
+                             perceptual aliases faithful until v0.9 steps 2-4 land
   --from-frame N             default 0
   --to-frame N               default = end of sequence
   --dry-run                  print what would render; no I/O
