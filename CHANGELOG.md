@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] — v0.8 prep
 
 ### Added
+- **Dual-mode grading scaffold — `--render-intent {faithful,perceptual}`**
+  (DECISIONS.md §7, v0.9 step 1). Threads a `RenderIntent` through
+  `cli → _RenderJob → develop_ops.apply_develop_ops / apply_stage_12_perceptual`;
+  only the HSL + Color-Grade applicators branch on it. **faithful** (default) =
+  today's Adobe-hexcone ops (the sRGB TIFF / LRT round-trip — the Lightroom
+  look); **perceptual** = modern primitives (OKLCh HSL, ASC-CDL grade) for the
+  ACEScg master. The perceptual applicators (`_apply_hsl_perceptual`,
+  `_apply_color_grade_perceptual`) currently **alias the faithful ones**, so the
+  switch is wired but **byte-identical** — zero behaviour change, ship gate
+  untouched — until v0.9 steps 2-3 fill them. Routing is covered by a
+  monkeypatch test that survives those steps; identity stays byte-exact under
+  both intents. Shared op IR (`HslBands`, `ColorGrade`) across intents.
 - **LR Color Grading wheels baked into the render (Stage 12).** The four wheels
   — Shadows, Midtones, Highlights, Global — each {Hue, Saturation, Luminance},
   plus `ColorGradeBlending` and `ColorGradeBalance` (`crs:ColorGrade*`; the PV4+

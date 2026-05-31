@@ -108,6 +108,11 @@ lrt-cinema render
   --preset NAME              advanced; overrides --target
                              (lrtimelapse | cinema-linear-finished |
                               cinema-linear-master | stills-finished)
+  --render-intent {faithful,perceptual}  default faithful; Stage-12 grading
+                             applicator (DECISIONS.md §7). faithful = Adobe look
+                             (sRGB TIFF / LRT round-trip); perceptual = modern
+                             primitives for the ACEScg master. perceptual aliases
+                             faithful until v0.9 steps 2-3 land (byte-exact today)
   --from-frame N             default 0
   --to-frame N               default = end of sequence
   --dry-run                  print what would render; no I/O

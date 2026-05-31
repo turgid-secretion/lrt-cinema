@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from lrt_cinema.ir import ColorGrade, DevelopOps, HslBands, TonePoint
+from lrt_cinema.ir import ColorGrade, DevelopOps, HslBands, RenderIntent, TonePoint
 from lrt_cinema.pipeline import DngSplineSolver
 
 # ---------------------------------------------------------------------------
@@ -248,6 +248,20 @@ def apply_color_grade(prophoto: np.ndarray, cg: ColorGrade) -> np.ndarray:
     return np.maximum(out, 0.0).astype(prophoto.dtype)
 
 
+def _apply_hsl_perceptual(prophoto: np.ndarray, hsl: HslBands) -> np.ndarray:
+    """PERCEPTUAL HSL — OKLCh (DECISIONS.md §7 step 3). **Not yet implemented**:
+    aliases the faithful Adobe-hexcone `apply_hsl` so the dual-mode switch is
+    byte-identical until the OKLCh applicator (+ ACES RGC gamut pass) lands."""
+    return apply_hsl(prophoto, hsl)
+
+
+def _apply_color_grade_perceptual(prophoto: np.ndarray, cg: ColorGrade) -> np.ndarray:
+    """PERCEPTUAL Color Grade — ASC CDL (SOP+sat) (DECISIONS.md §7 step 2).
+    **Not yet implemented**: aliases the faithful split-tone `apply_color_grade`
+    until the CDL applicator lands."""
+    return apply_color_grade(prophoto, cg)
+
+
 def apply_contrast_2012(prophoto: np.ndarray, contrast: float) -> np.ndarray:
     """LR Contrast2012: -100..+100 S-curve around midtone pivot (0.18 linear,
     matching scene-linear midgray). Mapping: pivot-anchored gain
@@ -287,6 +301,7 @@ def apply_sharpness(prophoto: np.ndarray, sharpness: float) -> np.ndarray:
 
 def apply_stage_12_perceptual(
     prophoto: np.ndarray, ops: DevelopOps,
+    intent: RenderIntent = RenderIntent.FAITHFUL,
 ) -> np.ndarray:
     """Apply all stage-12 perceptual-domain ops in order:
     ToneCurve → Saturation → Vibrance → HSL → ColorGrade → Contrast → Sharpness.
@@ -296,12 +311,24 @@ def apply_stage_12_perceptual(
     Grading; both are colour-treatment ops after Basic presence and before the
     final tone shaping). Identity ops short-circuit to a byte-exact no-op, so a
     render with no HSL / Color-Grade intent is bit-identical to the prior
-    pipeline (the ΔE ship gate is unaffected)."""
+    pipeline (the ΔE ship gate is unaffected).
+
+    `intent` selects the HSL + Color-Grade applicator (DECISIONS.md §7):
+    **FAITHFUL** (default) uses the Adobe-hexcone ops — the sRGB TIFF / LRT
+    round-trip path; **PERCEPTUAL** uses the modern primitives for the ACEScg
+    master. The perceptual applicators currently alias the faithful ones (steps
+    2-3 fill them), so the two intents are byte-identical today — the seam is in
+    place without changing any output. Only the HSL/ColorGrade applicators
+    branch; ToneCurve/Sat/Vib/Contrast/Sharpness are intent-independent."""
     out = apply_tone_curve_pv2012(prophoto, ops.tone_curve)
     out = apply_saturation(out, ops.saturation)
     out = apply_vibrance(out, ops.vibrance)
-    out = apply_hsl(out, ops.hsl)
-    out = apply_color_grade(out, ops.color_grade)
+    if intent is RenderIntent.PERCEPTUAL:
+        out = _apply_hsl_perceptual(out, ops.hsl)
+        out = _apply_color_grade_perceptual(out, ops.color_grade)
+    else:
+        out = apply_hsl(out, ops.hsl)
+        out = apply_color_grade(out, ops.color_grade)
     out = apply_contrast_2012(out, ops.contrast)
     out = apply_sharpness(out, ops.sharpness)
     return out
@@ -309,13 +336,18 @@ def apply_stage_12_perceptual(
 
 def apply_develop_ops(
     prophoto: np.ndarray, ops: DevelopOps,
+    intent: RenderIntent = RenderIntent.FAITHFUL,
 ) -> np.ndarray:
     """Entry point: apply all develop ops (stages 11 + 12) to linear
     ProPhoto. Returns linear ProPhoto post-LR-ops, ready for stage 13
     (color-space conversion + output encoding in `output.py`).
+
+    `intent` (DECISIONS.md §7) picks the Stage-12 grading applicator — FAITHFUL
+    (default, Adobe-hexcone, sRGB TIFF) or PERCEPTUAL (modern primitives, ACEScg
+    master). Stage 11 is intent-independent.
     """
     out = apply_stage_11_linear(prophoto, ops)
-    return apply_stage_12_perceptual(out, ops)
+    return apply_stage_12_perceptual(out, ops, intent)
 
 
 # ---------------------------------------------------------------------------
