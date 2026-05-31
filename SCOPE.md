@@ -21,6 +21,8 @@ See [CHANGELOG.md](CHANGELOG.md) for the release history.
 | Adobe DNG 1.7.1 render pipeline (stages 1–9) | shipped | `pipeline.py`, ΔE < 1 vs `dng_validate` |
 | Per-camera DCP profile loading + ColorMatrix interpolation | shipped | `dcp.py`; auto-detect from `$LRT_CINEMA_PROFILES` / `~/.config/lrt-cinema/profiles` (open `.npz`); clean-room `.dcp` reader for `--dcp` |
 | LR Exposure2012, Blacks2012, ToneCurvePV2012, Saturation, Vibrance, Contrast2012 | shipped | `develop_ops.py` (greenfield from public LR formulas) |
+| LR HSL panel (8 hue bands × Hue/Saturation/Luminance) | shipped | `develop_ops.apply_hsl`; smooth partition-of-unity band weights, neutral-safe luminance. Band centres / magnitudes are a documented public approximation (LR's exact math is closed) |
+| LR Color Grading wheels (Shadows/Midtones/Highlights/Global + Blending/Balance) | shipped | `develop_ops.apply_color_grade`; luminance-masked zero-sum chroma tint, partition-of-unity zone masks. Parses `crs:ColorGrade*` + legacy `crs:SplitToning*` aliases. Tint strengths / mask shape are a documented public approximation |
 | NEF→DNG preprocessing | shipped | `dng_convert.py` wraps **dnglab** (open-source, LGPL-2.1; Adobe-free); mtime+size cache |
 | `lrtimelapse` output (16-bit sRGB display TIFF, embedded ICC, `LRT_NNNNN`) | **shipped; v0.8 DEFAULT** | `output.py`; the LRT video round-trip emission |
 | `cinema-linear-finished` output (16-bit half DWAB EXR, ACEScg; γ) | shipped | `output.py`; scene-linear master for Resolve / ACES |
