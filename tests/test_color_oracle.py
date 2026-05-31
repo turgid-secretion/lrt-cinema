@@ -27,12 +27,17 @@ colour = pytest.importorskip("colour")  # noqa: F841  (output.py needs it; gate 
 
 from lrt_cinema.dcp import DCPProfile, HsvCube, interpolate_color_matrix  # noqa: E402
 from lrt_cinema.develop_ops import (  # noqa: E402
+    _CG_CHROMA_STRENGTH,
+    _CG_LUM_STRENGTH,
     _HSL_BAND_CENTERS_HEX,
     _HSL_HUE_MAX_HEX,
     _HSL_LUM_SAT_GATE,
+    _PROPHOTO_LUMINANCE,
+    _color_grade_zone_weights,
+    apply_color_grade,
     apply_hsl,
 )
-from lrt_cinema.ir import HslBands  # noqa: E402
+from lrt_cinema.ir import ColorGrade, HslBands  # noqa: E402
 from lrt_cinema.lut3d_baker import (  # noqa: E402
     _apply_hsv_cube,
     _hsv_to_rgb_dcp,
@@ -685,3 +690,143 @@ def test_hsl_identity_is_byte_exact_no_op():
         apply_hsl(rgb, HslBands(hue=(0.0,) * 8, saturation=(0.0,) * 8, luminance=(0.0,) * 8)),
         rgb,
     )
+
+
+# ---------------------------------------------------------------------------
+# Color Grading wheels (develop_ops.apply_color_grade) — Shadows / Midtones /
+# Highlights / Global, tonal-zone-weighted additive tint.
+#
+# Axis-1 ground truth is an INDEPENDENT scalar reimplementation of the defined
+# math: a hand-coded perceptual-luminance + zone partition + per-wheel zero-sum
+# hue direction, looped per pixel — a different code path from the vectorised
+# matmul/broadcast impl. `zero_sum` / `swap_zones` are injectable so the
+# sensitivity legs prove the check discriminates a wrong tint model. (LR's exact
+# strengths / mask are closed-source; this validates our defined spec.)
+# ---------------------------------------------------------------------------
+
+
+def _oracle_color_grade(prophoto, cg, zero_sum=True, swap_zones=False):
+    y_w = list(_PROPHOTO_LUMINANCE)
+
+    def srgb_oetf(x):
+        return 12.92 * x if x <= 0.0031308 else 1.055 * (x ** (1.0 / 2.4)) - 0.055
+
+    def hue_dir(hue_deg):
+        h = (hue_deg % 360.0) * (6.0 / 360.0)
+        sector = int(np.floor(h)) % 6
+        f = h - np.floor(h)
+        rgb = np.array([
+            (1.0, f, 0.0), (1.0 - f, 1.0, 0.0), (0.0, 1.0, f),
+            (0.0, 1.0 - f, 1.0), (f, 0.0, 1.0), (1.0, 0.0, 1.0 - f),
+        ][sector], dtype=np.float64)
+        return rgb - rgb.mean() if zero_sum else rgb
+
+    def tint(hue, sat, lum):
+        return (_CG_CHROMA_STRENGTH * (sat / 100.0) * hue_dir(hue)
+                + _CG_LUM_STRENGTH * (lum / 100.0))
+
+    t_sh = tint(cg.shadow_hue, cg.shadow_sat, cg.shadow_lum)
+    t_mid = tint(cg.midtone_hue, cg.midtone_sat, cg.midtone_lum)
+    t_hi = tint(cg.highlight_hue, cg.highlight_sat, cg.highlight_lum)
+    t_gl = tint(cg.global_hue, cg.global_sat, cg.global_lum)
+    gamma_b = 2.0 ** (-cg.balance / 100.0)
+    p = 1.0 + 2.0 * (1.0 - min(max(cg.blending, 0.0), 100.0) / 100.0)
+
+    flat = prophoto.reshape(-1, 3).astype(np.float64)
+    out = np.empty_like(flat)
+    for i in range(flat.shape[0]):
+        r, g, b = (float(c) for c in flat[i])
+        lum = r * y_w[0] + g * y_w[1] + b * y_w[2]
+        ll = srgb_oetf(min(max(lum, 0.0), 1.0))
+        tt = min(max(ll, 0.0), 1.0) ** gamma_b
+        sh = (1.0 - tt) ** p
+        hi = tt ** p
+        mid = 1.0 - sh - hi
+        if swap_zones:
+            sh, hi = hi, sh
+        px = flat[i] + sh * t_sh + mid * t_mid + hi * t_hi + t_gl
+        out[i] = np.maximum(px, 0.0)
+    return out.reshape(prophoto.shape)
+
+
+def test_prophoto_luminance_constant_matches_colour_science():
+    """The hardcoded _PROPHOTO_LUMINANCE row must equal colour-science's ProPhoto
+    RGB→XYZ Y row (the matrix output.py actually converts with), so the Color-
+    Grade zone mask cannot silently drift from the real luminance."""
+    y_row = colour.RGB_COLOURSPACES["ProPhoto RGB"].matrix_RGB_to_XYZ[1]
+    np.testing.assert_allclose(_PROPHOTO_LUMINANCE, y_row, atol=1e-3)
+
+
+def test_color_grade_matches_independent_oracle():
+    """apply_color_grade must equal the independent scalar oracle to ~0 over
+    random pixels + a dark/bright/neutral/saturated/overrange edge set, with all
+    four wheels + non-default blending & balance engaged."""
+    rng = np.random.default_rng(20260531)
+    rgb = rng.random((2048, 3)).astype(np.float64).reshape(-1, 1, 3)
+    edge = np.array([
+        [0.01, 0.01, 0.01], [0.5, 0.5, 0.5], [0.98, 0.98, 0.98],  # dark/mid/bright neutral
+        [0.8, 0.05, 0.02], [0.05, 0.6, 0.1], [1.4, 0.2, 0.3],      # saturated + overrange
+    ], dtype=np.float64).reshape(-1, 1, 3)
+    rgb = np.concatenate([rgb, edge], axis=0)
+
+    cg = ColorGrade(
+        shadow_hue=220.0, shadow_sat=70.0, shadow_lum=-20.0,
+        midtone_hue=120.0, midtone_sat=40.0, midtone_lum=10.0,
+        highlight_hue=40.0, highlight_sat=60.0, highlight_lum=25.0,
+        global_hue=300.0, global_sat=20.0, global_lum=-5.0,
+        blending=65.0, balance=-30.0,
+    )
+    got = apply_color_grade(rgb, cg)
+    want = _oracle_color_grade(rgb, cg)
+    np.testing.assert_allclose(got, want, atol=1e-9)
+
+
+def test_color_grade_oracle_detects_non_zero_sum_tint():
+    """Sensitivity: the chroma direction is zero-sum (Hue carries no net
+    luminance). A buggy oracle using the raw saturated RGB instead injects a
+    brightness shift that diverges from the real op on a Saturation-only grade."""
+    rgb = np.array([[[0.2, 0.2, 0.2]]], dtype=np.float64)  # neutral → tint is all there is
+    cg = ColorGrade(global_hue=240.0, global_sat=100.0)     # pure blue, no luminance
+    correct = _oracle_color_grade(rgb, cg, zero_sum=True)
+    wrong = _oracle_color_grade(rgb, cg, zero_sum=False)
+    assert np.max(np.abs(correct - wrong)) > 1e-2
+    np.testing.assert_allclose(apply_color_grade(rgb, cg), correct, atol=1e-9)
+
+
+def test_color_grade_oracle_detects_swapped_zones():
+    """Sensitivity: shadow vs highlight masks are distinct. Swapping them sends
+    the shadow tint to the highlights — diverging on a dark pixel where the two
+    wheels carry different colours."""
+    rgb = np.array([[[0.03, 0.03, 0.03]]], dtype=np.float64)  # a deep shadow
+    cg = ColorGrade(
+        shadow_hue=240.0, shadow_sat=100.0,   # blue shadows
+        highlight_hue=40.0, highlight_sat=100.0,  # orange highlights
+    )
+    correct = _oracle_color_grade(rgb, cg, swap_zones=False)
+    wrong = _oracle_color_grade(rgb, cg, swap_zones=True)
+    assert np.max(np.abs(correct - wrong)) > 1e-2
+    np.testing.assert_allclose(apply_color_grade(rgb, cg), correct, atol=1e-9)
+
+
+def test_color_grade_identity_is_byte_exact_no_op():
+    """All wheels at zero Saturation+Luminance → byte-exact passthrough even with
+    Blending/Balance/Hue set (they are inert without a tint). The structural
+    guarantee that the ΔE ship gate is unaffected when no grade is authored."""
+    rgb = np.random.default_rng(2).random((16, 16, 3)).astype(np.float32)
+    np.testing.assert_array_equal(apply_color_grade(rgb, ColorGrade()), rgb)
+    np.testing.assert_array_equal(
+        apply_color_grade(rgb, ColorGrade(blending=80.0, balance=-50.0, shadow_hue=210.0)),
+        rgb,
+    )
+
+
+def test_color_grade_zone_weights_are_partition_of_unity():
+    """The shadow/midtone/highlight masks sum to 1 with a non-negative midtone
+    across the Blending and Balance ranges — so an all-zero grade's additive
+    overlay is exactly zero everywhere (no spurious tint)."""
+    luminance = np.linspace(0.0, 1.0, 256)
+    for blending in (0.0, 50.0, 100.0):
+        for balance in (-100.0, 0.0, 100.0):
+            sh, mid, hi = _color_grade_zone_weights(luminance, blending, balance)
+            np.testing.assert_allclose(sh + mid + hi, 1.0, atol=1e-12)
+            assert mid.min() >= -1e-12
