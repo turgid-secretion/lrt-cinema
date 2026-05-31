@@ -177,6 +177,30 @@ independent open operator. The central open derivation (the scene-referred
 base-attenuation law around a fixed log anchor, no display clamp) precedes the op
 — full method/ranking/sources in the v10 research doc.
 
+**Resolved + shipped (2026-05-31) — the law is settled and the op landed
+(`develop_ops.apply_dr_compression`, PERCEPTUAL-only).** The open derivation is
+closed by [`research/v10b-scene-referred-compression-law.md`](research/v10b-scene-referred-compression-law.md):
+a homomorphic **log-domain** compression of luminance toward the fixed scene-linear
+**0.18 anchor** (the log sibling of `apply_contrast_2012`, same pivot, same
+floor-at-0, **no ceiling**). The three sliders force an asymmetric **3-slope**
+curve — Shadows→below-anchor `c_lo`, Highlights→upper-mid `c_hi`, Whites→extreme-top
+`c_top` (`slope = 2**(−k·s/100)`; `c_top` a third log slope, **never a clipping
+shoulder**, so overrange survives every Whites setting) — **C1**-blended (smoothstep)
+at the anchor join and the high breakpoint. Applied **locally** (guided-filter
+base/detail split, He 2013 — the lightweight first cut; local Laplacian is the
+quality follow-up) so local contrast is retained; §0-safe via luminance + **out/in
+luminance-ratio** reapply (never per-channel), floored at 0 with **no top clamp**.
+**Byte-exact identity** when all three knobs are 0 → the gym 0.026 / rose 0.545 ΔE
+ship gate (faithful, stages 1–9) is untouched. An Axis-1 oracle holds the defined
+piecewise-log math + ratio reapply to ~0 (per-channel / flipped-sign / dropped-blend
+/ wrong-anchor sensitivity legs). Pinned tuning constants (`k=1`, breakpoint 2 stops,
+blend half-widths 0.5 stops, guided r≈8 / ε≈0.01, eps 1e-6) are best-effort, **not**
+Lightroom fidelity — the perceptual path makes **no fidelity claim** (notably Whites
+*compresses* the top, the inverse of LR). **Remaining follow-ups (out of this op's
+scope):** the downstream ACES **RGC** gamut pass in `output.py` for out-of-AP1
+excursions; the **local-Laplacian** halo-free base-producer upgrade; **Texture/Clarity**
+(the boost-detail mode of the same shared engine).
+
 ---
 
 ## 6. Standalone GUI app (LRT replacement) & vkdt engine fork — NO-GO as currently staffed
