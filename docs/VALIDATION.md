@@ -51,6 +51,16 @@ ACES-via-matrix-from-DCP is an approximation, not a reference.
 
 ## The bulletproof automated test (option b)
 
+> **Note (v0.8):** the *automated, deterministic* form of this is now the
+> synthetic colour-validation harness — Axis 1 (`tests/test_color_oracle.py`)
+> + Axis 2/3 (`tests/test_synthetic_dng.py`) measured at the **colorimetric
+> tap** (post-ForwardMatrix linear), needing no physical chart and no removed
+> `cinema-linear`/`cinema-aces` preset. See the "Validation axes" and
+> "2026-05-30" sections below for the current method and numbers. The
+> physical-ColorChecker procedure below is retained as the manual
+> absolute-accuracy reference; ignore its `--preset cinema-linear` / "linear
+> Rec.2020" mentions (superseded — those presets were removed in v0.8).
+
 **One-sentence procedure:** photograph an X-Rite ColorChecker
 Classic under controlled illumination, render through `lrt-cinema`,
 extract per-patch mean RGB, convert measured RGB to CIE XYZ via the
@@ -255,8 +265,8 @@ path, bundled `.style` files) is **pass the real-chart leg**. Today's
 pipeline drops 9 of 12 develop ops between parse and emit and uses
 neutral white-balance multipliers regardless of source kelvin. The
 self-test passes today; the real-chart gate is the fast-failing CI
-signal that documents how far the calibration work in [v0.3](V03_PLAN.md)
-Track A needs to go — which is precisely its value pre-calibration.
+signal that documents how far the calibration work needs to go — which
+is precisely its value pre-calibration.
 
 ## Methodology — comparing two renders of the same scene
 
@@ -301,7 +311,92 @@ The decomposition tells you what *class* of fix would close the gap:
 
 If the per-channel gain ratios diverge by >5% (e.g. green-gain ≠ R-gain), that's a white-balance or camera-matrix divergence flag — not just an exposure offset.
 
-### Empirical finding 2026-05-23 — lrt-cinema vs LRT 7.5.3 preview
+### Validation axes — never conflate them
+
+| Axis | Question | Ground truth | Expected |
+|---|---|---|---|
+| **Implementation correctness** | Faithful to our own defined maths? | independent reimpl of our matrices/curves, hardcoded — NOT via colour-science (`tests/test_color_oracle.py`) | **~0** (rounding floor). The bug-finder; the only axis that validates a new render-math op with certitude. |
+| **Absolute colorimetric accuracy** | How close to CIE truth? | CIE XYZ/Lab from spectra (ISO 17321-1) | **nonzero floor** — real sensors violate the Luther condition, so the DCP matrix is a least-squares fit. Report the floor; never call it bug magnitude. |
+| **Appearance vs LRT preview** | Match what the colorist saw? | LRT `.lrtpreview` JPEG (`tools/diagnose_vs_lrt_preview.py`) | **nonzero floor** — LR's closed-source PV5 look + 8-bit JPEG. |
+
+Absolute-accuracy and preview ΔE must be taken at a **colorimetric tap**
+(post-ForwardMatrix linear ProPhoto/XYZ, *before* HSM / ExposureRamp / LookTable
+/ ProfileToneCurve). Comparing the *rendered* image to Lab measures the DCP tone
+curve, not pipeline error.
+
+### Empirical finding 2026-05-30 (v0.8 head) — current state; SUPERSEDES the 2026-05-23 finding below
+
+Head pipeline (in-process Python DNG). Gym DSC_4053 + rose, Adobe-converted DNGs
+vs `dng_validate`; v0.8 `lrtimelapse` sRGB default vs LRT 7.5.3 preview.
+
+**vs `dng_validate` (Adobe's own DNG reference renderer — the north-star):**
+
+| Scene | mean ΔE | P50 (all) | P95 | max | <1 ΔE |
+|---|---:|---:|---:|---:|---:|
+| Gym (Camera Standard) | **0.026** | 0.000 | 0.32 | 2.06 | 100% |
+| Rose (Adobe Standard) | **0.545** | 0.577 | 0.90 | 2.13 | 97.8% |
+
+History: gym was **0.789** until 2026-05-30. The drop is one fix — Stage 9 now
+applies the ProfileToneCurve as Adobe's hue/saturation-preserving
+`RefBaselineRGBTone` (curve max+min, interpolate the middle channel) instead of
+per-channel. The old "flat-region colour tail" and most of the "demosaic-edge
+tail" were that per-channel tone error firing wherever channels differ (edges +
+saturated colour); per-channel and hue-preserving are identical on neutrals
+(r=g=b), so the 0.000 flat-pixel median never exposed it. There is **no
+theoretical floor on the colour maths** — gym is now an effective bit-match.
+
+**vs LRT preview (v0.8 sRGB default, gym, identity develop):**
+- RAW: mean 2.92, P50 2.55, P95 7.36.
+- AFFINE residual (per-channel gain 0.83/0.84/0.84 ≈ a benign ~0.3 EV global
+  offset, not a defect): mean ~2.18, P50 1.71.
+- This ~2 is the **closed-source PV5 look + 8-bit JPEG floor**, not pipeline
+  error: **preview gap ≈ 0.79 (our-vs-Adobe-DNG — the part we own and can tune)
+  + ~2 (PV5 + JPEG — the reference's own look).**
+
+**North-star for the open-tool transition (Adobe purge):** keep `dng_validate`
+as a test-only oracle and tune open-DCP renders back toward the **proven 0.026**
+(gym, median 0.000 — the maths bit-match). The preview is the human-facing
+end-to-end check, reported as raw + affine-residual with the PV5 floor named so
+it is never mistaken for our error or chased past what is closed-source.
+
+### Synthetic-chart harness (Axes 2 & 3) — landed 2026-05-30
+
+The deterministic flat-patch harness foreshadowed above now exists. A
+**colorimetric tap** (`pipeline.apply_adobe_pipeline(..., stop_after_stage=3|4)`
+→ XYZ(D50) / linear ProPhoto(D50), post-ForwardMatrix, pre-HSM) is the
+measurement point for both nonzero-floor axes.
+
+- **Axis 2 — absolute accuracy** (`tests/test_colorimetric.py`, supersedes the
+  old Rec.2020/Lab self-test). ISO 17321-1 (+ grey wedge) spectra → CIE truth
+  (Bradford→D50) and → synthetic Nikon-D5100 camera RGB (its SSF; the D750's is
+  unpublished). At the tap: a synthetic white-constrained FM gives mean ΔE2000
+  **0.70–0.74** and the shipped **Adobe Standard** D5100 DCP **0.77–0.86**, both
+  sitting on the **independently computed SSF Luther floor 0.81–0.84**
+  (`ssf_lstsq_floor`) — accuracy = profile fit, not bug. (Camera-*Standard*
+  profiles are NOT colorimetric: their ForwardMatrix is the ProPhoto→XYZ
+  passthrough; the colour work is in the LookTable. Use Adobe Standard for
+  absolute accuracy.)
+- **Axis 3 — implementation vs `dng_validate`** (`tests/test_synthetic_dng.py`,
+  D750). A flat-patch synthetic DNG (dnglab uncompressed clone + raw-strip
+  byte-patch honouring BlackLevel 600 / WhiteLevel 15520) rendered both sides.
+  **Neutral wedge: median ΔE 0.000; chromatic flats: mean 0.05, max 0.21** (was
+  ~4–8 ΔE before 2026-05-30). The chromatic divergence was NOT the LookTable —
+  `_apply_hsv_cube` was verified equal to Adobe's `RefBaselineHueSatMap` to
+  machine precision (a scalar reimpl gives dh=ds=dv=0). It was two upstream
+  things: **(1)** the per-channel tone curve (the gym fix above); **(2)** a
+  harness profile mismatch — `dnglab` **strips the ForwardMatrix** when it builds
+  the clone, so the synthetic DNG's embedded profile is FM-less and
+  `dng_validate` renders it via the **ColorMatrix + MapWhiteMatrix** path, while
+  our pipeline was using the system DCP's ProPhoto-passthrough ForwardMatrix
+  (= white-balance-only colour). The test now strips the FM from the profile it
+  feeds our pipeline so "same profile both sides" holds, and the ColorMatrix
+  no-FM branch (`dcp.colormatrix_camera_to_pcs`) carries Adobe's D50 Bradford
+  adaptation. Caution for future work: neutrals are blind to BOTH the tone-curve
+  application mode AND the camera-matrix colour rotation (sat=0 / r=g=b), so a
+  green neutral wedge does NOT certify the chromatic colour path — only the
+  chromatic patches do. Full trace: `docs/research/v08-synthetic-chromatic-rootcause.md`.
+
+### Empirical finding 2026-05-23 — lrt-cinema vs LRT 7.5.3 preview (SUPERSEDED — darktable-era, pre-v0.6 Python pipeline; kept for history)
 
 Test frame: DSC_4053 (neutral keyframe, EV=0 per user's LRT XMP). After Visual Preview re-render in LRT.
 
@@ -392,6 +487,6 @@ The misleading error message — `error: can't open XMP file` instead of `XMP sc
 
 - [SCOPE.md](../SCOPE.md) — per-feature implementation status; the
   test described here gates the "cinema-grade" wording.
-- [src/lrt_cinema/presets/CALIBRATION.md](../src/lrt_cinema/presets/CALIBRATION.md) —
-  why the bundled `.style` files are placeholders and what the
-  calibration pass must do.
+- [PIPELINE.md](PIPELINE.md) — the as-built engine reference (the stage taps
+  this validation measures at).
+- [DECISIONS.md](DECISIONS.md) — the binding decisions log.

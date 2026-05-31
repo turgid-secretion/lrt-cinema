@@ -27,7 +27,6 @@ from lrt_cinema.dcp import (
     _build_hsv_cube,
     adobe_make_for_camera,
     auto_detect_profile,
-    find_dcp_for_camera,
     find_extracted_profile_for_camera,
     illuminant_code_to_kelvin,
     interpolate_color_matrix,
@@ -457,22 +456,35 @@ def test_adobe_camera_label_strips_make_prefix():
     assert _adobe_camera_label("SONY", "ILCE-7M3") == "Sony ILCE-7M3"
 
 
-def test_find_dcp_for_camera_searches_extra_roots(tmp_path):
-    # Plant a Camera Standard DCP under tmp_path/<root>/Camera/<label>/...
-    # `adobe_make_for_camera` title-cases unknown vendors, so the planted
-    # path must match the normalized label (label-build is what `find` looks
-    # up — not the raw EXIF strings).
-    label = _adobe_camera_label("Acme", "X100")  # "Acme X100"
-    cam_dir = tmp_path / "extra_root" / "Camera" / label
-    cam_dir.mkdir(parents=True)
-    dcp_path = cam_dir / f"{label} Camera Standard.dcp"
-    dcp_path.write_bytes(b"dummy content")  # not a real DCP — find only matches existence
-    found = find_dcp_for_camera("Acme", "X100", extra_roots=[tmp_path / "extra_root"])
-    assert found == dcp_path
+def test_camera_label_strips_path_separators_bug8():
+    # EXIF Make/Model is attacker-controllable and the label is interpolated
+    # into a filesystem path (find_extracted_profile_for_camera). A hostile
+    # Model must not introduce path separators or NUL into the label. Bug #8.
+    label = _adobe_camera_label("NIKON", "x/../../../../etc/evil")
+    assert "/" not in label
+    assert "\\" not in label
+    assert "\x00" not in label
 
 
-def test_find_dcp_for_camera_returns_none_on_miss(tmp_path):
-    assert find_dcp_for_camera("UnknownVendor", "X", extra_roots=[tmp_path]) is None
+def test_find_extracted_profile_no_exif_path_traversal_bug8(tmp_path):
+    # Regression for bug #8 (EXIF→path-traversal). EXIF Make/Model is
+    # attacker-controllable and flows into `root/"<label> <variant>.npz"`.
+    # `.is_file()` resolves ".." by walking REAL directories (not lexically),
+    # so the hostile Model "x/../../evil" only traverses once its leading
+    # segment exists — we create it, reproducing the worst case, then confirm
+    # the lookup still does NOT escape the search root to the planted bait.
+    # Pre-sanitization, label "Acme x/../../evil" made the lookup
+    # root/"Acme x"/".."/".."/"evil … .npz" → tmp_path/"evil … .npz" (two
+    # levels above the search root).
+    root = tmp_path / "profiles"
+    root.mkdir()
+    (root / "Acme x").mkdir()  # the leading label segment; makes ".." walkable
+    bait = tmp_path / "evil Camera Standard.npz"
+    bait.write_bytes(b"not a real profile")  # find only checks .is_file()
+    found = find_extracted_profile_for_camera(
+        "Acme", "x/../../evil", extra_roots=[root],
+    )
+    assert found is None
 
 
 # ---------------------------------------------------------------------------
@@ -553,16 +565,6 @@ def test_real_d750_dcp_carries_looktable_no_hsm():
     assert lt.data_1.shape == (16, 90, 16, 3)
     # First cell should be ~identity (no shift at hue=0, sat=0, val=0).
     np.testing.assert_allclose(lt.data_1[0, 0, 0], [0.0, 1.0, 1.0], atol=1e-3)
-
-
-@pytest.mark.skipif(
-    not _REAL_DCP.exists(),
-    reason="real Adobe DCP not installed at standard macOS path",
-)
-def test_find_dcp_for_camera_real_d750():
-    found = find_dcp_for_camera("NIKON CORPORATION", "NIKON D750")
-    assert found is not None
-    assert found.name == "Nikon D750 Camera Standard.dcp"
 
 
 @pytest.mark.skipif(
@@ -746,8 +748,9 @@ def test_bundled_d750_fixture_loads():
     assert profile.look_table.val_divisions == 16
 
 
-def test_auto_detect_profile_prefers_bundled_npz_over_adobe_dcp(tmp_path):
-    """When both an extracted .npz and a system Adobe .dcp exist, .npz wins.
+def test_auto_detect_profile_loads_bundled_npz(tmp_path):
+    """Auto-detect resolves a camera to its extracted `.npz` profile (the sole,
+    Adobe-free lookup path).
 
     Setup: synthesize a TIFF-shaped NEF that reports the user's actual
     D750 Make/Model, then point auto-detect at our bundled fixture via
@@ -767,8 +770,8 @@ def test_auto_detect_profile_prefers_bundled_npz_over_adobe_dcp(tmp_path):
 def test_auto_detect_profile_returns_none_when_nothing_found(tmp_path):
     nef = tmp_path / "fake.NEF"
     nef.write_bytes(_build_synthetic_nef("ACMECAM", "Z9999"))
-    # No bundled profile for ACMECAM; no system Adobe DCP either.
-    # extra_extracted_roots points at tmp_path which has no .npz.
+    # No bundled profile for ACMECAM; extra_extracted_roots points at tmp_path,
+    # which has no .npz → auto-detect finds nothing.
     result = auto_detect_profile(nef, extra_extracted_roots=[tmp_path])
     assert result is None
 
@@ -914,3 +917,23 @@ def test_xy_to_camera_neutral_matches_colour_hdri_reference():
         f"xy_to_camera_neutral diverged from colour-hdri reference: "
         f"got {result.tolist()}, expected {expected.tolist()}"
     ))
+
+
+def test_load_profile_rewraps_corrupt_npz_as_valueerror(tmp_path):
+    """load_profile honors the (FileNotFoundError, ValueError) contract the CLI
+    --dcp preflight relies on: a corrupt/incomplete .npz raises ValueError, not a
+    bare KeyError/BadZipFile that would escape the preflight's except clause."""
+    from lrt_cinema.dcp import load_profile
+
+    missing_keys = tmp_path / "missing_keys.npz"
+    np.savez_compressed(missing_keys, color_matrix_1=np.eye(3, dtype=np.float32))
+    with pytest.raises(ValueError):
+        load_profile(missing_keys)  # missing format_version: KeyError → ValueError
+
+    garbage = tmp_path / "garbage.npz"
+    garbage.write_bytes(b"PK\x03\x04 not really a zip")
+    with pytest.raises(ValueError):
+        load_profile(garbage)  # BadZipFile → ValueError
+
+    with pytest.raises(FileNotFoundError):
+        load_profile(tmp_path / "nope.npz")  # contract's other half preserved

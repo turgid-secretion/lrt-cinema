@@ -7,8 +7,8 @@ sequence at
 `/Volumes/SanDisk Extreme Pro 55AF Media/Projects/2026 international
 faire timelapse/`.
 
-LRT is closed-source commercial software. Our source mix differs from
-the darktable reference (`docs/reference/darktable/`) accordingly:
+LRT is closed-source commercial software. Our source mix, in priority
+order, is:
 
 - **First**: official LRT manual + tutorials + Wegner's posts (the
   closest thing to a primary spec).

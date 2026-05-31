@@ -7,114 +7,126 @@ runs once during dev, not in CI.
 
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
 import pytest
 
 from lrt_cinema.output import (
-    _prophoto_to_rec2020,
-    write_exr_linear_rec2020,
+    DISPLAY_COLORSPACES,
+    _prophoto_to_display,
+    write_exr_scene_linear,
     write_preset_output,
-    write_tiff_linear_rec2020,
+    write_tiff_display,
 )
 
 # ---------------------------------------------------------------------------
-# Color-space conversion ProPhoto(D50) → Rec.2020(D65)
+# Display-referred TIFF writer (LRTimelapse round-trip) — v0.8 default
 # ---------------------------------------------------------------------------
 
-
-def test_prophoto_to_rec2020_preserves_neutral_gray():
-    """A linear ProPhoto neutral gray (R=G=B) must remain neutral after
-    Bradford CAT D50→D65 + Rec.2020 conversion (within float32 matrix-
-    cascade noise)."""
-    gray = np.full((4, 4, 3), 0.5, dtype=np.float32)
-    out = _prophoto_to_rec2020(gray)
-    np.testing.assert_allclose(out[..., 0], out[..., 1], atol=1e-3)
-    np.testing.assert_allclose(out[..., 1], out[..., 2], atol=1e-3)
+_ICC_TAG = 34675  # InterColorProfile
 
 
-def test_prophoto_to_rec2020_preserves_shape():
-    x = np.random.rand(8, 12, 3).astype(np.float32)
-    out = _prophoto_to_rec2020(x)
-    assert out.shape == (8, 12, 3)
-    assert out.dtype == np.float32
-
-
-def test_prophoto_to_rec2020_zero_in_zero_out():
-    z = np.zeros((2, 2, 3), dtype=np.float32)
-    np.testing.assert_allclose(_prophoto_to_rec2020(z), 0.0, atol=1e-6)
-
-
-# ---------------------------------------------------------------------------
-# TIFF writer
-# ---------------------------------------------------------------------------
-
-
-def test_tiff_16bit_roundtrip(tmp_path):
+def test_display_srgb_encodes_neutral_correctly(tmp_path):
+    """Linear ProPhoto(D50) 0.18 mid-gray → sRGB-encoded ~0.461 (the sRGB OETF
+    of 0.18), staying neutral. This is the core display-encode contract."""
     tifffile = pytest.importorskip("tifffile")
-    x = np.full((8, 8, 3), 0.5, dtype=np.float32)
-    dst = tmp_path / "test.tif"
-    write_tiff_linear_rec2020(x, dst, bit_depth=16)
-    assert dst.is_file()
-    rt = tifffile.imread(str(dst))
-    assert rt.shape == (8, 8, 3)
+    x = np.full((4, 4, 3), 0.18, dtype=np.float32)
+    dst = write_tiff_display(x, tmp_path / "g.tif", colorspace="srgb", bit_depth=16)
+    rt = tifffile.imread(str(dst)).astype(np.float64) / 65535.0
+    assert 0.45 < rt[0, 0, 0] < 0.47          # sRGB OETF(0.18) ≈ 0.461
+    np.testing.assert_allclose(rt[0, 0, 0], rt[0, 0, 2], atol=2e-3)  # neutral
+
+
+def test_display_srgb_white_and_black(tmp_path):
+    tifffile = pytest.importorskip("tifffile")
+    x = np.zeros((2, 2, 3), dtype=np.float32)
+    x[0] = 1.0
+    rt = tifffile.imread(str(
+        write_tiff_display(x, tmp_path / "wb.tif"),
+    ))
+    assert rt[0, 0, 0] >= 65500   # white near top of range
+    assert rt[1, 0, 0] == 0       # black is zero
+
+
+def test_display_tiff_embeds_icc_and_provenance(tmp_path):
+    """The embedded sRGB ICC + provenance are what de-risk the LRT round-trip
+    (untagged/wide-gamut files cause LRT gamma shifts)."""
+    tifffile = pytest.importorskip("tifffile")
+    x = np.full((3, 3, 3), 0.5, dtype=np.float32)
+    dst = write_tiff_display(
+        x, tmp_path / "m.tif",
+        provenance={"source_frame": "DSC_0001.NEF", "frame_index": 0},
+    )
+    with tifffile.TiffFile(dst) as tf:
+        page = tf.pages[0]
+        codes = [t.code for t in page.tags]
+        assert _ICC_TAG in codes                       # ICC embedded
+        assert len(page.tags.get(_ICC_TAG).value) > 0
+        assert "lrt-cinema" in page.tags.get(305).value  # Software
+        desc = page.tags.get(270).value                  # ImageDescription
+        assert "DSC_0001.NEF" in desc and "sRGB" in desc
+
+
+def test_display_tiff_is_16bit_uint(tmp_path):
+    tifffile = pytest.importorskip("tifffile")
+    x = np.full((2, 2, 3), 0.5, dtype=np.float32)
+    rt = tifffile.imread(str(write_tiff_display(x, tmp_path / "d.tif")))
     assert rt.dtype == np.uint16
-    # Neutral gray @ ProPhoto 0.5 should land near 0.5 in Rec.2020 too.
-    assert 0.4 < rt[0, 0, 0] / 65535.0 < 0.6
 
 
-def test_tiff_8bit_roundtrip(tmp_path):
+def test_display_tiff_8bit_supported(tmp_path):
     tifffile = pytest.importorskip("tifffile")
-    x = np.full((4, 4, 3), 0.5, dtype=np.float32)
-    dst = tmp_path / "test8.tif"
-    write_tiff_linear_rec2020(x, dst, bit_depth=8)
-    rt = tifffile.imread(str(dst))
+    x = np.full((2, 2, 3), 0.5, dtype=np.float32)
+    rt = tifffile.imread(str(
+        write_tiff_display(x, tmp_path / "d8.tif", bit_depth=8),
+    ))
     assert rt.dtype == np.uint8
 
 
-def test_tiff_rejects_invalid_bit_depth(tmp_path):
+def test_display_tiff_rejects_bad_bit_depth(tmp_path):
     x = np.zeros((2, 2, 3), dtype=np.float32)
     with pytest.raises(ValueError, match="bit_depth"):
-        write_tiff_linear_rec2020(x, tmp_path / "x.tif", bit_depth=12)
+        write_tiff_display(x, tmp_path / "x.tif", bit_depth=32)
 
 
-def test_tiff_32bit_float_preserves_overrange(tmp_path):
-    """32-bit float TIFF is the cinema-linear default. Must preserve
-    overrange (>1) signal — Resolve grade needs it. 16-bit int clips."""
-    tifffile = pytest.importorskip("tifffile")
-    x = np.full((4, 4, 3), 1.7, dtype=np.float32)  # overrange
-    dst = tmp_path / "linear.tif"
-    write_tiff_linear_rec2020(x, dst, bit_depth=32)
-    rt = tifffile.imread(str(dst))
-    assert rt.dtype == np.float32
-    # Overrange survives — round-tripped through Rec.2020 matrix.
-    assert rt.max() > 1.0
-
-
-def test_cinema_linear_default_is_float(tmp_path):
-    """Default bit_depth (no kwarg) is 32-bit float for cinema-linear use."""
-    tifffile = pytest.importorskip("tifffile")
+def test_display_tiff_refuses_nonsrgb_without_icc(tmp_path):
+    """Emitting a wide-gamut TIFF without an ICC is the LRT gamma-shift footgun;
+    the writer must refuse rather than guess."""
     x = np.full((2, 2, 3), 0.5, dtype=np.float32)
-    dst = tmp_path / "default.tif"
-    write_tiff_linear_rec2020(x, dst)  # no bit_depth kwarg
-    rt = tifffile.imread(str(dst))
-    assert rt.dtype == np.float32
+    with pytest.raises(ValueError, match="ICC profile is required"):
+        write_tiff_display(x, tmp_path / "pp.tif", colorspace="prophoto")
 
 
-def test_tiff_clips_overrange(tmp_path):
+def test_display_tiff_overrange_clips_to_white(tmp_path):
     tifffile = pytest.importorskip("tifffile")
-    x = np.full((2, 2, 3), 1.5, dtype=np.float32)  # overrange
-    dst = tmp_path / "over.tif"
-    write_tiff_linear_rec2020(x, dst, bit_depth=16)
-    rt = tifffile.imread(str(dst))
-    assert rt.max() == 65535  # clamped to top of 16-bit range
+    x = np.full((2, 2, 3), 1.8, dtype=np.float32)  # overrange highlight
+    rt = tifffile.imread(str(write_tiff_display(x, tmp_path / "o.tif")))
+    assert rt.max() == 65535  # display deliverable clips; recovery is the EXR path
+
+
+def test_lrtimelapse_preset_writes_tif(tmp_path):
+    """The default preset emits a .tif with ICC via write_preset_output."""
+    tifffile = pytest.importorskip("tifffile")
+    x = np.full((4, 4, 3), 0.5, dtype=np.float32)
+    out = write_preset_output(x, tmp_path / "LRT_00001", "lrtimelapse")
+    assert out.suffix == ".tif"
+    with tifffile.TiffFile(out) as tf:
+        assert _ICC_TAG in [t.code for t in tf.pages[0].tags]
+
+
+def test_display_colorspaces_exposed():
+    assert "srgb" in DISPLAY_COLORSPACES
+
+
+def test_prophoto_to_display_shape_preserved():
+    x = np.random.rand(5, 7, 3).astype(np.float32)
+    out = _prophoto_to_display(x, "srgb")
+    assert out.shape == (5, 7, 3)
 
 
 def test_tiff_creates_parent_dir(tmp_path):
     x = np.zeros((2, 2, 3), dtype=np.float32)
     dst = tmp_path / "nested" / "dir" / "out.tif"
-    write_tiff_linear_rec2020(x, dst)
+    write_tiff_display(x, dst)
     assert dst.is_file()
 
 
@@ -129,7 +141,7 @@ def test_exr_roundtrip_preserves_float_precision(tmp_path):
     OpenEXR = pytest.importorskip("OpenEXR")
     x = np.random.rand(16, 16, 3).astype(np.float32) * 1.5  # incl. overrange
     dst = tmp_path / "test.exr"
-    write_exr_linear_rec2020(x, dst)
+    write_exr_scene_linear(x, dst)
     assert dst.is_file()
     with OpenEXR.File(str(dst), separate_channels=True) as exr:
         ch = exr.channels()
@@ -141,12 +153,12 @@ def test_exr_roundtrip_preserves_float_precision(tmp_path):
 
 
 def test_exr_float_piz_roundtrip(tmp_path):
-    """v0.6 cinema-aces back-compat: explicit float+piz must still work
-    and produce a 32-bit float PIZ EXR (binary-exact round trip in pixels)."""
+    """Writer capability: explicit float+piz produces a 32-bit float PIZ EXR
+    (lossless; binary-exact round trip in pixels)."""
     OpenEXR = pytest.importorskip("OpenEXR")
     x = np.random.rand(16, 16, 3).astype(np.float32) * 1.5
     dst = tmp_path / "float_piz.exr"
-    write_exr_linear_rec2020(x, dst, bit_depth="float", compression="piz")
+    write_exr_scene_linear(x, dst, bit_depth="float", compression="piz")
     with OpenEXR.File(str(dst), separate_channels=True) as exr:
         ch = exr.channels()
         rgb = np.stack([ch["R"].pixels, ch["G"].pixels, ch["B"].pixels], axis=-1)
@@ -177,31 +189,25 @@ def test_exr_channels_distinct_at_realistic_size(tmp_path):
     assert x[..., 0].mean() < x[..., 1].mean() < x[..., 2].mean()
 
     dst = tmp_path / "wide.exr"
-    write_exr_linear_rec2020(x, dst)
+    write_exr_scene_linear(x, dst)
     with OpenEXR.File(str(dst), separate_channels=True) as exr:
         ch = exr.channels()
         R = ch["R"].pixels
         G = ch["G"].pixels
         B = ch["B"].pixels
 
-    # The writer applies ProPhoto→Rec.2020 conversion, so we cannot expect
-    # `R == x[..., 0]`. But the per-channel means must remain monotonically
-    # ordered the way the input was (Rec.2020 is a near-identity colour
-    # rotation for these synthetic non-spectral values — small enough that
-    # the ordering invariant holds). The bug produced all-equal channel
-    # means as the smoking gun.
+    # The writer applies a ProPhoto→ACEScg colour rotation, so we cannot expect
+    # `R == x[..., 0]` nor a specific channel ordering (the rotation can reorder
+    # means). The robust anti-garble signal is that the three per-channel means
+    # stay DISTINCT — the strided-view bug collapsed them to a single value.
     means = (R.mean(), G.mean(), B.mean())
-    assert means[0] < means[1] < means[2], (
-        f"EXR per-channel mean ordering broken — likely strided-view "
-        f"regression in write_exr_linear_rec2020. Got means R={means[0]:.4f} "
-        f"G={means[1]:.4f} B={means[2]:.4f}"
-    )
-    # Stricter: per-channel means must not all collapse to a single value.
     spread = max(means) - min(means)
     assert spread > 0.05, (
         f"EXR per-channel means collapsed to nearly one value (spread={spread:.4f}) "
-        f"— strided-view bug signature. Means: {means}"
+        f"— strided-view regression in write_exr_scene_linear. Means: {means}"
     )
+    # All three pairwise-distinct (no two channels accidentally identical).
+    assert len({round(m, 4) for m in means}) == 3, f"channel means not distinct: {means}"
 
 
 def test_exr_default_uses_dwab_compression(tmp_path):
@@ -209,7 +215,7 @@ def test_exr_default_uses_dwab_compression(tmp_path):
     OpenEXR = pytest.importorskip("OpenEXR")
     x = np.zeros((8, 8, 3), dtype=np.float32)
     dst = tmp_path / "dwab.exr"
-    write_exr_linear_rec2020(x, dst)
+    write_exr_scene_linear(x, dst)
     with OpenEXR.File(str(dst)) as exr:
         assert exr.header()["compression"] == OpenEXR.DWAB_COMPRESSION
 
@@ -220,7 +226,7 @@ def test_exr_acescg_writes_ap1_chromaticities(tmp_path):
     OpenEXR = pytest.importorskip("OpenEXR")
     x = np.full((8, 8, 3), 0.5, dtype=np.float32)
     dst = tmp_path / "acescg.exr"
-    write_exr_linear_rec2020(x, dst, colorspace="acescg")
+    write_exr_scene_linear(x, dst, colorspace="acescg")
     with OpenEXR.File(str(dst)) as exr:
         vals = np.asarray(exr.header()["chromaticities"], dtype=float).ravel()
     expected = np.array(
@@ -233,7 +239,7 @@ def test_exr_aces2065_sets_container_flag(tmp_path):
     OpenEXR = pytest.importorskip("OpenEXR")
     x = np.zeros((4, 4, 3), dtype=np.float32)
     dst = tmp_path / "ap0.exr"
-    write_exr_linear_rec2020(x, dst, colorspace="aces2065")
+    write_exr_scene_linear(x, dst, colorspace="aces2065")
     with OpenEXR.File(str(dst)) as exr:
         assert exr.header().get("acesImageContainerFlag") == 1
 
@@ -241,7 +247,7 @@ def test_exr_aces2065_sets_container_flag(tmp_path):
 def test_exr_rejects_invalid_colorspace(tmp_path):
     x = np.zeros((2, 2, 3), dtype=np.float32)
     with pytest.raises(ValueError, match="colorspace"):
-        write_exr_linear_rec2020(x, tmp_path / "bad.exr", colorspace="rec709")  # type: ignore[arg-type]
+        write_exr_scene_linear(x, tmp_path / "bad.exr", colorspace="rec709")  # type: ignore[arg-type]
 
 
 def test_preset_cinema_masters_emit_acescg(tmp_path):
@@ -257,26 +263,16 @@ def test_preset_cinema_masters_emit_acescg(tmp_path):
                                    err_msg=f"{preset} not ACEScg/~D60")
 
 
-def test_exr_cinema_aces_path_uses_piz_compression(tmp_path):
-    """v0.6 back-compat: cinema-aces preset must still produce PIZ EXR."""
-    OpenEXR = pytest.importorskip("OpenEXR")
-    x = np.zeros((8, 8, 3), dtype=np.float32)
-    dst = tmp_path / "piz.exr"
-    write_exr_linear_rec2020(x, dst, bit_depth="float", compression="piz")
-    with OpenEXR.File(str(dst)) as exr:
-        assert exr.header()["compression"] == OpenEXR.PIZ_COMPRESSION
-
-
 def test_exr_rejects_invalid_bit_depth(tmp_path):
     x = np.zeros((2, 2, 3), dtype=np.float32)
     with pytest.raises(ValueError, match="bit_depth"):
-        write_exr_linear_rec2020(x, tmp_path / "bad.exr", bit_depth="quad")  # type: ignore[arg-type]
+        write_exr_scene_linear(x, tmp_path / "bad.exr", bit_depth="quad")  # type: ignore[arg-type]
 
 
 def test_exr_rejects_invalid_compression(tmp_path):
     x = np.zeros((2, 2, 3), dtype=np.float32)
     with pytest.raises(ValueError, match="compression"):
-        write_exr_linear_rec2020(
+        write_exr_scene_linear(
             x, tmp_path / "bad.exr", compression="brotli",  # type: ignore[arg-type]
         )
 
@@ -300,10 +296,10 @@ def test_exr_dwab_smaller_than_piz(tmp_path):
 
     piz_dst = tmp_path / "piz.exr"
     dwab_dst = tmp_path / "dwab.exr"
-    write_exr_linear_rec2020(
+    write_exr_scene_linear(
         img, piz_dst, bit_depth="float", compression="piz",
     )
-    write_exr_linear_rec2020(
+    write_exr_scene_linear(
         img, dwab_dst, bit_depth="half", compression="dwab",
     )
     piz_size = piz_dst.stat().st_size
@@ -340,10 +336,10 @@ def test_exr_dwab_visually_lossless_roundtrip(tmp_path):
 
     piz_dst = tmp_path / "piz_half.exr"
     dwab_dst = tmp_path / "dwab_half.exr"
-    write_exr_linear_rec2020(
+    write_exr_scene_linear(
         img, piz_dst, bit_depth="half", compression="piz",
     )
-    write_exr_linear_rec2020(
+    write_exr_scene_linear(
         img, dwab_dst, bit_depth="half", compression="dwab",
     )
 
@@ -358,11 +354,13 @@ def test_exr_dwab_visually_lossless_roundtrip(tmp_path):
     piz = _read(piz_dst)
     dwab = _read(dwab_dst)
 
-    # ΔE2000 in Lab(D65). Both are linear Rec.2020.
-    def _to_lab(rgb_linear_rec2020):
+    # ΔE2000 between the two compressions. Both are scene-linear ACEScg, so the
+    # colourspace label cancels for the piz-vs-dwab delta (we measure compression
+    # artifact, not absolute colour).
+    def _to_lab(rgb_linear):
         xyz = colour.RGB_to_XYZ(
-            np.clip(rgb_linear_rec2020.astype(np.float64), 0.0, 1.0),
-            "ITU-R BT.2020",
+            np.clip(rgb_linear.astype(np.float64), 0.0, 1.0),
+            "ACEScg",
             apply_cctf_decoding=False,
         )
         return colour.XYZ_to_Lab(xyz, illuminant=np.array([0.31270, 0.32900]))
@@ -408,51 +406,6 @@ def test_preset_cinema_linear_master_writes_half_dwab_exr(tmp_path):
         assert exr.header()["compression"] == OpenEXR.DWAB_COMPRESSION
 
 
-def test_preset_cinema_linear_writes_tiff(tmp_path):
-    pytest.importorskip("tifffile")
-    x = np.zeros((4, 4, 3), dtype=np.float32)
-    out = write_preset_output(x, tmp_path / "frame_001", "cinema-linear")
-    assert out.suffix == ".tif"
-    assert out.is_file()
-
-
-def test_preset_cinema_aces_writes_exr_and_warns(tmp_path):
-    """v0.6 back-compat preset cinema-aces still works and emits a one-time
-    DeprecationWarning steering toward cinema-linear-finished."""
-    OpenEXR = pytest.importorskip("OpenEXR")
-    # Reset module-level guard so this test is hermetic regardless of order.
-    from lrt_cinema import output as output_module
-    output_module._CINEMA_ACES_DEPRECATION_WARNED = False
-
-    x = np.zeros((4, 4, 3), dtype=np.float32)
-    with pytest.warns(DeprecationWarning, match="cinema-linear-finished"):
-        out = write_preset_output(x, tmp_path / "frame_001", "cinema-aces")
-    assert out.suffix == ".exr"
-    assert out.is_file()
-    with OpenEXR.File(str(out), separate_channels=True) as exr:
-        ch = exr.channels()
-        # cinema-aces stays float+PIZ for back-compat.
-        assert ch["R"].pixels.dtype == np.float32
-        assert exr.header()["compression"] == OpenEXR.PIZ_COMPRESSION
-
-
-def test_preset_cinema_aces_deprecation_fires_once(tmp_path):
-    """Module-level guard: a 5000-frame render emits one warning, not 5000."""
-    pytest.importorskip("OpenEXR")
-    from lrt_cinema import output as output_module
-    output_module._CINEMA_ACES_DEPRECATION_WARNED = False
-
-    x = np.zeros((4, 4, 3), dtype=np.float32)
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        for i in range(5):
-            write_preset_output(x, tmp_path / f"frame_{i:03d}", "cinema-aces")
-    deprecations = [w for w in caught if issubclass(w.category, DeprecationWarning)]
-    assert len(deprecations) == 1, (
-        f"cinema-aces should warn exactly once per process; got {len(deprecations)}"
-    )
-
-
 def test_preset_stills_finished_is_not_implemented(tmp_path):
     x = np.zeros((4, 4, 3), dtype=np.float32)
     with pytest.raises(NotImplementedError, match="AgX"):
@@ -463,3 +416,15 @@ def test_preset_unknown_raises(tmp_path):
     x = np.zeros((4, 4, 3), dtype=np.float32)
     with pytest.raises(ValueError, match="Unknown preset"):
         write_preset_output(x, tmp_path / "frame", "nonexistent")
+
+
+def test_display_tiff_nan_pixel_warns_not_silent(tmp_path):
+    """A NaN pixel must not silently quantise to black (np.clip does not sanitize
+    NaN → uint cast → 0). The writer scrubs AND warns so upstream corruption is
+    visible rather than shipping a silently-black frame in an unattended render."""
+    pytest.importorskip("tifffile")
+    x = np.full((2, 2, 3), 0.5, dtype=np.float32)
+    x[0, 0, 0] = np.nan
+    with pytest.warns(UserWarning, match="non-finite"):
+        dst = write_tiff_display(x, tmp_path / "nan.tif")
+    assert dst.is_file()  # scrubbed + written, not crashed or silently black

@@ -121,7 +121,7 @@ shape, what fields are animated, what is held constant).
   source. Parser must accept the schema documented in XMP_SCHEMA.md.
 - The internal-render path (8-bit sRGB JPG) is what we are
   substituting darktable for, to obtain 16-bit linear cinema
-  intermediates. See `docs/V03_PLAN.md` for the render fidelity track.
+  intermediates (render fidelity: [`VALIDATION.md`](../../VALIDATION.md)).
 - We do *not* depend on LRT's preview pipeline at runtime. Our
   understanding of it matters only because it shaped LRT's design
   assumptions (8-bit sRGB output, Adobe DNG Converter dependency) that

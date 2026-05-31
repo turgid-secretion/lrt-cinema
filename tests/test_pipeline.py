@@ -144,7 +144,8 @@ def test_ship_gate_gym_de_under_1():
         f"Gym mean ΔE {m['mean']:.3f} exceeds ship gate {_SHIP_GATE_DE_MEAN}. "
         f"Detail: P50={m['P50']:.3f} P95={m['P95']:.3f} max={m['max']:.3f} "
         f"<1ΔE pixels={m['pct_lt_1']:.1f}%. "
-        "Baseline (research/python-pipeline-seed): 0.79 mean."
+        "Baseline: 0.026 mean (hue-preserving RefBaselineRGBTone, 2026-05-30; "
+        "was 0.79 with per-channel tone)."
     )
 
 
@@ -163,7 +164,8 @@ def test_ship_gate_rose_de_under_1():
         f"Rose mean ΔE {m['mean']:.3f} exceeds ship gate {_SHIP_GATE_DE_MEAN}. "
         f"Detail: P50={m['P50']:.3f} P95={m['P95']:.3f} max={m['max']:.3f} "
         f"<1ΔE pixels={m['pct_lt_1']:.1f}%. "
-        "Baseline (research/python-pipeline-seed): 0.84 mean."
+        "Baseline: 0.545 mean (hue-preserving RefBaselineRGBTone, 2026-05-30; "
+        "was 0.84 with per-channel tone)."
     )
 
 
@@ -205,8 +207,8 @@ def test_holy_grail_kelvin_override_changes_render():
 
 
 def test_stage_7_emission_rejects_other_stops():
-    """`stop_after_stage` accepts only 7 or 9 — any other value is a bug
-    in the caller and must fail fast at the validation check, before any
+    """`stop_after_stage` accepts only 3, 4, 7 or 9 — any other value is a
+    bug in the caller and must fail fast at the validation check, before any
     matrix math runs."""
     from lrt_cinema.dcp import DCPProfile
     from lrt_cinema.pipeline import apply_adobe_pipeline
@@ -217,6 +219,87 @@ def test_stage_7_emission_rejects_other_stops():
         apply_adobe_pipeline(
             camera_rgb, DCPProfile(), asn, 5500.0, stop_after_stage=11,
         )
+    # 5 lands mid-HueSatMap — also invalid, must fail at the same guard.
+    with pytest.raises(ValueError, match="stop_after_stage"):
+        apply_adobe_pipeline(
+            camera_rgb, DCPProfile(), asn, 5500.0, stop_after_stage=5,
+        )
+
+
+# --- Colorimetric tap: Stage 3 (XYZ-D50) / Stage 4 (linear ProPhoto-D50) ---
+# Fixture-free unit tests for the v0.8 absolute-accuracy / preview tap. They
+# prove the tap sits exactly post-ForwardMatrix and BEFORE Stage-5 HueSatMap
+# (the first shaping op). The real-DCP proof that the tap precedes the
+# LookTable too lives in tests/test_colorimetric.py (the D5100/D750 profiles
+# carry a LookTable but no HueSatMap, so a constructed HSM is needed here).
+
+
+def _identity_fm_profile():
+    """Profile whose ForwardMatrix is ProPhoto(D50)→XYZ(D50). Then the Stage-4
+    tap (XYZ→ProPhoto) returns the WB-balanced camera RGB unchanged, so the
+    tap value is analytically predictable."""
+    from lrt_cinema.dcp import DCPProfile
+
+    prof = DCPProfile()
+    prof.forward_matrix_1 = colour.RGB_COLOURSPACES["ProPhoto RGB"].matrix_RGB_to_XYZ
+    return prof
+
+
+def test_colorimetric_tap_stage4_is_post_forwardmatrix_pre_hsm():
+    """stop_after_stage=4 returns linear ProPhoto(D50) taken post-ForwardMatrix
+    and BEFORE Stage-5 HueSatMap.
+
+    Proof: give the profile a deliberately non-identity HueSatMap (+60° hue,
+    1.5× sat everywhere). The Stage-4 tap must still equal the pure
+    WB→FM→ProPhoto recompute (no hue shift); if the early-return were
+    mis-placed after Stage 5, the saturated test pixel would return
+    hue-shifted and this assertion would fail."""
+    from lrt_cinema.dcp import HsvCube
+    from lrt_cinema.pipeline import apply_adobe_pipeline
+
+    prof = _identity_fm_profile()
+    cube = np.zeros((1, 6, 2, 3), dtype=np.float32)
+    cube[..., 0] = 60.0   # hueShift degrees
+    cube[..., 1] = 1.5    # satScale
+    cube[..., 2] = 1.0    # valScale
+    prof.hue_sat_map = HsvCube(
+        hue_divisions=6, sat_divisions=2, val_divisions=1,
+        srgb_gamma=False, data_1=cube,
+    )
+
+    cam = np.array([[[0.6, 0.3, 0.2]]], dtype=np.float32)  # chromatic
+    asn = np.array([1.0, 1.0, 1.0], dtype=np.float32)      # WB identity
+
+    tap4 = apply_adobe_pipeline(cam, prof, asn, 5500.0, stop_after_stage=4)
+
+    m_pp_to_xyz = colour.RGB_COLOURSPACES["ProPhoto RGB"].matrix_RGB_to_XYZ
+    m_xyz_to_pp = colour.RGB_COLOURSPACES["ProPhoto RGB"].matrix_XYZ_to_RGB
+    xyz_expect = cam.reshape(-1, 3) @ m_pp_to_xyz.T          # WB identity
+    pp_expect = (xyz_expect @ m_xyz_to_pp.T).reshape(1, 1, 3)
+    np.testing.assert_allclose(tap4, pp_expect, atol=1e-5)
+
+    # The pixel is genuinely chromatic, so a correctly-placed HSM (+ramp+curve)
+    # WOULD change it: the full render must differ from the tap.
+    full = apply_adobe_pipeline(cam, prof, asn, 5500.0, stop_after_stage=9)
+    assert np.abs(full - tap4).max() > 1e-3
+
+
+def test_colorimetric_tap_stage3_xyz_is_one_matrix_from_stage4():
+    """Stage-3 (XYZ-D50) and Stage-4 (linear ProPhoto-D50) taps are one fixed
+    matrix apart — confirms Stage 4 is exactly the XYZ→ProPhoto step on the
+    Stage-3 output and nothing more (e.g. no WB applied twice)."""
+    from lrt_cinema.pipeline import apply_adobe_pipeline
+
+    prof = _identity_fm_profile()
+    cam = np.array([[[0.6, 0.3, 0.2], [0.1, 0.2, 0.4]]], dtype=np.float32)
+    asn = np.array([0.8, 1.0, 0.7], dtype=np.float32)
+
+    xyz = apply_adobe_pipeline(cam, prof, asn, 5500.0, stop_after_stage=3)
+    pp = apply_adobe_pipeline(cam, prof, asn, 5500.0, stop_after_stage=4)
+    m_xyz_to_pp = colour.RGB_COLOURSPACES["ProPhoto RGB"].matrix_XYZ_to_RGB
+    np.testing.assert_allclose(
+        pp.reshape(-1, 3), xyz.reshape(-1, 3) @ m_xyz_to_pp.T, atol=1e-5,
+    )
 
 
 @pytest.mark.skipif(
