@@ -490,6 +490,13 @@ def test_box_sum_radius_zero_is_identity():
     np.testing.assert_allclose(_box_sum(img, 0), img, atol=0.0)
 
 
+def test_box_sum_rejects_radius_larger_than_image():
+    """A radius whose (2r+1) window exceeds the image raises a clear error instead
+    of an opaque broadcast failure (the caller clamps r; this guards reuse)."""
+    with pytest.raises(ValueError, match="too large"):
+        _box_sum(np.zeros((3, 3)), 4)
+
+
 def test_guided_base_smooths_but_preserves_edge():
     """The guided base must reduce variance in a noisy-flat region (smoothing) yet
     track a strong step edge (edge preservation) — the defining guided-filter
@@ -570,6 +577,28 @@ def test_dr_compression_no_negative_channels_on_saturated_overrange():
     x = np.array([[[3.0, 0.05, 0.02]], [[1.4, 0.2, 0.3]]], dtype=np.float32)
     out = apply_dr_compression(x, 100.0, -100.0, 100.0)
     assert out.min() >= 0.0, f"negative channel leaked: min={out.min()}"
+
+
+def test_dr_compression_no_halo_overshoot_at_step_edge():
+    """A clean step edge driven through the full op must not ring: the guided base
+    is edge-preserving (a→1 across the step → detail≈0 there) and the guided filter
+    is gradient-reversal-free, so the recombined output stays within the two
+    plateaus' compressed levels to <1% of their range — no halo overshoot/
+    undershoot (v10 §1.3/§3.8). The guided filter is NOT provably halo-free (halos
+    grow with radius); this bounds the first cut's measured ring and catches a
+    gross-ringing regression. The halo-free local-Laplacian base is the follow-up."""
+    h = w = 32
+    lum = np.full((h, w), 0.1)
+    lum[:, w // 2:] = 4.0  # a strong step (~5.3 stops), no texture
+    img = np.repeat(lum[..., None], 3, axis=2)
+    out_lum = apply_dr_compression(img, 60.0, 40.0, 60.0) @ _PROPHOTO_LUMINANCE
+
+    c_lo, c_hi, c_top = _dr_slopes(60.0, 40.0, 60.0)
+    levels = _dr_compress_luminance(np.array([0.1, 4.0]), c_lo, c_hi, c_top)
+    lo, hi = float(levels[0]), float(levels[1])
+    tol = 0.01 * (hi - lo)  # <1% of the plateau range
+    assert out_lum.min() >= lo - tol, f"undershoot halo: {lo - out_lum.min():.4f}"
+    assert out_lum.max() <= hi + tol, f"overshoot halo: {out_lum.max() - hi:.4f}"
 
 
 # ---------------------------------------------------------------------------
