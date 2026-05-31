@@ -106,7 +106,15 @@ class ColorGrade:
         ))
 
     def blend(self, other: ColorGrade, t: float) -> ColorGrade:
-        """Linearly interpolate all 14 fields (t=0 → self, t=1 → other)."""
+        """Linearly interpolate all 14 fields (t=0 → self, t=1 → other).
+
+        Hue fields lerp linearly like every other field (the project's uniform
+        piecewise-linear interp policy). Known limit: across the 0/360 seam a
+        sparse-keyframe hue ramp (e.g. 350→10) interpolates the long way round.
+        In practice the dominant path is LRT Auto-Transition, which writes
+        per-frame values → exact passthrough (no interpolation), so this only
+        affects hand-set sparse keyframes that straddle the seam.
+        """
         def lf(a: float, b: float) -> float:
             return a + (b - a) * t
 
