@@ -197,9 +197,10 @@ piecewise-log math + ratio reapply to ~0 (per-channel / flipped-sign / dropped-b
 blend half-widths 0.5 stops, guided r≈8 / ε≈0.01, eps 1e-6) are best-effort, **not**
 Lightroom fidelity — the perceptual path makes **no fidelity claim** (notably Whites
 *compresses* the top, the inverse of LR). **Remaining follow-ups (out of this op's
-scope):** the downstream ACES **RGC** gamut pass in `output.py` for out-of-AP1
-excursions; the **local-Laplacian** halo-free base-producer upgrade; **Texture/Clarity**
-(the boost-detail mode of the same shared engine).
+scope):** ~~the downstream ACES **RGC** gamut pass in `output.py` for out-of-AP1
+excursions~~ (**SHIPPED** — see §7 amendment below); the **local-Laplacian**
+halo-free base-producer upgrade; **Texture/Clarity** (the boost-detail mode of the
+same shared engine).
 
 ---
 
@@ -344,6 +345,37 @@ drop policy, and DR-first re-sequencing.**
   the Adobe look with no evidence; gated on the ACR golden set instead.
 - **Okhsl / Okhsv on the master** — sRGB-gamut-bound by construction; wrong for
   wide-gamut ACEScg (use OKLCh proper).
+
+**Amendment (2026-05-31) — the single gated ACES RGC pass SHIPPED (contract 2).**
+The shared AP1 gamut-safety pass is implemented as `output._aces_rgc_compress_ap1`,
+applied in `write_exr_scene_linear` on the **ACEScg (AP1) EXR path only**, after
+the ProPhoto→AP1 Bradford + NaN scrub, before the float→half encode. It is the
+canonical **Academy 1.3 Reference Gamut Compression** (`LMT.Academy.GamutCompress`),
+hand-coded from the spec (`docs.acescentral.com/rgc/specification/`, Eq. 2–4) and
+the aces-dev reference DCTL — `colour` 0.4.x has **no** general gamut compression —
+with the **exact published reference constants**: per-channel threshold
+`[0.815, 0.803, 0.880]`, limit `[1.147, 1.264, 1.312]`, power `1.2` (these are
+Academy defaults, **not** tuning). It rolls out-of-AP1 excursions (the **negative
+AP1 channels** that the perceptual ops — DR-compression shipped; OKLCh/CDL coming —
+produce) smoothly back toward the achromatic axis instead of hard-clipping at the
+encode. **Always-on for ACEScg** (general gamut safety, not intent-gated) but
+**gated on actual out-of-AP1 content** → byte-exact no-op (returns the literal
+input) when nothing reaches threshold, so an in-gamut EXR is bit-identical to the
+pre-RGC build and the gym 0.026 / rose 0.545 ΔE ship gate (stages 1–9 → sRGB) is
+wholly untouched (an EXR-path change). The max/achromatic channel is invariant
+(distance 0 → grey→grey, no luminance-peak darkening); an excursion **beyond** the
+per-channel limit stays compressed-but-negative by design (asymptote
+`threshold+scale ≈ 1.03–1.14`, never 1.0 — RGC is *compression*, not a clamp, so
+residual negatives are NOT re-clipped). **`aces2065` (AP0) is not compressed** (AP0
+is wider; the limits are AP1-specific). Axis-1 oracle: an independent per-pixel
+reimpl held to ~0 + disabled / wrong-threshold / missing-`/ach` sensitivity legs +
+an OCIO cross-check (skipif absent) that closes the channel↔limit-mapping blind
+spot. The hand-rolled algorithm is kept (controllable gating, no OCIO runtime
+dependency). Method/params authority:
+[`research/v10-local-tone-mapping-dr-compression.md`](research/v10-local-tone-mapping-dr-compression.md)
+§3.5; [`PIPELINE.md`](PIPELINE.md) §7. **Out of scope (still follow-ups):** OKLCh
+HSL + ASC-CDL grade (the other perceptual-op consumers of this pass),
+local-Laplacian, Texture/Clarity.
 
 ---
 
