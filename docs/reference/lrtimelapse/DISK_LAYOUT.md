@@ -24,9 +24,10 @@ sidecars:
 ```
 
 The per-frame `.xmp` files in the sequence root contain the *currently
-active* develop state for each frame — what Lightroom or darktable
-would read when the raw is opened. LRT writes these whenever the user
-runs "Save Metadata" (an explicit workflow step) or whenever LRT needs
+active* develop state for each frame — what Lightroom (or any RAW
+developer reading the sidecar) would pick up when the raw is
+opened. LRT writes these whenever the user runs "Save Metadata" (an
+explicit workflow step) or whenever LRT needs
 to commit metadata as part of a workflow step (e.g. Auto Transition).
 On a freshly initialized but not-yet-saved sequence, all per-frame
 sidecars carry LR defaults plus `xmp:Rating="0"`. After Auto Transition,
@@ -175,8 +176,10 @@ to cite.
 
 - We read `<sequence>/*.xmp` (sequence-root, LR-facing) as our XMP
   parser input. We do *not* read `.lrt/proxy/*.xmp`.
-- We never write to `.lrt/`. Our `darktable`-side `.xmp` sidecars go
-  in a separate output directory by design.
+- We never write to `.lrt/`, and we never modify the source sequence
+  folder. Our rendered output (the TIFF/EXR sequence) goes in a
+  separate output directory by design; the in-process renderer emits no
+  `.xmp` sidecars of its own.
 - The `lrtsequence.json` license / version string is the canonical
   signal of which LRT generated the sequence. We could surface this in
   `lrt-cinema inspect` as a future enhancement; we do not currently.
