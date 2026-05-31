@@ -206,16 +206,28 @@ def test_render_intent_overrides_target_default(tmp_path, capsys):
 
 
 def test_dropped_basic_tone_warns_at_render(tmp_path, capsys):
-    """Highlights/Shadows/Whites set in the XMP but dropped at render surface a
-    per-field, frame-counted warning — never a silent drop (the user's explicit
-    requirement; DECISIONS §5/§7). synthetic_keyframe_a sets all three."""
+    """Highlights/Shadows/Whites set in the XMP but dropped on the FAITHFUL path
+    surface a per-field, frame-counted warning — never a silent drop (the user's
+    explicit requirement; DECISIONS §5/§7). synthetic_keyframe_a sets all three."""
     src = _seq_input(tmp_path)
     rc = main(["render", "--input", str(src), "--output", str(tmp_path / "out"),
-               "--dry-run", "--quiet"])
+               "--render-intent", "faithful", "--dry-run", "--quiet"])
     assert rc == 0
     err = capsys.readouterr().err
     assert "Shadows2012 set on 1/1" in err
-    assert "not applied at render" in err.lower()
+    assert "not applied under --render-intent faithful" in err.lower()
+
+
+def test_dropped_basic_tone_not_warned_under_perceptual(tmp_path, capsys):
+    """Under PERCEPTUAL the DR-compression op APPLIES Highlights/Shadows/Whites, so
+    they are no longer dropped — the warning must be suppressed (DECISIONS §5
+    amendment; the intent-aware `_warn_dropped_ops`)."""
+    src = _seq_input(tmp_path)
+    rc = main(["render", "--input", str(src), "--output", str(tmp_path / "out"),
+               "--render-intent", "perceptual", "--dry-run", "--quiet"])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "2012 set on" not in err  # no dropped-op warning under perceptual
 
 
 def test_dry_run_does_not_touch_source_xmp(tmp_path):

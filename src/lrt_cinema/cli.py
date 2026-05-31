@@ -291,26 +291,33 @@ def _load_dcp_dispatch(path: Path) -> DCPProfile:
 _DROPPED_AT_EMIT_FIELDS = ("highlights", "shadows", "whites")
 
 
-def _warn_dropped_ops(per_frame: list[DevelopOps]) -> None:
+def _warn_dropped_ops(per_frame: list[DevelopOps], intent: RenderIntent) -> None:
     """Surface, at RENDER time, any develop op that is SET in the XMP but will
     NOT be applied — so a drop is never silent (DECISIONS.md §5/§7).
 
-    Today the PV5 basic-tone ops (Highlights/Shadows/Whites) have no applied
-    implementation in either intent; the forthcoming perceptual local-tone
-    DR-compression op (driven by these same XMP knobs) will apply them under
-    better-math. Emits one stderr line per set-but-dropped field, with the
-    frame count, so the user knows their edit is being set aside and that it
-    will not match their Lightroom preview.
+    The PV5 basic-tone ops (Highlights/Shadows/Whites) are now **applied on the
+    perceptual path** by the scene-referred DR-compression op (DECISIONS §5
+    amendment, `develop_ops.apply_dr_compression`), but remain **dropped on the
+    faithful path** — Adobe's closed PV5 tone math is un-fittable from the
+    flat-patch harness, and a working-domain change there is forbidden by §7. So
+    we warn ONLY under FAITHFUL; under PERCEPTUAL these knobs drive the op and are
+    not dropped. Emits one stderr line per set-but-dropped field, with the frame
+    count, and points at the perceptual path as where it is honoured.
     """
+    if intent is not RenderIntent.FAITHFUL:
+        return
     n = len(per_frame)
     for field in _DROPPED_AT_EMIT_FIELDS:
         count = sum(1 for ops in per_frame if getattr(ops, field) != 0.0)
         if count:
             sys.stderr.write(
                 f"warning: crs:{field.capitalize()}2012 set on {count}/{n} frame(s) "
-                f"but NOT applied at render (DECISIONS §5; the perceptual local-tone "
-                f"DR-compression op that will honour it is forthcoming). These frames "
-                f"will not match your Lightroom preview.\n",
+                f"but NOT applied under --render-intent faithful (Adobe's PV5 tone "
+                f"math is closed-source; DECISIONS §5). The perceptual path honours "
+                f"it via the scene-referred DR-compression op — render an ACEScg EXR "
+                f"target or pass --render-intent perceptual (not Lightroom-faithful; "
+                f"no fidelity claim). These frames will not match your Lightroom "
+                f"preview.\n",
             )
 
 
@@ -358,7 +365,8 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
 
     if seq.keyframes:
         out.write(
-            "\nFields parsed but DROPPED at render (closed-source PV5 math):\n"
+            "\nFields DROPPED on the faithful path (closed-source PV5 math); "
+            "APPLIED on perceptual via DR-compression (DECISIONS §5):\n"
         )
         for name in _DROPPED_AT_EMIT_FIELDS:
             count = sum(1 for kf in seq.keyframes if getattr(kf.ops, name) != 0.0)
@@ -486,7 +494,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
     intent = (RenderIntent(args.render_intent) if args.render_intent
               else _default_intent_for_preset(preset))
 
-    _warn_dropped_ops(per_frame)
+    _warn_dropped_ops(per_frame, intent)
 
     jobs = []
     for i in range(args.from_frame, to_frame):
