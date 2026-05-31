@@ -416,3 +416,15 @@ def test_preset_unknown_raises(tmp_path):
     x = np.zeros((4, 4, 3), dtype=np.float32)
     with pytest.raises(ValueError, match="Unknown preset"):
         write_preset_output(x, tmp_path / "frame", "nonexistent")
+
+
+def test_display_tiff_nan_pixel_warns_not_silent(tmp_path):
+    """A NaN pixel must not silently quantise to black (np.clip does not sanitize
+    NaN → uint cast → 0). The writer scrubs AND warns so upstream corruption is
+    visible rather than shipping a silently-black frame in an unattended render."""
+    pytest.importorskip("tifffile")
+    x = np.full((2, 2, 3), 0.5, dtype=np.float32)
+    x[0, 0, 0] = np.nan
+    with pytest.warns(UserWarning, match="non-finite"):
+        dst = write_tiff_display(x, tmp_path / "nan.tif")
+    assert dst.is_file()  # scrubbed + written, not crashed or silently black

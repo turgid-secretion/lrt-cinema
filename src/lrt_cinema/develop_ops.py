@@ -109,12 +109,19 @@ def apply_saturation(prophoto: np.ndarray, sat: float) -> np.ndarray:
     """LR Saturation: -100..+100 slider, HSV S-channel multiplier.
 
     Mapping: `mult = 1 + sat/100`. So +100 doubles saturation, -100
-    desaturates fully. Implemented in HSV; gamut-clamped on recompose.
+    desaturates fully. Implemented in HSV; S is clamped to [0, 1] before
+    recompose.
     """
     if sat == 0.0:
         return prophoto
     mult = 1.0 + sat / 100.0
-    return _scale_hsv_saturation(prophoto, lambda s: s * mult)
+    # Clamp S to [0, 1] BEFORE recompose. S>1 drives _hsv_to_rgb_dcp to emit
+    # negative linear-ProPhoto channels; output.py's ProPhoto→target matrix then
+    # MIXES those negatives into the other channels before the [0, 1] clip, so
+    # the clip does NOT neutralise it and saturated colour renders wrong (a grey
+    # wedge is blind to this — see CLAUDE.md §0). Mirrors apply_vibrance, which
+    # already clamps. Guarded by test_color_oracle.py with a pixel past S=1.
+    return _scale_hsv_saturation(prophoto, lambda s: np.clip(s * mult, 0.0, 1.0))
 
 
 def apply_vibrance(prophoto: np.ndarray, vib: float) -> np.ndarray:

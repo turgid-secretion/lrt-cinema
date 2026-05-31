@@ -914,3 +914,23 @@ def test_xy_to_camera_neutral_matches_colour_hdri_reference():
         f"xy_to_camera_neutral diverged from colour-hdri reference: "
         f"got {result.tolist()}, expected {expected.tolist()}"
     ))
+
+
+def test_load_profile_rewraps_corrupt_npz_as_valueerror(tmp_path):
+    """load_profile honors the (FileNotFoundError, ValueError) contract the CLI
+    --dcp preflight relies on: a corrupt/incomplete .npz raises ValueError, not a
+    bare KeyError/BadZipFile that would escape the preflight's except clause."""
+    from lrt_cinema.dcp import load_profile
+
+    missing_keys = tmp_path / "missing_keys.npz"
+    np.savez_compressed(missing_keys, color_matrix_1=np.eye(3, dtype=np.float32))
+    with pytest.raises(ValueError):
+        load_profile(missing_keys)  # missing format_version: KeyError → ValueError
+
+    garbage = tmp_path / "garbage.npz"
+    garbage.write_bytes(b"PK\x03\x04 not really a zip")
+    with pytest.raises(ValueError):
+        load_profile(garbage)  # BadZipFile → ValueError
+
+    with pytest.raises(FileNotFoundError):
+        load_profile(tmp_path / "nope.npz")  # contract's other half preserved

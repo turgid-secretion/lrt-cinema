@@ -1,11 +1,12 @@
-"""Command-line interface for lrt-cinema v0.6.
+"""Command-line interface for lrt-cinema.
 
 Render path is the in-process Python Adobe DNG 1.7.1 pipeline
 (`lrt_cinema.pipeline`); the dt-cli subprocess machinery is gone. See
-`docs/research/v06-architecture.md` for the full design.
+`docs/PIPELINE.md` for the as-built engine reference.
 
-Flag surface (9 flags, down from 12):
-  required:  --input  --output  --preset
+Flag surface:
+  required:  --input  --output
+  output:    --target {lrtimelapse,resolve,master}   (--preset overrides — advanced)
   range:     --from-frame  --to-frame
   io:        --dry-run  --quiet
   ops:       --apply-lrt-offsets / --no-lrt-offsets
@@ -50,6 +51,15 @@ from lrt_cinema.xmp_parser import parse_sequence
 # ---------------------------------------------------------------------------
 
 
+# Friendly output knob: --target expands to a preset bundle. --preset is the
+# advanced escape hatch that overrides it.
+_TARGET_TO_PRESET = {
+    "lrtimelapse": DEFAULT_PRESET,         # 16-bit sRGB display TIFF (LRT round-trip)
+    "resolve": "cinema-linear-finished",   # ACEScg EXR master for Resolve/ACES
+    "master": "cinema-linear-master",      # ACEScg EXR at Stage 7 (HDR headroom)
+}
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="lrt-cinema",
@@ -84,15 +94,24 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Folder to write rendered frames into.",
     )
     render.add_argument(
-        "--preset", default=DEFAULT_PRESET, choices=sorted(PRESETS),
+        "--target", default="lrtimelapse",
+        choices=("lrtimelapse", "resolve", "master"),
         help=(
-            f"Output preset (default: {DEFAULT_PRESET}). "
-            "lrtimelapse (DEFAULT; 16-bit sRGB display TIFF, embedded ICC, "
-            "LRT_NNNNN naming — re-ingestible by LRT's video renderer for "
-            "Motion Blur), cinema-linear-finished (half-float DWAB EXR, "
-            "scene-linear ACEScg; master for DaVinci Resolve), "
-            "cinema-linear-master (half-float DWAB EXR, ACEScg, at Stage 7 for "
-            "HDR headroom), stills-finished (deferred)."
+            "Output target (default: lrtimelapse). Expands to a preset: "
+            "lrtimelapse → 16-bit sRGB display TIFF (LRT_NNNNN, embedded ICC) "
+            "re-ingestible by LRT's video renderer for Motion Blur; "
+            "resolve → half-float DWAB ACEScg EXR (scene-linear master for "
+            "DaVinci Resolve / ACES, bypasses LRT); "
+            "master → ACEScg EXR at Stage 7 for HDR headroom. "
+            "Override with --preset."
+        ),
+    )
+    render.add_argument(
+        "--preset", default=None, choices=sorted(PRESETS),
+        help=(
+            "Advanced: explicit output preset, overrides --target. Choices: "
+            "lrtimelapse, cinema-linear-finished, cinema-linear-master, "
+            "stills-finished (deferred)."
         ),
     )
     render.add_argument(
@@ -322,7 +341,16 @@ def _resolve_dcp(args: argparse.Namespace, first_raw: Path) -> tuple[Path | None
             f"DCP auto-detect skipped. Pass --dcp <path> to render with a profile.\n"
         )
     make, model = info
-    found = auto_detect_profile(first_raw)
+    try:
+        found = auto_detect_profile(first_raw)
+    except (FileNotFoundError, ValueError, struct.error, OSError) as exc:
+        # A corrupt/unreadable profile in an auto-detect root must not crash the
+        # CLI with a raw traceback (unlike --dcp, this path was unguarded).
+        # Treat as "no usable profile found" and fall through to the clear error.
+        return None, (
+            f"info: auto-detect found a profile for {make} {model} but it was "
+            f"malformed/unreadable ({type(exc).__name__}: {exc}). Pass --dcp <path>.\n"
+        )
     if found is None:
         return None, (
             f"info: no DCP found for {make} {model}. Pass --dcp or populate "
@@ -399,17 +427,20 @@ def _cmd_render(args: argparse.Namespace) -> int:
     args.output.mkdir(parents=True, exist_ok=True)
     dng_cache_dir = args.output / ".dng-cache"
 
+    # --preset (advanced) overrides --target's preset bundle.
+    preset = args.preset or _TARGET_TO_PRESET[args.target]
+
     jobs = []
     for i in range(args.from_frame, to_frame):
         src_raw = args.input / seq.source_frames[i]
-        dst_stem = _output_stem(args.output, args.preset, i, seq.source_frames[i])
+        dst_stem = _output_stem(args.output, preset, i, seq.source_frames[i])
         jobs.append(_RenderJob(
             frame_index=i,
             src_raw=src_raw,
             dst_stem=dst_stem,
             ops=per_frame[i],
             dcp_path=dcp_path,
-            preset=args.preset,
+            preset=preset,
             no_dng_convert=args.no_dng_convert,
             dng_cache_dir=dng_cache_dir,
         ))
@@ -418,7 +449,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
         sys.stderr.write(
             f"dry-run: would render {len(jobs)} frame(s) "
             f"[{args.from_frame}..{to_frame}) → {args.output} "
-            f"(preset={args.preset}, workers={args.workers}).\n",
+            f"(target={args.target}, preset={preset}, workers={args.workers}).\n",
         )
         return 0
 
@@ -437,7 +468,18 @@ def _run_jobs(jobs: list[_RenderJob], workers: int, quiet: bool) -> int:
         with ProcessPoolExecutor(max_workers=workers) as pool:
             futures = {pool.submit(_render_one_frame, j): j for j in jobs}
             for fut in as_completed(futures):
-                r = fut.result()
+                job = futures[fut]
+                try:
+                    r = fut.result()
+                except Exception as exc:
+                    # A worker that segfaults / OOMs raises BrokenProcessPool
+                    # here; unguarded it escapes _run_jobs and aborts the whole
+                    # batch, bypassing per-frame FAIL accounting. Count it as a
+                    # failed frame and keep going — already-written frames survive.
+                    r = _RenderResult(
+                        job.frame_index, job.src_raw, ok=False,
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
                 failures += _handle_result(r, total, quiet)
 
     if failures:
