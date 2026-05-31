@@ -20,8 +20,8 @@ cubes). Project-defined; not Adobe's `.dcp` file format. See
 
 ## Licensing
 
-Per `docs/research/KELVIN_MULTIPLIERS_RESEARCH.md`, Adobe's DCP file
-format has a license that doesn't grant redistribution rights. lrt-cinema
+Adobe's DCP file format has a license that doesn't grant redistribution
+rights. lrt-cinema
 ships extracted *data* — color matrices, tone curve, LookTable cube — in
 the project's own `.npz` container rather than the original `.dcp`
 files. The extracted data is a derived work of measured camera color

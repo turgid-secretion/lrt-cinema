@@ -51,6 +51,16 @@ ACES-via-matrix-from-DCP is an approximation, not a reference.
 
 ## The bulletproof automated test (option b)
 
+> **Note (v0.8):** the *automated, deterministic* form of this is now the
+> synthetic colour-validation harness — Axis 1 (`tests/test_color_oracle.py`)
+> + Axis 2/3 (`tests/test_synthetic_dng.py`) measured at the **colorimetric
+> tap** (post-ForwardMatrix linear), needing no physical chart and no removed
+> `cinema-linear`/`cinema-aces` preset. See the "Validation axes" and
+> "2026-05-30" sections below for the current method and numbers. The
+> physical-ColorChecker procedure below is retained as the manual
+> absolute-accuracy reference; ignore its `--preset cinema-linear` / "linear
+> Rec.2020" mentions (superseded — those presets were removed in v0.8).
+
 **One-sentence procedure:** photograph an X-Rite ColorChecker
 Classic under controlled illumination, render through `lrt-cinema`,
 extract per-patch mean RGB, convert measured RGB to CIE XYZ via the
