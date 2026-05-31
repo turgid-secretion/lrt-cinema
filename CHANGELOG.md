@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] — v0.8 prep
 
 ### Added
+- **LR Color Grading wheels baked into the render (Stage 12).** The four wheels
+  — Shadows, Midtones, Highlights, Global — each {Hue, Saturation, Luminance},
+  plus `ColorGradeBlending` and `ColorGradeBalance` (`crs:ColorGrade*`; the PV4+
+  successor to Split Toning) are parsed (`ir.ColorGrade`), interpolated per
+  frame, and applied as a tonal-zone-weighted colour overlay
+  (`develop_ops.apply_color_grade`). Each wheel adds a **zero-sum chroma
+  direction** (Hue carries no net luminance) scaled by Saturation, plus a
+  uniform Luminance offset; the Shadow/Midtone/Highlight tints are masked by a
+  luminance-driven **partition-of-unity** weighting (shaped by Blending and
+  Balance) taken on a perceptual (sRGB-OETF) luminance proxy, while Global
+  applies everywhere. Output is clamped ≥0 (no negative ProPhoto channel reaches
+  the output matrix). The parser also reads the legacy `crs:SplitToning*`
+  aliases (ACR stores the Color-Grade Shadow/Highlight Hue+Sat and Balance
+  there, and Split Toning is itself PV2012-era), so a pure Split-Toning edit
+  drives the Shadow/Highlight wheels. **Identity short-circuits byte-exact**, so
+  Blending/Balance/Hue with no tint — and any no-grade render — is bit-identical
+  to the prior pipeline; the ΔE ship gate is unaffected. Axis-1 oracle:
+  `test_color_grade_matches_independent_oracle` + non-zero-sum-tint /
+  swapped-zone sensitivity legs; `_PROPHOTO_LUMINANCE` is cross-checked against
+  colour-science's ProPhoto matrix. **Fidelity caveat:** Lightroom's exact tint
+  strengths, zone-mask shape/domain, and Blending/Balance response are
+  closed-source — this is the best public approximation (a luminance-masked
+  split-tone); the Axis-1 oracle validates that defined math, not absolute
+  Lightroom fidelity.
 - **LR HSL panel baked into the render (Stage 12).** The 8 hue bands (Red,
   Orange, Yellow, Green, Aqua, Blue, Purple, Magenta) × {Hue, Saturation,
   Luminance} — `crs:HueAdjustment*` / `crs:SaturationAdjustment*` /

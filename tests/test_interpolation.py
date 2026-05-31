@@ -9,6 +9,7 @@ from lrt_cinema.interpolation import (
     materialize_all_frames,
 )
 from lrt_cinema.ir import (
+    ColorGrade,
     DeflickerOffset,
     DevelopOps,
     HslBands,
@@ -71,6 +72,26 @@ def test_interpolate_threads_hsl_through_blend():
     # Endpoints exact.
     assert interpolate(seq, 0).hsl.saturation[0] == pytest.approx(60.0)
     assert interpolate(seq, 10).hsl.is_identity()
+
+
+def test_interpolate_threads_color_grade_through_blend():
+    """Color Grade must survive per-frame interpolation — a field dropped from
+    DevelopOps.blend()/ColorGrade.blend() would silently zero here."""
+    a = DevelopOps(color_grade=ColorGrade(
+        shadow_hue=240.0, shadow_sat=80.0, highlight_lum=40.0,
+        blending=80.0, balance=-40.0,
+    ))
+    seq = _seq(11, [
+        Keyframe(frame_index=0, ops=a),
+        Keyframe(frame_index=10, ops=DevelopOps()),  # default: blending 50, balance 0
+    ])
+    mid = interpolate(seq, 5).color_grade
+    assert mid.shadow_hue == pytest.approx(120.0)
+    assert mid.shadow_sat == pytest.approx(40.0)
+    assert mid.highlight_lum == pytest.approx(20.0)
+    assert mid.blending == pytest.approx(65.0)   # (80+50)/2
+    assert mid.balance == pytest.approx(-20.0)   # (-40+0)/2
+    assert interpolate(seq, 10).color_grade.is_identity()
 
 
 def test_interpolate_exactly_at_keyframe_returns_keyframe_ops():

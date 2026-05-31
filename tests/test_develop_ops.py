@@ -12,6 +12,7 @@ import numpy as np
 
 from lrt_cinema.develop_ops import (
     apply_blacks_2012,
+    apply_color_grade,
     apply_contrast_2012,
     apply_develop_ops,
     apply_exposure_2012,
@@ -23,7 +24,7 @@ from lrt_cinema.develop_ops import (
     apply_tone_curve_pv2012,
     apply_vibrance,
 )
-from lrt_cinema.ir import DevelopOps, HslBands, TonePoint
+from lrt_cinema.ir import ColorGrade, DevelopOps, HslBands, TonePoint
 
 # ---------------------------------------------------------------------------
 # Stage 11 — Exposure2012
@@ -234,6 +235,58 @@ def test_hsl_all_bands_equal_acts_as_global_saturation():
     out_hsl = apply_hsl(x, HslBands(saturation=(50.0,) * 8))
     out_global = apply_saturation(x, 50.0)
     np.testing.assert_allclose(out_hsl, out_global, atol=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Stage 12 — Color Grading wheels
+# ---------------------------------------------------------------------------
+
+
+def test_color_grade_default_is_byte_exact_no_op():
+    """Default ColorGrade (no tint) → byte-exact passthrough (short-circuit).
+    Guarantees the ΔE ship gate is unaffected when no grade is authored."""
+    x = np.random.rand(8, 8, 3).astype(np.float32)
+    np.testing.assert_array_equal(apply_color_grade(x, ColorGrade()), x)
+
+
+def test_color_grade_shadows_tint_darks_not_brights():
+    """A saturated Shadow wheel tints a dark pixel toward its hue far more than
+    a bright pixel (the luminance zone mask). Neutrals ARE tinted here — unlike
+    HSL, that is the intended split-tone behaviour."""
+    dark = np.array([[[0.02, 0.02, 0.02]]], dtype=np.float64)
+    bright = np.array([[[0.95, 0.95, 0.95]]], dtype=np.float64)
+    cg = ColorGrade(shadow_hue=240.0, shadow_sat=100.0)  # blue shadows
+    d_dark = apply_color_grade(dark, cg)[0, 0, 2] - dark[0, 0, 2]
+    d_bright = apply_color_grade(bright, cg)[0, 0, 2] - bright[0, 0, 2]
+    assert d_dark > 0.01                 # shadows pick up blue
+    assert abs(d_bright) < abs(d_dark)   # highlights barely move
+
+
+def test_color_grade_global_applies_everywhere():
+    """The Global wheel tints dark and bright pixels alike (no zone mask)."""
+    dark = np.array([[[0.05, 0.05, 0.05]]], dtype=np.float64)
+    bright = np.array([[[0.9, 0.9, 0.9]]], dtype=np.float64)
+    cg = ColorGrade(global_hue=120.0, global_sat=100.0)  # green everywhere
+    assert apply_color_grade(dark, cg)[0, 0, 1] - dark[0, 0, 1] > 0.01
+    assert apply_color_grade(bright, cg)[0, 0, 1] - bright[0, 0, 1] > 0.01
+
+
+def test_color_grade_saturated_pixel_emits_no_negative_channels():
+    """A saturated pixel + a strong opposing tint must clamp at 0, never emit a
+    negative ProPhoto channel into output.py's colour matrix."""
+    sat = np.array([[[0.8, 0.05, 0.02]]], dtype=np.float32)  # saturated red
+    out = apply_color_grade(
+        sat, ColorGrade(global_hue=180.0, global_sat=100.0, global_lum=-100.0),
+    )
+    assert out.min() >= 0.0, f"negative channel leaked: min={out.min()}"
+
+
+def test_color_grade_hue_only_wheel_is_no_op():
+    """A wheel with Hue set but Saturation=0 produces no tint (is_identity)."""
+    x = np.random.rand(4, 4, 3).astype(np.float32)
+    np.testing.assert_array_equal(
+        apply_color_grade(x, ColorGrade(shadow_hue=200.0, highlight_hue=40.0)), x,
+    )
 
 
 # ---------------------------------------------------------------------------

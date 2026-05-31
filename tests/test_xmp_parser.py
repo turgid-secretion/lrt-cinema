@@ -100,6 +100,63 @@ def test_hsl_only_frame_is_flagged_meaningful(tmp_path):
     ) is True
 
 
+def test_parse_color_grade_round_trip(tmp_path):
+    """ColorGrade* tags parse into the four wheels; Blending defaults to 50."""
+    _write_xmp(
+        tmp_path,
+        'crs:ColorGradeShadowHue="220" crs:ColorGradeShadowSat="40" '
+        'crs:ColorGradeShadowLum="-10" crs:ColorGradeMidtoneSat="25" '
+        'crs:ColorGradeHighlightHue="45" crs:ColorGradeHighlightSat="30" '
+        'crs:ColorGradeGlobalSat="15" crs:ColorGradeBalance="-20"',
+    )
+    seq = parse_sequence(tmp_path)
+    assert len(seq.keyframes) == 1            # Color-Grade intent flags a keyframe
+    cg = seq.keyframes[0].ops.color_grade
+    assert cg.shadow_hue == 220.0
+    assert cg.shadow_sat == 40.0
+    assert cg.shadow_lum == -10.0
+    assert cg.midtone_sat == 25.0
+    assert cg.highlight_hue == 45.0
+    assert cg.global_sat == 15.0
+    assert cg.balance == -20.0
+    assert cg.blending == 50.0                # default when the tag is absent
+    assert not cg.is_identity()
+
+
+def test_parse_color_grade_splittoning_alias(tmp_path):
+    """ACR aliases Shadow/Highlight Hue+Sat and Balance onto the legacy
+    crs:SplitToning* tags. A pure Split-Toning XMP (no ColorGrade* tags) must
+    therefore still drive the Shadow/Highlight wheels — else a real edit is a
+    dead feature (the ColorGrade* tags take precedence when both are present)."""
+    _write_xmp(
+        tmp_path,
+        'crs:SplitToningShadowHue="210" crs:SplitToningShadowSaturation="35" '
+        'crs:SplitToningHighlightHue="50" crs:SplitToningHighlightSaturation="20" '
+        'crs:SplitToningBalance="15"',
+    )
+    cg = parse_sequence(tmp_path).keyframes[0].ops.color_grade
+    assert cg.shadow_hue == 210.0
+    assert cg.shadow_sat == 35.0
+    assert cg.highlight_hue == 50.0
+    assert cg.highlight_sat == 20.0
+    assert cg.balance == 15.0
+    assert not cg.is_identity()
+
+
+def test_color_grade_blending_alone_is_not_meaningful(tmp_path):
+    """Blending/Balance/Hue without a Saturation or Luminance produce no tint, so
+    they must NOT flag a keyframe — only an actual wheel tint counts."""
+    from lrt_cinema.ir import ColorGrade, DevelopOps
+    from lrt_cinema.xmp_parser import _has_meaningful_ops
+    assert _has_meaningful_ops(DevelopOps(color_grade=ColorGrade(blending=50.0))) is False
+    assert _has_meaningful_ops(
+        DevelopOps(color_grade=ColorGrade(blending=80.0, balance=-40.0, shadow_hue=210.0)),
+    ) is False
+    assert _has_meaningful_ops(
+        DevelopOps(color_grade=ColorGrade(shadow_sat=20.0)),
+    ) is True
+
+
 def test_parse_kelvin_as_float_text():
     import tempfile
     xmp = """<?xml version="1.0" encoding="UTF-8"?>

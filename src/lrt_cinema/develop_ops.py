@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from lrt_cinema.ir import DevelopOps, HslBands, TonePoint
+from lrt_cinema.ir import ColorGrade, DevelopOps, HslBands, TonePoint
 from lrt_cinema.pipeline import DngSplineSolver
 
 # ---------------------------------------------------------------------------
@@ -195,6 +195,59 @@ def apply_hsl(prophoto: np.ndarray, hsl: HslBands) -> np.ndarray:
     return np.where(valid[..., None], rgb_post, prophoto).astype(prophoto.dtype)
 
 
+def apply_color_grade(prophoto: np.ndarray, cg: ColorGrade) -> np.ndarray:
+    """LR Color Grading wheels: Shadows / Midtones / Highlights / Global.
+
+    A tonal-zone-weighted colour overlay applied additively in linear ProPhoto.
+    Each wheel contributes a tint = a **zero-sum chroma direction** (the
+    fully-saturated RGB for its Hue, mean-subtracted so Hue and Luminance stay
+    orthogonal) scaled by Saturation, plus a uniform Luminance offset. The
+    Shadow/Midtone/Highlight tints are masked by a luminance-driven
+    **partition-of-unity** weighting (`_color_grade_zone_weights`); the Global
+    tint applies everywhere. `ColorGradeBlending` sets the zone overlap and
+    `ColorGradeBalance` shifts the shadow↔highlight pivot.
+
+    The zone mask is taken on a perceptual luminance proxy — the sRGB OETF of
+    the (clamped) ProPhoto relative luminance — so "midtones" land near
+    perceptual mid rather than linear mid. The tint itself is added in linear
+    light; the output is clamped to ≥0 so no negative ProPhoto channel reaches
+    `output.py`'s colour matrix (the `apply_saturation` lesson, generalised).
+
+    **Fidelity caveat:** Lightroom's exact tint strengths, the zone-mask shape
+    and its working domain, and the Blending/Balance response are closed-source.
+    This is the best public approximation — a luminance-masked split-tone, the
+    well-understood model the Color Grade panel succeeds. The Axis-1 oracle
+    validates this *defined* math, not absolute Lightroom fidelity.
+    """
+    if cg.is_identity():
+        return prophoto
+
+    from lrt_cinema.lut3d_baker import _srgb_oetf
+
+    tint_shadow = _color_grade_wheel_tint(cg.shadow_hue, cg.shadow_sat, cg.shadow_lum)
+    tint_midtone = _color_grade_wheel_tint(cg.midtone_hue, cg.midtone_sat, cg.midtone_lum)
+    tint_highlight = _color_grade_wheel_tint(
+        cg.highlight_hue, cg.highlight_sat, cg.highlight_lum,
+    )
+    tint_global = _color_grade_wheel_tint(cg.global_hue, cg.global_sat, cg.global_lum)
+
+    pp = prophoto.astype(np.float64)
+    luminance = pp @ _PROPHOTO_LUMINANCE
+    perceptual = _srgb_oetf(np.clip(luminance, 0.0, 1.0))
+    shadow_w, midtone_w, highlight_w = _color_grade_zone_weights(
+        perceptual, cg.blending, cg.balance,
+    )
+
+    out = (
+        pp
+        + shadow_w[..., None] * tint_shadow
+        + midtone_w[..., None] * tint_midtone
+        + highlight_w[..., None] * tint_highlight
+        + tint_global
+    )
+    return np.maximum(out, 0.0).astype(prophoto.dtype)
+
+
 def apply_contrast_2012(prophoto: np.ndarray, contrast: float) -> np.ndarray:
     """LR Contrast2012: -100..+100 S-curve around midtone pivot (0.18 linear,
     matching scene-linear midgray). Mapping: pivot-anchored gain
@@ -236,17 +289,19 @@ def apply_stage_12_perceptual(
     prophoto: np.ndarray, ops: DevelopOps,
 ) -> np.ndarray:
     """Apply all stage-12 perceptual-domain ops in order:
-    ToneCurve → Saturation → Vibrance → HSL → Contrast → Sharpness.
+    ToneCurve → Saturation → Vibrance → HSL → ColorGrade → Contrast → Sharpness.
 
-    HSL is placed after the global Saturation/Vibrance and before Contrast,
-    matching Lightroom's panel order (HSL is a colour-treatment op applied
-    after Basic presence and before the final tone shaping). Identity ops
-    short-circuit to a byte-exact no-op, so a render with no HSL intent is
-    bit-identical to the pre-HSL pipeline (the ΔE ship gate is unaffected)."""
+    HSL then Color Grading are placed after the global Saturation/Vibrance and
+    before Contrast, matching Lightroom's panel order (HSL precedes Color
+    Grading; both are colour-treatment ops after Basic presence and before the
+    final tone shaping). Identity ops short-circuit to a byte-exact no-op, so a
+    render with no HSL / Color-Grade intent is bit-identical to the prior
+    pipeline (the ΔE ship gate is unaffected)."""
     out = apply_tone_curve_pv2012(prophoto, ops.tone_curve)
     out = apply_saturation(out, ops.saturation)
     out = apply_vibrance(out, ops.vibrance)
     out = apply_hsl(out, ops.hsl)
+    out = apply_color_grade(out, ops.color_grade)
     out = apply_contrast_2012(out, ops.contrast)
     out = apply_sharpness(out, ops.sharpness)
     return out
@@ -306,6 +361,55 @@ def _hsl_band_weights(h: np.ndarray) -> np.ndarray:
         weights[..., j] += np.where(in_seg, 1.0 - frac, 0.0)
         weights[..., nxt] += frac
     return weights
+
+
+# ---------------------------------------------------------------------------
+# Internal — Color Grading (tonal-zone-weighted colour overlay)
+# ---------------------------------------------------------------------------
+#
+# ProPhoto-RGB(D50) relative-luminance row (ROMM RGB → XYZ, the Y row). Used
+# to drive the Color-Grade tonal zone mask. Cross-checked against
+# colour-science's ProPhoto matrix by
+# test_color_oracle.py::test_prophoto_luminance_constant_matches_colour_science
+# so it cannot silently drift from the matrix output.py actually converts with.
+_PROPHOTO_LUMINANCE = np.array([0.2880402, 0.7118741, 0.0000857], dtype=np.float64)
+
+# Tint strengths at full slider. Documented approximations — Lightroom's exact
+# magnitudes are closed-source; these give a strong-but-bounded grade.
+_CG_CHROMA_STRENGTH = 0.30  # per unit Saturation/100 along the (zero-sum) hue dir
+_CG_LUM_STRENGTH = 0.10     # per unit Luminance/100, uniform across channels
+
+
+def _color_grade_wheel_tint(hue_deg: float, sat: float, lum: float) -> np.ndarray:
+    """One wheel's additive tint: a zero-sum chroma direction (the saturated RGB
+    for `hue_deg`, mean-subtracted so it carries no net luminance) scaled by
+    Saturation, plus a uniform Luminance offset. Returns a float64 `(3,)`."""
+    from lrt_cinema.lut3d_baker import _hsv_to_rgb_dcp
+
+    h_hex = np.array([(hue_deg % 360.0) * (6.0 / 360.0)], dtype=np.float64)
+    rgb = _hsv_to_rgb_dcp(h_hex, np.array([1.0]), np.array([1.0]))[0]  # (3,)
+    chroma_dir = rgb - rgb.mean()
+    return _CG_CHROMA_STRENGTH * (sat / 100.0) * chroma_dir + _CG_LUM_STRENGTH * (lum / 100.0)
+
+
+def _color_grade_zone_weights(
+    perceptual: np.ndarray, blending: float, balance: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Shadow / Midtone / Highlight masks from a perceptual luminance.
+
+    A partition of unity: ``shadow=(1−t)ᵖ``, ``highlight=tᵖ``,
+    ``midtone=1−shadow−highlight`` (≥0 for p≥1). `blending` sets the exponent
+    `p∈[1,3]` (higher Blending → p→1 → shadows/highlights crossfade with more
+    overlap); `balance` remaps `t` via a power curve to shift the pivot
+    (positive Balance → highlights claim more territory). Sums to 1 per pixel,
+    so an all-zero grade leaves the additive overlay at zero everywhere."""
+    gamma_balance = 2.0 ** (-balance / 100.0)
+    t = np.clip(perceptual, 0.0, 1.0) ** gamma_balance
+    p = 1.0 + 2.0 * (1.0 - float(np.clip(blending, 0.0, 100.0)) / 100.0)
+    shadow_w = (1.0 - t) ** p
+    highlight_w = t ** p
+    midtone_w = 1.0 - shadow_w - highlight_w
+    return shadow_w, midtone_w, highlight_w
 
 
 # ---------------------------------------------------------------------------
