@@ -500,10 +500,15 @@ def test_guided_base_smooths_but_preserves_edge():
     assert base.var() < flat.var() * 0.5  # noise smoothed
 
     step = np.zeros((40, 40))
-    step[:, 20:] = 5.0  # a 5-stop edge — far above sqrt(eps)=0.1
+    step[:, 20:] = 5.0  # a 5-stop edge at col 20 — far above sqrt(eps)=0.1
     base_step = _guided_base_log(step, _DR_GUIDED_RADIUS, 0.01)
-    # the edge height survives (a plain box blur would smear it badly)
-    assert base_step[:, 30:].mean() - base_step[:, :10].mean() > 4.5
+    # Probe ADJACENT to the edge (cols 18/21): the guided filter holds the step
+    # sharp (≈0/5, a→1 across it) where a plain box mean would smear it to ≈2.1/2.9
+    # (its window straddles the step). Probing far from the edge would NOT
+    # discriminate — a box blur is exact there too, so the old far-probe assertion
+    # passed for any local averaging.
+    assert base_step[:, 18].mean() < 0.6, "left of edge smeared (not edge-preserving)"
+    assert base_step[:, 21].mean() > 4.4, "right of edge smeared (not edge-preserving)"
 
 
 def _dr_textured_image(h=80, w=80):
