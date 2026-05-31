@@ -80,7 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 only full-sensor-raw option but trades away our colour science → offer later as
 an *optional* max-recovery preset (needs a `cdng_emit` writer + per-camera
 colour characterisation), not a default. See
-`docs/research/v08-timelapse-emission-survey.md` §2.6.
+[`docs/DECISIONS.md`](docs/DECISIONS.md) §3.
 
 ## [0.7.1a0] — 2026-05-28
 
@@ -125,13 +125,13 @@ colour characterisation), not a default. See
   strided-view garble class on real data, not 16×16 fixtures); half-DWAB
   is 19.5× vs float TIFF; DWAB is visually lossless (mean ΔE 0.25) on real
   content; Stage-7 preserves +1 stop of recovery; end-to-end colour is
-  0.789 ΔE vs `dng_validate`. See `docs/EMISSION_FORMAT_VERIFIED.md`.
+  0.789 ΔE vs `dng_validate`.
 
 ### Why this exists
 The v0.7 spec's Phase 2 (β-XML; Stage 7 EXR + Resolve project sidecar
 carrying LRT-authored keyframes) was deferred to v0.8 — Resolve does
 not preserve per-frame grade keyframes through any documented import
-path (see `docs/research/v07-beta-xml-deadend.md`). Option B is the
+path (see [`docs/DECISIONS.md`](docs/DECISIONS.md) §4). Option B is the
 pragmatic intermediate: the Stage 7 emission point (HDR headroom win)
 without the sidecar (which doesn't work). Users who want the v0.6 DCP
 shape stay on γ (`cinema-linear-finished`); users who want maximum
@@ -154,8 +154,7 @@ keyframes-in-pixels.
   optional. Existing `--preset cinema-linear-finished` invocations
   continue to work.
 - Test gate: ΔE2000 < 0.5 between DWAB-half and PIZ-half outputs on a
-  synthetic gradient+noise fixture (the visually-lossless gate per
-  `docs/research/v07-spec-revision-plan.md` §"Phase 1 — Validation").
+  synthetic gradient+noise fixture (the visually-lossless gate).
 
 ### Changed
 - `cinema-aces` preset now emits a one-time `DeprecationWarning` per
@@ -164,7 +163,7 @@ keyframes-in-pixels.
 - Version bumped from `0.6.0a0` to `0.7.0a0`.
 
 ### Why this exists
-Per `docs/research/v07-spec-revision-plan.md`, v0.6's emissions were
+v0.6's emissions were
 huge (~292 MiB / frame for `cinema-linear` 32-bit float TIFF, ~100 MiB
 for `cinema-aces` PIZ-float EXR). Cinema scene-referred workflows ship
 half-float DWAB EXR because it's the size/quality/decode-speed Pareto
@@ -179,8 +178,8 @@ verification (2026-05-28) found Resolve's documented import paths do
 not preserve per-frame grade keyframes: FCPXML colour data lands as
 static primary corrections only (Manual ~line 50884); Studio scripting
 API exposes `SetCDL` / `SetLUT` / `ApplyGradeFromDRX` only, with no
-per-frame setter. See `docs/research/v07-beta-xml-deadend.md` for the
-full finding and what v0.8 could re-open. The v0.7.x §2.B free-upgrade
+per-frame setter. See [`docs/DECISIONS.md`](docs/DECISIONS.md) §4 for the
+finding and what could re-open it. The v0.7.x §2.B free-upgrade
 roadmap (X1–X6: HSL, Color Grading wheels, parametric tone, user
 masks, Texture, Clarity) is correspondingly deferred — those
 increments were architected around the β-XML carrier.

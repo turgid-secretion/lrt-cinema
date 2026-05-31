@@ -255,8 +255,8 @@ path, bundled `.style` files) is **pass the real-chart leg**. Today's
 pipeline drops 9 of 12 develop ops between parse and emit and uses
 neutral white-balance multipliers regardless of source kelvin. The
 self-test passes today; the real-chart gate is the fast-failing CI
-signal that documents how far the calibration work in [v0.3](V03_PLAN.md)
-Track A needs to go — which is precisely its value pre-calibration.
+signal that documents how far the calibration work needs to go — which
+is precisely its value pre-calibration.
 
 ## Methodology — comparing two renders of the same scene
 
@@ -477,6 +477,6 @@ The misleading error message — `error: can't open XMP file` instead of `XMP sc
 
 - [SCOPE.md](../SCOPE.md) — per-feature implementation status; the
   test described here gates the "cinema-grade" wording.
-- [src/lrt_cinema/presets/CALIBRATION.md](../src/lrt_cinema/presets/CALIBRATION.md) —
-  why the bundled `.style` files are placeholders and what the
-  calibration pass must do.
+- [PIPELINE.md](PIPELINE.md) — the as-built engine reference (the stage taps
+  this validation measures at).
+- [DECISIONS.md](DECISIONS.md) — the binding decisions log.
