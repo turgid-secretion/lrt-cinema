@@ -61,18 +61,21 @@ for the empirical journey.
 ## Requirements
 
 - Python 3.10+
-- macOS or Windows with Adobe DNG Converter installed (free, from Adobe)
-  — required for the < 1 ΔE result. On Linux pass `--no-dng-convert` to
-  read NEFs directly via libraw (expect ~0.5 ΔE regression).
-- A per-camera DCP profile. Auto-detected from `$LRT_CINEMA_PROFILES`,
-  `~/.config/lrt-cinema/profiles/`, or the system Adobe DNG Converter
-  install. Pass `--dcp PATH` to override.
+- **dnglab** (open-source, LGPL-2.1) — the RAW→DNG converter, required for the
+  < 1 ΔE result. No Adobe software is needed. Install with `brew install
+  dnglab` (macOS), `cargo install dnglab`, or grab a Linux/macOS/Windows build
+  from https://github.com/dnglab/dnglab. Point `$LRT_CINEMA_DNGLAB` at the
+  binary if it isn't on `PATH`. To skip conversion entirely, pass
+  `--no-dng-convert` (reads NEFs directly via libraw; expect ~0.5 ΔE
+  regression).
+- A per-camera DCP profile. Auto-detected from `$LRT_CINEMA_PROFILES` or
+  `~/.config/lrt-cinema/profiles/`; pass `--dcp PATH` to supply one explicitly
+  (a `.dcp`, read clean-room, or an extracted `.npz`). Populate the profile
+  cache from any `.dcp` source you are licensed to use — an Adobe
+  CameraProfiles directory if you happen to have one, or profiles built with
+  [dcamprof](https://torger.se/anders/dcamprof.html) / RawTherapee — via
+  `python3 tools/extract_dcp_library.py <source_root>`.
 - Source RAW supported by libraw: NEF, DNG, CR3, ARW, RAF, ORF, RW2, FFF.
-
-Install Adobe DNG Converter:
-- **macOS:** https://helpx.adobe.com/camera-raw/digital-negative.html
-- **Windows:** Same URL.
-- **Linux:** Not officially supported by Adobe — use `--no-dng-convert`.
 
 ## Install
 

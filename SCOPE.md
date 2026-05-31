@@ -18,9 +18,9 @@ for the authoritative roadmap.
 | Holy Grail kelvin override | shipped | `DevelopOps.temperature_k` honored per frame |
 | LRT mask-correction per-frame deltas (HG / Deflicker / Global) | shipped | `--apply-lrt-offsets` default |
 | Adobe DNG 1.7.1 render pipeline (stages 1–9) | shipped | `pipeline.py`, ΔE < 1 vs `dng_validate` |
-| Per-camera DCP profile loading + ColorMatrix interpolation | shipped | `dcp.py`, auto-detect from Adobe DNG Converter install or `$LRT_CINEMA_PROFILES` |
+| Per-camera DCP profile loading + ColorMatrix interpolation | shipped | `dcp.py`; auto-detect from `$LRT_CINEMA_PROFILES` / `~/.config/lrt-cinema/profiles` (open `.npz`); clean-room `.dcp` reader for `--dcp` |
 | LR Exposure2012, Blacks2012, ToneCurvePV2012, Saturation, Vibrance, Contrast2012 | shipped | `develop_ops.py` (greenfield from public LR formulas) |
-| NEF→DNG preprocessing | shipped | `dng_convert.py` wraps Adobe DNG Converter; mtime+size cache |
+| NEF→DNG preprocessing | shipped | `dng_convert.py` wraps **dnglab** (open-source, LGPL-2.1; Adobe-free); mtime+size cache |
 | `cinema-linear-finished` output (16-bit half DWAB EXR; γ) | **shipped v0.7.0** | `output.py`; v0.7 default; 10–18× smaller than `cinema-aces` |
 | `cinema-linear-master` output (16-bit half DWAB EXR at Stage 7; β) | **shipped v0.7.1** | `output.py` + `pipeline.py` `stop_after_stage=7`; skips DCP LookTable + ProfileToneCurve for HDR headroom |
 | `cinema-linear` output (32-bit float linear Rec.2020 TIFF) | shipped | `output.py` via `tifffile`; v0.6 back-compat |
@@ -37,7 +37,7 @@ for the authoritative roadmap.
 | `Sharpness` | no-op | Sharpening belongs in the grade stage. v0.6.x may revisit. |
 | Third test scene (tungsten / fluorescent) | v0.6.x | Surfaces whether 5500K is load-bearing or coincidental on the current gym + rose pair. |
 | Smooth (Catmull-Rom) keyframe interpolation | future | Was in v0.2 plan; deferred until real-LRT-sequence preference signal arrives. |
-| Linux Adobe DNG Converter | not feasible | Adobe ships no Linux build; use `--no-dng-convert` (NEF direct, ~0.5 ΔE regression). |
+| Linux RAW→DNG | resolved | dnglab ships official Linux builds (Adobe never did) — it is now the sole converter on every platform. `--no-dng-convert` remains a fallback for boxes with no dnglab binary. |
 
 ## Output presets
 
@@ -119,14 +119,14 @@ ORF / FFF) and searches in this preference order:
 1. `$LRT_CINEMA_PROFILES` — typically points at a cloned sister
    `lrt-cinema-profiles` data repo.
 2. `~/.config/lrt-cinema/profiles/` (or `%APPDATA%/lrt-cinema/profiles/`
-   on Windows) — populated by `tools/extract_dcp_library.py` against an
-   Adobe DNG Converter install.
-3. Adobe DNG Converter install (`/Library/Application Support/Adobe/CameraRaw/
-   CameraProfiles/` on macOS; `%PROGRAMDATA%/Adobe/CameraRaw/CameraProfiles/`
-   on Windows).
-4. None → clear actionable error message.
+   on Windows) — populated by `tools/extract_dcp_library.py <source_root>`
+   from any `.dcp` source you are licensed to use (a dcamprof/RawTherapee
+   profile set, or an Adobe CameraProfiles directory if you have one).
+3. None → clear actionable error message. The runtime never scans an Adobe
+   install; pass `--dcp PATH` to supply a profile explicitly — a `.dcp`
+   (read clean-room) or an extracted `.npz`.
 
-Canon CR3 (ISO BMFF) and other non-TIFF RAWs fall through to step 4
+Canon CR3 (ISO BMFF) and other non-TIFF RAWs fall through to step 3
 regardless; the user must pass `--dcp` explicitly for those bodies.
 
 ## Frame ordering

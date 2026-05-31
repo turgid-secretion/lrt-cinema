@@ -6,9 +6,9 @@ which achieves < 1 ΔE mean vs `dng_validate` on both test scenes
 
 Stage order (per `docs/research/v06-architecture.md` §"Pipeline stage order"):
 
-  1.  Demosaic via rawpy/libraw on Adobe-converted DNG (not NEF — DNG gives
-      libraw the correct WhiteLevel + embedded LinearizationTable). Algorithm
-      = LINEAR (matches Adobe SDK internal default).
+  1.  Demosaic via rawpy/libraw on a converted DNG (dnglab; not NEF — the DNG
+      gives libraw the correct WhiteLevel + embedded LinearizationTable).
+      Algorithm = LINEAR (matches Adobe SDK internal default).
   2.  AsShotNeutral inverse — per-channel WB. Holy Grail kelvin override:
       `develop_ops.temperature_k` (when set) overrides scene_kelvin via
       `neutral_to_kelvin`-derived AsShotNeutral.
@@ -672,10 +672,10 @@ def render_frame(
     """End-to-end render of a single RAW frame through pipeline stages 1
     through `stop_after_stage`.
 
-    `raw_path` should point to an Adobe-converted DNG (use `dng_convert.py`
-    to produce one from a NEF). NEF input works but loses the embedded
-    LinearizationTable + correct WhiteLevel that close ~0.6 ΔE vs Adobe's
-    reference.
+    `raw_path` should point to a converted DNG (use `dng_convert.py`, which
+    wraps dnglab, to produce one from a NEF). NEF input works but loses the
+    embedded LinearizationTable + correct WhiteLevel that close ~0.6 ΔE vs
+    Adobe's `dng_validate` reference.
 
     `dcp_path` is required for DefaultBlackRender lookup (the DCP parser
     doesn't carry the tag yet). Pass the same Adobe DCP path the profile

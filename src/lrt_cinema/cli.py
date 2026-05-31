@@ -145,10 +145,10 @@ def _build_parser() -> argparse.ArgumentParser:
     render.add_argument(
         "--dcp", type=Path, default=None,
         help=(
-            "Explicit DCP path. Accepts Adobe `.dcp` or lrt-cinema's `.npz` "
-            "extracted profile. Auto-detected from $LRT_CINEMA_PROFILES / "
-            "~/.config/lrt-cinema/profiles / Adobe DNG Converter install "
-            "when not supplied."
+            "Explicit DCP path. Accepts a `.dcp` (clean-room reader) or "
+            "lrt-cinema's `.npz` extracted profile. Auto-detected from "
+            "$LRT_CINEMA_PROFILES / ~/.config/lrt-cinema/profiles when not "
+            "supplied."
         ),
     )
     render.add_argument(
@@ -162,11 +162,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-dng-convert", dest="no_dng_convert",
         action="store_true", default=False,
         help=(
-            "Skip Adobe DNG Converter preprocessing — read NEFs directly "
-            "via libraw. Expect ~0.5 ΔE regression vs default (libraw "
-            "lacks the DNG's embedded LinearizationTable + correct "
-            "WhiteLevel). Required on Linux where Adobe DNG Converter "
-            "has no official build."
+            "Skip the dnglab RAW→DNG step — read NEFs directly via libraw. "
+            "Expect ~0.5 ΔE regression vs default (libraw lacks the DNG's "
+            "embedded LinearizationTable + correct WhiteLevel). Use only when "
+            "no dnglab binary is available."
         ),
     )
 
