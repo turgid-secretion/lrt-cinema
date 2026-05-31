@@ -9,12 +9,20 @@ required.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from lrt_cinema.develop_ops import (
+    _DR_GUIDED_RADIUS,
+    _PROPHOTO_LUMINANCE,
+    _box_sum,
+    _dr_compress_luminance,
+    _dr_slopes,
+    _guided_base_log,
     apply_blacks_2012,
     apply_color_grade,
     apply_contrast_2012,
     apply_develop_ops,
+    apply_dr_compression,
     apply_exposure_2012,
     apply_hsl,
     apply_saturation,
@@ -440,3 +448,210 @@ def test_saturation_past_s1_emits_no_negative_channels():
     x = np.array([[[0.80, 0.10, 0.05]]], dtype=np.float32)  # S≈0.94 (< 1)
     out = apply_saturation(x, 80.0)  # mult=1.8 → S*1.8≈1.69 > 1 before clamp
     assert out.min() >= 0.0, f"negative linear-ProPhoto channel leaked: min={out.min()}"
+
+
+# ---------------------------------------------------------------------------
+# Stage 12 — DR-compression (perceptual-only, Highlights/Shadows/Whites)
+# ---------------------------------------------------------------------------
+
+
+def test_dr_compression_default_is_byte_exact_no_op():
+    """All three sliders 0 → byte-exact passthrough (short-circuit before any log
+    math). Guarantees the ΔE ship gate is unaffected on the perceptual path."""
+    x = np.random.rand(8, 8, 3).astype(np.float32)
+    np.testing.assert_array_equal(apply_dr_compression(x, 0.0, 0.0, 0.0), x)
+
+
+def test_dr_compression_preserves_dtype():
+    x = np.random.rand(8, 8, 3).astype(np.float32)
+    assert apply_dr_compression(x, 30.0, 20.0, 10.0).dtype == np.float32
+
+
+def test_box_sum_matches_scipy_uniform_filter_interior():
+    """The He-et-al. box filter (the guided-filter kernel — the op's highest-risk
+    code) must equal an independent moving-average. A constant-input test is BLIND
+    to off-by-one bugs (constant in → constant out regardless), so cross-check the
+    box MEAN against scipy.ndimage.uniform_filter on NON-constant input, at
+    interior pixels (where both use the full (2r+1)² window)."""
+    ndi = pytest.importorskip("scipy.ndimage")
+    img = np.random.default_rng(11).random((48, 40))
+    r = 8
+    n = _box_sum(np.ones_like(img), r)
+    box_mean = _box_sum(img, r) / n
+    ref = ndi.uniform_filter(img, size=2 * r + 1, mode="constant")
+    interior = (slice(r, img.shape[0] - r), slice(r, img.shape[1] - r))
+    np.testing.assert_allclose(box_mean[interior], ref[interior], atol=1e-12)
+
+
+def test_box_sum_radius_zero_is_identity():
+    """r=0 (a 1-wide / sub-window array) returns the input — the path that makes
+    apply_dr_compression collapse to the global pointwise law."""
+    img = np.random.default_rng(12).random((5, 7))
+    np.testing.assert_allclose(_box_sum(img, 0), img, atol=0.0)
+
+
+def test_box_sum_rejects_radius_larger_than_image():
+    """A radius whose (2r+1) window exceeds the image raises a clear error instead
+    of an opaque broadcast failure (the caller clamps r; this guards reuse)."""
+    with pytest.raises(ValueError, match="too large"):
+        _box_sum(np.zeros((3, 3)), 4)
+
+
+def test_guided_base_smooths_but_preserves_edge():
+    """The guided base must reduce variance in a noisy-flat region (smoothing) yet
+    track a strong step edge (edge preservation) — the defining guided-filter
+    behaviour, distinguishing it from a plain blur."""
+    rng = np.random.default_rng(13)
+    flat = 1.0 + 0.05 * rng.standard_normal((40, 40))  # noisy flat (log-domain)
+    base = _guided_base_log(flat, _DR_GUIDED_RADIUS, 0.01)
+    assert base.var() < flat.var() * 0.5  # noise smoothed
+
+    step = np.zeros((40, 40))
+    step[:, 20:] = 5.0  # a 5-stop edge at col 20 — far above sqrt(eps)=0.1
+    base_step = _guided_base_log(step, _DR_GUIDED_RADIUS, 0.01)
+    # Probe ADJACENT to the edge (cols 18/21): the guided filter holds the step
+    # sharp (≈0/5, a→1 across it) where a plain box mean would smear it to ≈2.1/2.9
+    # (its window straddles the step). Probing far from the edge would NOT
+    # discriminate — a box blur is exact there too, so the old far-probe assertion
+    # passed for any local averaging.
+    assert base_step[:, 18].mean() < 0.6, "left of edge smeared (not edge-preserving)"
+    assert base_step[:, 21].mean() > 4.4, "right of edge smeared (not edge-preserving)"
+
+
+def _dr_textured_image(h=80, w=80):
+    """A neutral image with a large low-freq luminance ramp (the base, ±4 stops)
+    plus high-freq micro-texture (the detail)."""
+    yy, xx = np.mgrid[0:h, 0:w]
+    base_stops = -4.0 + 8.0 * (xx / (w - 1))
+    detail = 0.25 * np.sin(xx * 1.3) * np.sin(yy * 1.3)
+    lum = 0.18 * 2.0 ** (base_stops + detail)
+    return np.repeat(lum[..., None], 3, axis=2)
+
+
+def _log_detail_rms(img):
+    """RMS of the high-pass (log-luminance minus its local box mean)."""
+    log_l = np.log2(np.maximum(img @ _PROPHOTO_LUMINANCE, 0.0) + 1e-6)
+    return float(np.std(log_l - _box_sum(log_l, 4) / _box_sum(np.ones_like(log_l), 4)))
+
+
+def test_dr_compression_is_genuinely_local():
+    """The headline property: applied as an IMAGE (local guided base/detail split)
+    the op differs measurably from the same pixels fed as a 1-wide strip (which
+    collapses to the GLOBAL law), and it retains MORE local micro-contrast than the
+    global crush. (The guided-filter first cut is conservative — eps=0.01 favours
+    edge preservation — so the margin is modest; the local-Laplacian upgrade is the
+    quality follow-up. This asserts it is genuinely local, not the magnitude.)"""
+    img = _dr_textured_image()
+    h, w, _ = img.shape
+    hi, sh, wh = 60.0, 40.0, 60.0
+    local = apply_dr_compression(img, hi, sh, wh)
+    glob = apply_dr_compression(img.reshape(-1, 1, 3), hi, sh, wh).reshape(h, w, 3)
+
+    assert np.max(np.abs(local - glob)) > 1e-3, "local path is indistinguishable from global"
+    assert _log_detail_rms(local) > _log_detail_rms(glob), "local did not retain more detail"
+
+
+def test_dr_compression_flat_image_reduces_to_global_law():
+    """On a spatially flat-luminance image the base/detail split is a no-op, so the
+    op equals the pointwise law + ratio reapply (the limiting case the oracle
+    validates)."""
+    rng = np.random.default_rng(14)
+    # Random hues, each pixel renormalised to the SAME luminance (0.42) → the
+    # guided base equals the (constant) luminance, detail is 0, so the op is the
+    # pointwise law + ratio reapply.
+    pix = rng.random((24, 24, 3)) + 0.1
+    lum_in = pix @ _PROPHOTO_LUMINANCE
+    pix = pix * (0.42 / lum_in)[..., None]
+    lum_in = pix @ _PROPHOTO_LUMINANCE
+
+    out = apply_dr_compression(pix, 50.0, -30.0, 20.0)
+    c_lo, c_hi, c_top = _dr_slopes(50.0, -30.0, 20.0)
+    lum_out = _dr_compress_luminance(lum_in, c_lo, c_hi, c_top)
+    ratio = lum_out / np.maximum(lum_in, 1e-6)
+    np.testing.assert_allclose(out, np.maximum(pix * ratio[..., None], 0.0), atol=1e-6)
+
+
+def test_dr_compression_no_negative_channels_on_saturated_overrange():
+    """A saturated + overrange pixel under strong compression stays non-negative
+    (floor at 0; the ratio reapply cannot introduce a negative)."""
+    x = np.array([[[3.0, 0.05, 0.02]], [[1.4, 0.2, 0.3]]], dtype=np.float32)
+    out = apply_dr_compression(x, 100.0, -100.0, 100.0)
+    assert out.min() >= 0.0, f"negative channel leaked: min={out.min()}"
+
+
+def test_dr_compression_no_halo_overshoot_at_step_edge():
+    """A clean step edge driven through the full op must not ring: the guided base
+    is edge-preserving (a→1 across the step → detail≈0 there) and the guided filter
+    is gradient-reversal-free, so the recombined output stays within the two
+    plateaus' compressed levels to <1% of their range — no halo overshoot/
+    undershoot (v10 §1.3/§3.8). The guided filter is NOT provably halo-free (halos
+    grow with radius); this bounds the first cut's measured ring and catches a
+    gross-ringing regression. The halo-free local-Laplacian base is the follow-up."""
+    h = w = 32
+    lum = np.full((h, w), 0.1)
+    lum[:, w // 2:] = 4.0  # a strong step (~5.3 stops), no texture
+    img = np.repeat(lum[..., None], 3, axis=2)
+    out_lum = apply_dr_compression(img, 60.0, 40.0, 60.0) @ _PROPHOTO_LUMINANCE
+
+    c_lo, c_hi, c_top = _dr_slopes(60.0, 40.0, 60.0)
+    levels = _dr_compress_luminance(np.array([0.1, 4.0]), c_lo, c_hi, c_top)
+    lo, hi = float(levels[0]), float(levels[1])
+    tol = 0.01 * (hi - lo)  # <1% of the plateau range
+    assert out_lum.min() >= lo - tol, f"undershoot halo: {lo - out_lum.min():.4f}"
+    assert out_lum.max() <= hi + tol, f"overshoot halo: {out_lum.max() - hi:.4f}"
+
+
+# ---------------------------------------------------------------------------
+# Dual-mode: DR-compression is PERCEPTUAL-only (faithful drops it)
+# ---------------------------------------------------------------------------
+
+
+def test_dr_compression_applies_under_perceptual_only():
+    """Highlights/Shadows/Whites drive a real change under PERCEPTUAL but are
+    DROPPED under FAITHFUL — the §5-amendment contract. So faithful output with
+    them set is byte-identical to faithful with them zeroed, while perceptual
+    diverges."""
+    x = _dr_textured_image(32, 32).astype(np.float32)
+    ops_set = DevelopOps(highlights=50.0, shadows=40.0, whites=30.0)
+    ops_zero = DevelopOps()
+
+    faithful_set = apply_develop_ops(x, ops_set, RenderIntent.FAITHFUL)
+    faithful_zero = apply_develop_ops(x, ops_zero, RenderIntent.FAITHFUL)
+    np.testing.assert_array_equal(faithful_set, faithful_zero)  # dropped on faithful
+
+    perceptual_set = apply_develop_ops(x, ops_set, RenderIntent.PERCEPTUAL)
+    assert np.max(np.abs(perceptual_set - faithful_set)) > 1e-3  # applied on perceptual
+
+
+def test_dr_compression_perceptual_identity_still_byte_exact():
+    """With H/S/W all 0, PERCEPTUAL stays byte-identical to FAITHFUL even though the
+    DR op is wired into the perceptual branch (short-circuit holds the ship gate)."""
+    x = np.random.rand(8, 8, 3).astype(np.float32)
+    ops = DevelopOps(
+        saturation=20.0,
+        hsl=HslBands(saturation=(30.0, 0, 0, 0, 0, 0, 0, 0)),
+        color_grade=ColorGrade(global_hue=120.0, global_sat=40.0),
+    )  # other ops set, but highlights/shadows/whites are 0
+    np.testing.assert_array_equal(
+        apply_develop_ops(x, ops, RenderIntent.FAITHFUL),
+        apply_develop_ops(x, ops, RenderIntent.PERCEPTUAL),
+    )
+
+
+def test_dr_compression_runs_after_color_grade_before_contrast(monkeypatch):
+    """Order check: under PERCEPTUAL the DR op runs after the color-grade applicator
+    and before Contrast2012 (the §5-amendment slot, inside the perceptual branch)."""
+    import lrt_cinema.develop_ops as do
+
+    calls: list[str] = []
+    monkeypatch.setattr(do, "_apply_color_grade_perceptual",
+                        lambda pp, cg: (calls.append("color_grade"), pp)[1])
+    monkeypatch.setattr(do, "apply_dr_compression",
+                        lambda pp, hi, sh, wh: (calls.append("dr"), pp)[1])
+    monkeypatch.setattr(do, "apply_contrast_2012",
+                        lambda pp, c: (calls.append("contrast"), pp)[1])
+
+    x = np.zeros((2, 2, 3), dtype=np.float32)
+    ops = DevelopOps(highlights=10.0, color_grade=ColorGrade(shadow_sat=10.0), contrast=5.0)
+    do.apply_stage_12_perceptual(x, ops, RenderIntent.PERCEPTUAL)
+    assert calls == ["color_grade", "dr", "contrast"]

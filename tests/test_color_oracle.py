@@ -20,6 +20,8 @@ a normal illuminant can't reach those; deliberate value injection (here) does.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
@@ -29,12 +31,20 @@ from lrt_cinema.dcp import DCPProfile, HsvCube, interpolate_color_matrix  # noqa
 from lrt_cinema.develop_ops import (  # noqa: E402
     _CG_CHROMA_STRENGTH,
     _CG_LUM_STRENGTH,
+    _DR_ANCHOR,
+    _DR_BLEND_HALFWIDTH_ANCHOR,
+    _DR_BLEND_HALFWIDTH_BREAK,
+    _DR_BREAK_STOPS,
+    _DR_EPS,
+    _DR_SLOPE_GAIN_K,
     _HSL_BAND_CENTERS_HEX,
     _HSL_HUE_MAX_HEX,
     _HSL_LUM_SAT_GATE,
     _PROPHOTO_LUMINANCE,
     _color_grade_zone_weights,
+    _dr_compress_luminance,
     apply_color_grade,
+    apply_dr_compression,
     apply_hsl,
 )
 from lrt_cinema.ir import ColorGrade, HslBands  # noqa: E402
@@ -830,3 +840,238 @@ def test_color_grade_zone_weights_are_partition_of_unity():
             sh, mid, hi = _color_grade_zone_weights(luminance, blending, balance)
             np.testing.assert_allclose(sh + mid + hi, 1.0, atol=1e-12)
             assert mid.min() >= -1e-12
+
+
+# ---------------------------------------------------------------------------
+# DR-compression (develop_ops.apply_dr_compression) — scene-referred local
+# dynamic-range compression driven by Highlights / Shadows / Whites.
+#
+# Axis-1 ground truth is an INDEPENDENT scalar reimplementation of the defined
+# math: the asymmetric 3-slope piecewise-log curve (with its OWN hand-coded
+# smoothstep blends — NOT calling _dr_remap_log) + the out/in luminance-RATIO
+# reapply, looped per pixel. A wholly different code path from the production
+# vectorised log/exp + cumsum form, so agreement is a real cross-check.
+#
+# Feeding an (N, 1, 3) array drives the production op's r=0 path (the box radius
+# collapses on a 1-wide axis), which IS the global pointwise law the oracle
+# mirrors — so this validates the real production function, not a test-only path.
+# The local guided-filter base/detail behaviour is covered by property tests in
+# test_develop_ops.py (it is not exactly invertible and has no closed oracle).
+#
+# Constants (k, anchor, breakpoint, blend half-widths) are a documented TUNING
+# choice; this validates the *defined* curve, NOT Lightroom fidelity (the
+# perceptual path makes no fidelity claim). `per_channel` / `flip_sign` /
+# `drop_blend` / `anchor` are injectable so the sensitivity legs prove the check
+# discriminates the four load-bearing bugs.
+# ---------------------------------------------------------------------------
+
+
+def _oracle_dr_compress(
+    rgb, highlights, shadows, whites,
+    per_channel=False, flip_sign=False, drop_blend=False, anchor=None,
+):
+    anchor = _DR_ANCHOR if anchor is None else anchor
+    log_anchor = math.log2(anchor)
+    k = _DR_SLOPE_GAIN_K
+    ha, hb, ub = _DR_BLEND_HALFWIDTH_ANCHOR, _DR_BLEND_HALFWIDTH_BREAK, _DR_BREAK_STOPS
+    eps = _DR_EPS
+    yw = list(_PROPHOTO_LUMINANCE)
+    sign = 1.0 if flip_sign else -1.0  # correct law uses −k
+    c_lo = 2.0 ** (sign * k * shadows / 100.0)
+    c_hi = 2.0 ** (sign * k * highlights / 100.0)
+    c_top = 2.0 ** (sign * k * whites / 100.0)
+
+    def smoothstep(x):
+        x = min(max(x, 0.0), 1.0)
+        return x * x * (3.0 - 2.0 * x)
+
+    def remap(u):
+        g_lo, g_hi = c_lo * u, c_hi * u
+        g_top = c_hi * ub + c_top * (u - ub)
+        if drop_blend:  # hard piecewise — no C1 blend (the kink bug)
+            if u < 0.0:
+                return g_lo
+            return g_hi if u < ub else g_top
+        wa = smoothstep((u + ha) / (2.0 * ha))
+        wb = smoothstep((u - (ub - hb)) / (2.0 * hb))
+        return (1.0 - wb) * ((1.0 - wa) * g_lo + wa * g_hi) + wb * g_top
+
+    def law(lum):
+        u = math.log2(max(lum, 0.0) + eps) - log_anchor
+        return max(anchor * 2.0 ** remap(u) - eps, 0.0)
+
+    flat = rgb.reshape(-1, 3).astype(np.float64)
+    out = np.empty_like(flat)
+    for i in range(flat.shape[0]):
+        r, g, b = (float(c) for c in flat[i])
+        if per_channel:  # the §0 hue-rotation bug — law applied per channel
+            out[i] = (law(r), law(g), law(b))
+        else:
+            lum = r * yw[0] + g * yw[1] + b * yw[2]
+            ratio = law(lum) / max(lum, eps)
+            out[i] = (max(r * ratio, 0.0), max(g * ratio, 0.0), max(b * ratio, 0.0))
+    return out.reshape(rgb.shape)
+
+
+# A fixed pixel set spanning the regions the curve must get right: deep shadow,
+# below/at/above anchor, the two blend windows, near-white, and SATURATED +
+# OVERRANGE (a grey wedge is blind to the per-channel-vs-ratio error). Shaped
+# (N, 1, 3) so the production op runs the global (r=0) law the oracle mirrors.
+def _dr_edge_pixels():
+    rng = np.random.default_rng(20260531)
+    rand = rng.random((1500, 3)) * 1.5  # some overrange
+    edge = np.array([
+        [0.001, 0.001, 0.001],   # near-black neutral
+        [0.05, 0.05, 0.05],      # below anchor
+        [0.18, 0.18, 0.18],      # the anchor
+        [0.30, 0.30, 0.30],      # anchor blend window
+        [0.72, 0.72, 0.72],      # the high breakpoint (0.18·4)
+        [0.95, 0.92, 0.05],      # saturated yellow, upper-mid
+        [1.4, 0.2, 0.3],         # OVERRANGE + saturated
+        [3.0, 0.1, 0.05],        # far overrange + saturated red specular
+        [0.8, 0.05, 0.02],       # saturated red, mid
+    ])
+    return np.concatenate([rand, edge], axis=0).reshape(-1, 1, 3)
+
+
+def test_dr_compression_matches_independent_oracle():
+    """apply_dr_compression (global r=0 path via the (N,1,3) layout) must equal
+    the independent scalar oracle to ~0 over random + saturated + overrange
+    pixels, with all three sliders engaged at a non-trivial asymmetric setting."""
+    rgb = _dr_edge_pixels()
+    hi, sh, wh = 45.0, -30.0, 60.0
+    got = apply_dr_compression(rgb, hi, sh, wh)
+    want = _oracle_dr_compress(rgb, hi, sh, wh)
+    np.testing.assert_allclose(got, want, atol=1e-9)
+
+
+def test_dr_compression_oracle_detects_per_channel_bug():
+    """Sensitivity leg 1 — the §0 hue-rotation bug. Applying the law per-channel
+    instead of via the out/in luminance ratio shifts hue on saturated pixels;
+    the real op matches the ratio oracle and NOT the per-channel one."""
+    rgb = np.array([[[1.4, 0.2, 0.3]], [[0.8, 0.05, 0.02]]])  # saturated + overrange
+    hi, sh, wh = 50.0, 0.0, 50.0
+    correct = _oracle_dr_compress(rgb, hi, sh, wh)
+    per_ch = _oracle_dr_compress(rgb, hi, sh, wh, per_channel=True)
+    assert np.max(np.abs(correct - per_ch)) > 1e-2
+    np.testing.assert_allclose(apply_dr_compression(rgb, hi, sh, wh), correct, atol=1e-9)
+
+
+def test_dr_compression_oracle_detects_flipped_slope_sign():
+    """Sensitivity leg 2 — slope = 2**(−k·s/100). A flipped sign (+k) turns
+    compression into expansion (and vice-versa); the real op matches −k."""
+    rgb = _dr_edge_pixels()
+    hi, sh, wh = 60.0, 40.0, 60.0
+    correct = _oracle_dr_compress(rgb, hi, sh, wh)
+    flipped = _oracle_dr_compress(rgb, hi, sh, wh, flip_sign=True)
+    assert np.max(np.abs(correct - flipped)) > 1e-2
+    np.testing.assert_allclose(apply_dr_compression(rgb, hi, sh, wh), correct, atol=1e-9)
+
+
+def test_dr_compression_oracle_detects_dropped_c1_blend():
+    """Sensitivity leg 3 — the C1 blend is load-bearing (without it an asymmetric
+    setting kinks at a join). A pixel whose log-distance lands INSIDE a blend
+    window diverges between the smooth and hard-piecewise curves; the real op
+    matches the blended oracle."""
+    # log-distances (stops above the 0.18 anchor): 0.15→−0.26 and 0.21→+0.22 sit
+    # inside the anchor window [−0.5,+0.5] (c_lo↔c_hi); 0.60→+1.74 sits inside the
+    # breakpoint window [1.5,2.5] (c_hi↔c_top) — both joins, where a kink shows.
+    rgb = np.array([[[0.15, 0.15, 0.15]], [[0.21, 0.21, 0.21]], [[0.60, 0.60, 0.60]]])
+    hi, sh, wh = 80.0, -80.0, 70.0  # strongly asymmetric arms → a sharp kink if unblended
+    correct = _oracle_dr_compress(rgb, hi, sh, wh)
+    kinked = _oracle_dr_compress(rgb, hi, sh, wh, drop_blend=True)
+    assert np.max(np.abs(correct - kinked)) > 1e-3
+    np.testing.assert_allclose(apply_dr_compression(rgb, hi, sh, wh), correct, atol=1e-9)
+
+
+def test_dr_compression_oracle_detects_wrong_anchor():
+    """Sensitivity leg 4 — the anchor is the curve's fixed point. A wrong anchor
+    (0.20 vs 0.18) shifts the whole curve; the real op matches 0.18."""
+    rgb = _dr_edge_pixels()
+    hi, sh, wh = 50.0, 30.0, 40.0
+    correct = _oracle_dr_compress(rgb, hi, sh, wh)
+    wrong = _oracle_dr_compress(rgb, hi, sh, wh, anchor=0.20)
+    assert np.max(np.abs(correct - wrong)) > 1e-3
+    np.testing.assert_allclose(apply_dr_compression(rgb, hi, sh, wh), correct, atol=1e-9)
+
+
+def test_dr_compression_identity_is_byte_exact_no_op():
+    """All three sliders 0 → BYTE-exact passthrough (short-circuit before any
+    log/exp). slope=1 is NOT numerically identity (the eps pair does not cancel
+    bit-exactly), so this guards the ΔE ship gate on the perceptual path."""
+    rgb = np.random.default_rng(3).random((16, 16, 3)).astype(np.float32)
+    np.testing.assert_array_equal(apply_dr_compression(rgb, 0.0, 0.0, 0.0), rgb)
+
+
+def test_dr_compression_preserves_hue_and_chroma_on_saturated():
+    """§0: the ratio reapply scales all three channels by ONE positive scalar, so
+    a saturated pixel's channel ratios (its hue/chroma direction) are preserved
+    exactly — including on an overrange pixel."""
+    for px in ([1.4, 0.2, 0.3], [3.0, 0.1, 0.05], [0.8, 0.05, 0.02]):
+        rgb = np.array([[px]])
+        out = apply_dr_compression(rgb, 55.0, -25.0, 45.0)[0, 0]
+        scale = out / np.array(px)
+        np.testing.assert_allclose(scale, scale[0], rtol=1e-9)  # one common ratio
+        # ratios between channels (the hue/chroma direction) are unchanged
+        np.testing.assert_allclose(out / out.sum(), np.array(px) / np.sum(px), rtol=1e-9)
+
+
+def test_dr_compression_break_even_overrange_survives():
+    """Correct overrange behaviour (NOT a violation): the law pulls sub-threshold
+    overrange below 1 and keeps only bright-enough speculars >1. Verified fixed
+    points: a single slope 0.5 has break-even L≈5.556 (=0.18^-1), slope 0.7
+    L≈2.085. Below the point → ≤1; above → >1, unclamped."""
+    for slope, break_even in ((0.5, _DR_ANCHOR ** (1 - 1 / 0.5)),
+                              (0.7, _DR_ANCHOR ** (1 - 1 / 0.7))):
+        below = _dr_compress_luminance(np.array([break_even * 0.98]), slope, slope, slope)
+        above = _dr_compress_luminance(np.array([break_even * 1.02]), slope, slope, slope)
+        assert below[0] < 1.0 < above[0]
+    np.testing.assert_allclose(_DR_ANCHOR ** (1 - 1 / 0.5), 5.5556, atol=1e-3)
+    np.testing.assert_allclose(_DR_ANCHOR ** (1 - 1 / 0.7), 2.0853, atol=1e-3)
+
+
+def test_dr_compression_no_in_op_clamp():
+    """The op must NOT clip overrange down to a display ceiling — out-of-AP1 is a
+    SEPARATE downstream RGC pass. A bright specular stays >1 even under maximal
+    Highlights+Whites compression."""
+    spec = np.full((4, 4, 3), 8.0)  # ~5.5 stops over the anchor
+    out = apply_dr_compression(spec, 100.0, 0.0, 100.0)
+    assert out.min() > 1.0, "overrange specular was clamped — RGC must be downstream, not in-op"
+
+
+def test_dr_compression_monotone_on_sorted_ramp_extremes():
+    """No gradient inversions on a sorted luminance ramp, INCLUDING the worst case
+    for the C1 blend: opposite-sign adjacent arms (Shadows +100 → c_lo 0.5,
+    Highlights −100 → c_hi 2.0) — a mild setting cannot expose a kink."""
+    lum = np.linspace(0.0, 60.0, 400_000)
+    for hi, sh, wh in [(45.0, -30.0, 60.0), (-100.0, 100.0, -100.0), (100.0, -100.0, 100.0)]:
+        from lrt_cinema.develop_ops import _dr_slopes
+        c_lo, c_hi, c_top = _dr_slopes(hi, sh, wh)
+        out = _dr_compress_luminance(lum, c_lo, c_hi, c_top)
+        assert np.all(np.diff(out) >= -1e-12), f"non-monotone at hi={hi},sh={sh},wh={wh}"
+
+
+def test_dr_compression_invertible_single_slope_round_trip():
+    """The bare single-slope law (all sliders equal → one slope everywhere) is
+    exactly invertible: forward with +s, inverse with −s (slope → 1/slope), the
+    ±eps invert as a matched pair. Round-trips to ~0 (eps-level)."""
+    rgb = _dr_edge_pixels()
+    fwd = apply_dr_compression(rgb, 50.0, 50.0, 50.0)        # all arms slope 0.5
+    back = apply_dr_compression(fwd, -50.0, -50.0, -50.0)    # all arms slope 2.0
+    np.testing.assert_allclose(back, rgb, atol=1e-5, rtol=1e-4)
+
+
+def test_dr_compression_invertible_three_slope_numerically():
+    """The driven asymmetric curve is globally invertible because every segment
+    and blend window is strictly monotone — so the inverse is PIECEWISE (no single
+    1/slope closed form). Verify via a numerical inverse of the monotone forward
+    map on a luminance ramp."""
+    from lrt_cinema.develop_ops import _dr_slopes
+    c_lo, c_hi, c_top = _dr_slopes(60.0, -40.0, 50.0)
+    lum = np.linspace(1e-4, 40.0, 200_000)
+    fwd = _dr_compress_luminance(lum, c_lo, c_hi, c_top)
+    assert np.all(np.diff(fwd) > 0)  # strictly monotone → invertible
+    sample = np.array([0.02, 0.18, 0.5, 1.0, 3.0, 12.0])
+    fwd_s = _dr_compress_luminance(sample, c_lo, c_hi, c_top)
+    recovered = np.interp(fwd_s, fwd, lum)  # invert through the monotone curve
+    np.testing.assert_allclose(recovered, sample, rtol=2e-3)

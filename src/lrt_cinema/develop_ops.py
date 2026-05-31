@@ -31,6 +31,8 @@ output (those operations belong in the grade, not the render).
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 from lrt_cinema.ir import ColorGrade, DevelopOps, HslBands, RenderIntent, TonePoint
@@ -262,6 +264,103 @@ def _apply_color_grade_perceptual(prophoto: np.ndarray, cg: ColorGrade) -> np.nd
     return apply_color_grade(prophoto, cg)
 
 
+def apply_dr_compression(
+    prophoto: np.ndarray, highlights: float, shadows: float, whites: float,
+) -> np.ndarray:
+    """PERCEPTUAL scene-referred dynamic-range compression (DECISIONS.md §5
+    amendment; the resolved law in `research/v10b-scene-referred-compression-law.md`).
+
+    Makes the LR `Highlights`/`Shadows`/`Whites` knobs — dropped + warn-only on
+    the faithful path (closed-source PV5 math) — *do something measurable* on the
+    perceptual ACEScg master: surgically compress a large dynamic range while
+    retaining local/perceived contrast. **Driven entirely by those three existing
+    XMP sliders — no new control.**
+
+    **The law (homomorphic / Stockham log-domain compression toward a fixed
+    scene-linear anchor — the log sibling of `apply_contrast_2012`).** Working on a
+    single luminance channel `L = rgb @ _PROPHOTO_LUMINANCE`, with
+    `u = log2(L+eps) − log2(0.18)` the log-distance from the 0.18 anchor::
+
+        L_out = max(0, 0.18 · 2**g(u) − eps)        # eps = 1e-6; floor 0, NO ceiling
+
+    `g(u)` is a **3-slope** piecewise-linear remap (the three sliders force the
+    asymmetry — a single symmetric slope cannot drive three knobs):
+      * below the anchor (`u < 0`): slope ``c_lo``  ← **Shadows**;
+      * anchor → high breakpoint:   slope ``c_hi``  ← **Highlights** (upper-mid);
+      * above the breakpoint:        slope ``c_top`` ← **Whites** (extreme top).
+    Each slope is ``2**(−k·s/100)`` (`s=0 → 1 → identity arm`). ``c_top`` is a
+    third log-log **slope**, never a ceiling/shoulder — so **overrange survives at
+    every Whites setting** (a clipping shoulder would destroy the defining
+    scene-referred constraint). The two joins (anchor, breakpoint) are smoothed
+    with a C1 ``smoothstep`` window so no asymmetric setting kinks at mid-grey.
+
+    **Sign convention (NOT Lightroom-faithful — this path makes no fidelity
+    claim).** Positive slider → ``slope < 1`` → that arm *compresses* toward 0.18.
+    So +Shadows lifts darks and +Highlights recovers brights (both align with LR's
+    direction), but **+Whites *darkens*/compresses the extreme top — the inverse of
+    Lightroom's brighten-whites.** This is the law's uniform `2**(−k·s/100)` mapping
+    (`research/v10b…` §2.5), deliberate, and validated only as *defined* math.
+
+    **Applied LOCALLY (this is what retains dynamism).** Luminance is split into a
+    smooth **base** + a **detail** layer with a guided self-filter (He–Sun–Tang
+    2013) on log-luminance — including the defining ``mean_a``/``mean_b``
+    box-average step. Only the **base** is compressed by the law; the detail is
+    reinserted at unity gain, so local micro-contrast survives the global crush.
+    For a flat region (or a sub-window-size / 1-wide array, where the adaptive box
+    radius collapses to 0) the split is a no-op and the op reduces *exactly* to the
+    global law — the limiting case the Axis-1 oracle validates.
+
+    **§0 hue/gamut (never per-channel).** The compressed luminance is reapplied by
+    the out/in **ratio** ``rgb · L_out/max(L_in, eps)`` — a per-pixel positive
+    scalar that preserves hue and chroma ratios exactly (the `apply_hsl`
+    luminance pattern, `develop_ops.py`). Output is floored at 0 with **no top
+    clamp**: overrange `>1` is preserved (out-of-AP1 excursions are handled by a
+    downstream ACES RGC pass in `output.py` — a *separate* follow-up, never an
+    in-op clamp). Validate on **saturated + overrange** pixels; a grey wedge is
+    blind to both the per-channel-vs-ratio error and the overrange behaviour.
+
+    **Byte-exact identity.** All three sliders 0 → ``return prophoto`` (the literal
+    input). ``slope = 1`` is *not* numerically identity (the eps pair does not
+    cancel bit-exactly through ``log2``/``exp2``), so the short-circuit is
+    mandatory — it keeps the gym 0.026 / rose 0.545 ΔE ship gate untouched
+    (perceptual-only; the gate renders the faithful stages 1–9).
+
+    **Constants are best-effort TUNING, not Lightroom fidelity** (see the module
+    ``_DR_*`` constants). The Axis-1 oracle validates the *defined* piecewise-log
+    math and the ratio reapply — not LR appearance — matching the honesty
+    discipline of `apply_hsl` / `apply_color_grade`. The guided filter is the
+    lightweight first cut; a halo-free local-Laplacian base producer is the quality
+    follow-up (`research/v10-local-tone-mapping-dr-compression.md` §3).
+    """
+    if highlights == 0.0 and shadows == 0.0 and whites == 0.0:
+        return prophoto  # byte-exact identity — short-circuit before any log math
+
+    c_lo, c_hi, c_top = _dr_slopes(highlights, shadows, whites)
+    # Luminance is computed in float64 (the matmul against the float64
+    # _PROPHOTO_LUMINANCE promotes a float32 frame), so the log/exp law keeps full
+    # precision — but we never hold a float64 copy of the whole RGB frame: the
+    # ratio reapply runs on the original array (the multiply promotes per-line and
+    # is recast back). Avoids a ~2× full-frame allocation per worker.
+    lum = prophoto @ _PROPHOTO_LUMINANCE
+    log_l = np.log2(np.maximum(lum, 0.0) + _DR_EPS)
+
+    # Adaptive box radius: clamp so the (2r+1) window fits the smaller spatial
+    # axis. A 1-wide / sub-window array (the oracle's per-pixel layout, a tiny
+    # tile) collapses to r=0, where the guided base == log_l exactly and the op is
+    # the global law — one code path, no magic size threshold.
+    r = min(_DR_GUIDED_RADIUS, (min(log_l.shape) - 1) // 2) if log_l.ndim == 2 else 0
+
+    base_log = _guided_base_log(log_l, r, _DR_GUIDED_EPS)
+    detail_log = log_l - base_log
+    base_comp = _DR_LOG_ANCHOR + _dr_remap_log(base_log - _DR_LOG_ANCHOR, c_lo, c_hi, c_top)
+    log_l_out = base_comp + detail_log
+    lum_out = np.maximum(np.exp2(log_l_out) - _DR_EPS, 0.0)
+
+    ratio = lum_out / np.maximum(lum, _DR_EPS)
+    out = np.maximum(prophoto * ratio[..., None], 0.0)  # floor 0; NO top clamp (overrange survives)
+    return out.astype(prophoto.dtype)
+
+
 def apply_contrast_2012(prophoto: np.ndarray, contrast: float) -> np.ndarray:
     """LR Contrast2012: -100..+100 S-curve around midtone pivot (0.18 linear,
     matching scene-linear midgray). Mapping: pivot-anchored gain
@@ -304,7 +403,8 @@ def apply_stage_12_perceptual(
     intent: RenderIntent = RenderIntent.FAITHFUL,
 ) -> np.ndarray:
     """Apply all stage-12 perceptual-domain ops in order:
-    ToneCurve → Saturation → Vibrance → HSL → ColorGrade → Contrast → Sharpness.
+    ToneCurve → Saturation → Vibrance → HSL → ColorGrade → [DR-compression] →
+    Contrast → Sharpness.
 
     HSL then Color Grading are placed after the global Saturation/Vibrance and
     before Contrast, matching Lightroom's panel order (HSL precedes Color
@@ -312,6 +412,12 @@ def apply_stage_12_perceptual(
     final tone shaping). Identity ops short-circuit to a byte-exact no-op, so a
     render with no HSL / Color-Grade intent is bit-identical to the prior
     pipeline (the ΔE ship gate is unaffected).
+
+    **DR-compression** (`apply_dr_compression`, driven by the Highlights/Shadows/
+    Whites knobs) runs **only under PERCEPTUAL**, inside that branch after Color
+    Grading and before Contrast. On the faithful path those knobs stay dropped +
+    warn-only (`cli._warn_dropped_ops`); with all three at 0 the op is a byte-exact
+    no-op, so both intents stay bit-identical when no DR intent is authored.
 
     `intent` selects the HSL + Color-Grade applicator (DECISIONS.md §7):
     **FAITHFUL** (default) uses the Adobe-hexcone ops — the sRGB TIFF / LRT
@@ -326,6 +432,12 @@ def apply_stage_12_perceptual(
     if intent is RenderIntent.PERCEPTUAL:
         out = _apply_hsl_perceptual(out, ops.hsl)
         out = _apply_color_grade_perceptual(out, ops.color_grade)
+        # Scene-referred local DR-compression driven by the Highlights/Shadows/
+        # Whites XMP knobs (DECISIONS.md §5 amendment). PERCEPTUAL-only — on the
+        # faithful path these stay dropped + warn-only (cli._warn_dropped_ops).
+        # Byte-exact identity when all three are 0, so the ΔE ship gate is
+        # untouched.
+        out = apply_dr_compression(out, ops.highlights, ops.shadows, ops.whites)
     else:
         out = apply_hsl(out, ops.hsl)
         out = apply_color_grade(out, ops.color_grade)
@@ -462,3 +574,135 @@ def _scale_hsv_saturation(prophoto: np.ndarray, s_map) -> np.ndarray:
     s_out = s_map(s_arr)
     rgb_post = _hsv_to_rgb_dcp(h_arr, s_out, v_arr)
     return np.where(valid[..., None], rgb_post, prophoto).astype(prophoto.dtype)
+
+
+# ---------------------------------------------------------------------------
+# Internal — DR-compression (scene-referred piecewise-log law + guided base/detail)
+# ---------------------------------------------------------------------------
+#
+# Every constant below is a best-effort TUNING value pinned at implementation
+# time (research/v10b-scene-referred-compression-law.md §5) — the Axis-1 oracle
+# validates the *defined* math, not Lightroom appearance. They are NOT open
+# theory and NOT "auto from image".
+
+_DR_EPS = 1e-6           # log(0) floor; survives scene-linear true zeros. Why
+                         # slope=1 is not bit-exact identity (→ short-circuit).
+_DR_ANCHOR = 0.18        # scene-linear mid-grey fixed point — the SAME pivot
+                         # apply_contrast_2012 uses (repo-grounded, not assumed).
+_DR_LOG_ANCHOR = math.log2(_DR_ANCHOR)
+
+# Per-slider slope gain: slope = 2**(−k·s/100). k=1 ⇒ s=+100 halves that arm's
+# log-log slope (slope 0.5 — compresses ~2 stops of scene range into ~1 around
+# the arm), s=−100 doubles it (slope 2.0). Range [0.5, 2.0] keeps the C1-blended
+# curve strictly monotone (min g' ≈ 0.19 > 0; proved for these slopes).
+_DR_SLOPE_GAIN_K = 1.0
+
+# High breakpoint separating Highlights' c_hi from Whites' c_top, in log2 stops
+# above the anchor: 2 stops = 0.18·4 = 0.72 linear (Highlights ≈ upper-mid,
+# Whites ≈ near-white and above, incl. overrange speculars).
+_DR_BREAK_STOPS = 2.0
+
+# C1 smoothstep blend half-widths (log2 stops) at the two joins. Disjoint windows
+# (anchor [−0.5, 0.5]; breakpoint [1.5, 2.5]) so the blends never interfere.
+_DR_BLEND_HALFWIDTH_ANCHOR = 0.5
+_DR_BLEND_HALFWIDTH_BREAK = 0.5
+
+# Guided-filter base/detail split (He–Sun–Tang 2013), log-luminance domain.
+# Radius ~8 px (the large base radius DR-compression wants); eps ~0.01 (log2²
+# stops) — conservative, favours edge preservation. The local-Laplacian upgrade
+# is the quality follow-up (v10 §3); this guided filter is the first cut.
+_DR_GUIDED_RADIUS = 8
+_DR_GUIDED_EPS = 0.01
+
+
+def _smoothstep(x: np.ndarray) -> np.ndarray:
+    """Classic cubic smoothstep `3x²−2x³` on `[0,1]` (clamped). `S'(0)=S'(1)=0`,
+    which is exactly what makes the slope-blend C1 at each window edge."""
+    x = np.clip(x, 0.0, 1.0)
+    return x * x * (3.0 - 2.0 * x)
+
+
+def _dr_slopes(highlights: float, shadows: float, whites: float) -> tuple[float, float, float]:
+    """Map the three sliders to the three log-log arm slopes (`s=0 → slope 1`):
+    Shadows → c_lo (below anchor), Highlights → c_hi (anchor→breakpoint),
+    Whites → c_top (above breakpoint). `slope = 2**(−k·s/100)`."""
+    c_lo = 2.0 ** (-_DR_SLOPE_GAIN_K * shadows / 100.0)
+    c_hi = 2.0 ** (-_DR_SLOPE_GAIN_K * highlights / 100.0)
+    c_top = 2.0 ** (-_DR_SLOPE_GAIN_K * whites / 100.0)
+    return c_lo, c_hi, c_top
+
+
+def _dr_remap_log(
+    log_dist: np.ndarray, c_lo: float, c_hi: float, c_top: float,
+) -> np.ndarray:
+    """The 3-slope, C1-blended remap of the log-distance-from-anchor `u`.
+
+    Returns `g(u)`: piecewise-linear with slopes `c_lo` (`u<0`), `c_hi`
+    (`0<u<break`), `c_top` (`u>break`), smoothed across both joins. The anchor
+    join sits at `u=0` (all arms pass through `g(0)=0` — the anchor is a fixed
+    point), the breakpoint at `u=break`. Both blend windows are disjoint, so each
+    is a smoothstep blend of the two lines that cross at its centre → C1
+    everywhere, and strictly monotone for slopes in `[0.5, 2.0]`."""
+    u = np.asarray(log_dist, dtype=np.float64)
+    ub = _DR_BREAK_STOPS
+    ha = _DR_BLEND_HALFWIDTH_ANCHOR
+    hb = _DR_BLEND_HALFWIDTH_BREAK
+    w_anchor = _smoothstep((u + ha) / (2.0 * ha))           # 0 below −ha, 1 above +ha
+    w_break = _smoothstep((u - (ub - hb)) / (2.0 * hb))     # 0 below break−hb, 1 above +hb
+    g_lo = c_lo * u
+    g_hi = c_hi * u
+    g_top = c_hi * ub + c_top * (u - ub)
+    g_after_anchor = (1.0 - w_anchor) * g_lo + w_anchor * g_hi
+    return (1.0 - w_break) * g_after_anchor + w_break * g_top
+
+
+def _dr_compress_luminance(
+    lum: np.ndarray, c_lo: float, c_hi: float, c_top: float,
+) -> np.ndarray:
+    """The pointwise (global) law on a luminance array: `0.18·2**g(u) − eps`,
+    floored at 0, where `u = log2(L+eps) − log2(0.18)`. This is the limit the
+    local op reduces to when base == luminance (flat region / r=0)."""
+    lum = np.asarray(lum, dtype=np.float64)
+    u = np.log2(np.maximum(lum, 0.0) + _DR_EPS) - _DR_LOG_ANCHOR
+    g = _dr_remap_log(u, c_lo, c_hi, c_top)
+    return np.maximum(_DR_ANCHOR * np.exp2(g) - _DR_EPS, 0.0)
+
+
+def _box_sum(img: np.ndarray, r: int) -> np.ndarray:
+    """Sum over a `(2r+1)×(2r+1)` window with shrinking edge windows — He et al.'s
+    `boxfilter.m`, vectorised via separable cumulative sums (O(N), radius-free).
+    `img` is 2-D; requires `min(shape) ≥ 2r+1`. `r=0` returns `img` unchanged."""
+    if r <= 0:
+        return img.astype(np.float64, copy=True)
+    a = img.astype(np.float64)
+    h, w = a.shape
+    if 2 * r + 1 > min(h, w):
+        raise ValueError(f"box radius {r} too large for image shape {a.shape}")
+    cum = np.cumsum(a, axis=0)
+    out = np.empty_like(cum)
+    out[0:r + 1, :] = cum[r:2 * r + 1, :]
+    out[r + 1:h - r, :] = cum[2 * r + 1:h, :] - cum[0:h - 2 * r - 1, :]
+    out[h - r:h, :] = cum[h - 1:h, :] - cum[h - 2 * r - 1:h - r - 1, :]
+    cum = np.cumsum(out, axis=1)
+    res = np.empty_like(cum)
+    res[:, 0:r + 1] = cum[:, r:2 * r + 1]
+    res[:, r + 1:w - r] = cum[:, 2 * r + 1:w] - cum[:, 0:w - 2 * r - 1]
+    res[:, w - r:w] = cum[:, w - 1:w] - cum[:, w - 2 * r - 1:w - r - 1]
+    return res
+
+
+def _guided_base_log(log_l: np.ndarray, r: int, eps_gf: float) -> np.ndarray:
+    """Edge-preserving smooth **base** of `log_l` via the guided self-filter
+    (He–Sun–Tang 2013, guide = signal = log_l). Includes the defining
+    `mean_a`/`mean_b` box-average step. `r=0` returns `log_l` (→ global law)."""
+    if r <= 0:
+        return log_l.astype(np.float64, copy=True)
+    n = _box_sum(np.ones_like(log_l, dtype=np.float64), r)
+    mean_i = _box_sum(log_l, r) / n
+    mean_ii = _box_sum(log_l * log_l, r) / n
+    var_i = np.maximum(mean_ii - mean_i * mean_i, 0.0)
+    a = var_i / (var_i + eps_gf)
+    b = mean_i - a * mean_i
+    mean_a = _box_sum(a, r) / n        # the defining mean_a / mean_b step
+    mean_b = _box_sum(b, r) / n
+    return mean_a * log_l + mean_b
