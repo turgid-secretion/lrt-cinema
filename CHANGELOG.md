@@ -8,6 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] — v0.8 prep
 
 ### Added
+- **Perceptual scene-referred DR-compression — Highlights/Shadows/Whites now
+  *do* something (v0.9, DECISIONS §5 amendment).** The LR `Highlights`/`Shadows`/
+  `Whites` knobs — previously parsed-and-dropped — drive a new
+  `develop_ops.apply_dr_compression` op on the **perceptual** render-intent (the
+  ACEScg master): a homomorphic **log-domain** compression of luminance toward the
+  fixed scene-linear **0.18 anchor** (the log sibling of `apply_contrast_2012`).
+  The three sliders force an asymmetric **3-slope** curve (Shadows→below-anchor
+  `c_lo`, Highlights→upper-mid `c_hi`, Whites→extreme-top `c_top`;
+  `slope=2**(−k·s/100)`), **C1**-blended (smoothstep) at the anchor join and the
+  high breakpoint. `c_top` is a third log-log **slope**, never a clipping shoulder,
+  so **overrange survives every Whites setting**. Applied **locally** — a
+  guided-filter base/detail split (He–Sun–Tang 2013, incl. the `mean_a`/`mean_b`
+  step) on log-luminance compresses the smooth base and keeps the detail at unity,
+  so local micro-contrast survives the global crush; it reduces exactly to the
+  global law on flat input. §0-safe: luminance + **out/in luminance-ratio** reapply
+  (never per-channel), floored at 0 with **no top clamp** (out-of-AP1 → a separate
+  downstream ACES RGC pass, a follow-up). **Driven entirely by the existing XMP
+  knobs — no new control, no CLI grade.** **PERCEPTUAL-only**: on the faithful path
+  these stay dropped + warn-only, and `cli._warn_dropped_ops` is now **intent-aware**
+  (warns under faithful only). **Byte-exact identity** when all three are 0, so the
+  gym 0.026 / rose 0.545 ΔE ship gate is untouched and both intents stay
+  bit-identical when no DR is authored. An Axis-1 oracle holds the defined
+  piecewise-log math + ratio reapply to ~0 with four injected-bug sensitivity legs
+  (per-channel, flipped sign, dropped C1 blend, wrong anchor). Pinned constants
+  (`k=1`, breakpoint 2 stops, blend half-widths 0.5 stops, guided r≈8 / ε≈0.01) are
+  documented **tuning, not Lightroom fidelity** — the perceptual path makes **no
+  fidelity claim** (notably Whites compresses the top, the inverse of LR). The
+  guided filter is the lightweight first cut; a halo-free **local-Laplacian** base
+  producer and **Texture/Clarity** (the boost-detail mode of the same engine) are
+  follow-ups. Resolved law:
+  `docs/research/v10b-scene-referred-compression-law.md`.
 - **Dual-mode grading scaffold — `--render-intent {faithful,perceptual}`**
   (DECISIONS.md §7, v0.9 step 1). Threads a `RenderIntent` through
   `cli → _RenderJob → develop_ops.apply_develop_ops / apply_stage_12_perceptual`;
