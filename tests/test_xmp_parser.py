@@ -55,6 +55,51 @@ def test_parse_multi_description_merges_intent():
     assert deflicker == pytest.approx(0.07)
 
 
+def _write_xmp(tmp_path: Path, crs_attrs: str, name: str = "DSC_0001.NEF") -> Path:
+    """Write a one-Description XMP carrying `crs_attrs` and its RAW stub."""
+    raw = tmp_path / name
+    raw.write_bytes(b"raw-stub")
+    xmp = f"""<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+    {crs_attrs}/>
+ </rdf:RDF>
+</x:xmpmeta>
+"""
+    (tmp_path / f"{name}.xmp").write_text(xmp)
+    return raw
+
+
+def test_parse_hsl_round_trip(tmp_path):
+    """The 8-band HSL tags parse into HslBands in named order (Red…Magenta)."""
+    _write_xmp(
+        tmp_path,
+        'crs:SaturationAdjustmentRed="50" crs:SaturationAdjustmentBlue="-30" '
+        'crs:HueAdjustmentGreen="12" crs:LuminanceAdjustmentMagenta="-40"',
+    )
+    seq = parse_sequence(tmp_path)
+    assert len(seq.keyframes) == 1          # HSL intent alone flags a keyframe
+    hsl = seq.keyframes[0].ops.hsl
+    assert hsl.saturation[0] == 50.0        # Red
+    assert hsl.saturation[5] == -30.0       # Blue
+    assert hsl.hue[3] == 12.0               # Green
+    assert hsl.luminance[7] == -40.0        # Magenta
+    assert not hsl.is_identity()
+
+
+def test_hsl_only_frame_is_flagged_meaningful(tmp_path):
+    """A frame with only HSL intent (no xmp:Rating) is detected as a keyframe via
+    _has_meaningful_ops — proves HSL is threaded into the keyframe heuristic."""
+    from lrt_cinema.ir import DevelopOps, HslBands
+    from lrt_cinema.xmp_parser import _has_meaningful_ops
+    assert _has_meaningful_ops(DevelopOps()) is False
+    assert _has_meaningful_ops(
+        DevelopOps(hsl=HslBands(saturation=(20.0, 0, 0, 0, 0, 0, 0, 0))),
+    ) is True
+
+
 def test_parse_kelvin_as_float_text():
     import tempfile
     xmp = """<?xml version="1.0" encoding="UTF-8"?>

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — v0.8 prep
 
+### Added
+- **LR HSL panel baked into the render (Stage 12).** The 8 hue bands (Red,
+  Orange, Yellow, Green, Aqua, Blue, Purple, Magenta) × {Hue, Saturation,
+  Luminance} — `crs:HueAdjustment*` / `crs:SaturationAdjustment*` /
+  `crs:LuminanceAdjustment*`, a PV2012-era field set that appears in real
+  LRT-emitted XMPs — are now parsed (`ir.HslBands`), interpolated per frame,
+  and applied in the Adobe hexcone HSV domain (`develop_ops.apply_hsl`). Smooth
+  overlapping **triangular partition-of-unity** hue-band weights (bands blend,
+  never step; all-equal bands collapse to a global adjustment). Per-band
+  Luminance is **saturation-gated** so a neutral pixel — whose hue is undefined
+  — is never moved by a colour band (a grey wedge stays grey). HSV S is clamped
+  to [0,1] on recompose (the `apply_saturation` negative-channel lesson).
+  **Identity (all-zero sliders) short-circuits to a byte-exact no-op**, so a
+  render with no HSL intent is bit-identical to the prior pipeline and the ΔE
+  ship gate (gym 0.026 / rose 0.545 vs `dng_validate`) is provably unaffected.
+  Axis-1 oracle: `test_color_oracle.py::test_hsl_matches_independent_oracle`
+  (independent scalar reimpl) + wrong-band-centre / wrong-hue-magnitude
+  sensitivity legs. **Fidelity caveat:** Adobe's exact band centres, the
+  Hue-slider→rotation magnitude, and the HSL-Luminance↔HSV-Value mapping are
+  closed-source; these are the best public approximation. The Axis-1 oracle
+  validates that *defined* math, not absolute Lightroom fidelity.
+
 ### Changed
 - **New default emission: `lrtimelapse` — a 16-bit sRGB display TIFF for the
   LRTimelapse round-trip.** This is the format LRT's video renderer re-ingests
