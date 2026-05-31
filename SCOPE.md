@@ -6,8 +6,7 @@ Honest per-feature status. v0.7.0 ships the γ preset
 in v0.7.1; the §2.B free-upgrade increments (X1–X6) extend β-XML
 coverage in subsequent v0.7.x releases.
 
-See [`docs/research/v07-spec-revision-plan.md`](docs/research/v07-spec-revision-plan.md)
-for the authoritative roadmap.
+See [CHANGELOG.md](CHANGELOG.md) for the release history.
 
 ## What works
 
@@ -145,10 +144,8 @@ documentation + sample XMPs from LRTimelapse Pro 7.5.3. See
 - **Standalone GUI app (LRT *replacement*) — separate future track, currently
   ON HOLD / NO-GO** (needs a Vulkan/native-systems engineer and/or a design
   originator first; not part of this CLI's scope):
-  [docs/research/v09-standalone-repo-plan.md](docs/research/v09-standalone-repo-plan.md).
-- [docs/research/v06-architecture.md](docs/research/v06-architecture.md)
-  — the v0.6 architecture spec this build implements.
-- [docs/research/dng-pipeline-findings.md](docs/research/dng-pipeline-findings.md)
-  — the empirical journey from 6.37 ΔE (dt-cli) to 0.79 ΔE
-  (in-process Python).
+  [docs/DECISIONS.md](docs/DECISIONS.md) §6.
+- [docs/PIPELINE.md](docs/PIPELINE.md) — the canonical as-built pipeline reference.
+- [CHANGELOG.md](CHANGELOG.md) — the empirical journey from 6.37 ΔE (dt-cli) to
+  the in-process Python pipeline.
 - [CHANGELOG.md](CHANGELOG.md) — release notes.
