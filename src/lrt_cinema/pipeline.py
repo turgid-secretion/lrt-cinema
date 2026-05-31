@@ -39,6 +39,7 @@ The module-level entry point is `render_frame()`.
 from __future__ import annotations
 
 import struct
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -48,6 +49,7 @@ import numpy as np
 from lrt_cinema._acr3_curve import ACR3_DEFAULT_CURVE
 from lrt_cinema.dcp import (
     DCPProfile,
+    colormatrix_camera_to_pcs,
     interpolate_color_matrix,
     interpolate_hsv_cube,
     uv_to_kelvin,
@@ -98,6 +100,56 @@ def apply_acr3_default(x: np.ndarray) -> np.ndarray:
     idx = np.clip(y.astype(np.int32), 0, n - 2)
     frac = y - idx
     return _ACR3_DEFAULT[idx] * (1.0 - frac) + _ACR3_DEFAULT[idx + 1] * frac
+
+
+def apply_rgb_tone(
+    rgb: np.ndarray, curve: Callable[[np.ndarray], np.ndarray],
+) -> np.ndarray:
+    """Adobe's hue/saturation-preserving baseline tone curve (Stage 9).
+
+    Ports `RefBaselineRGBTone` (dng_reference.cpp:1871). The curve is applied
+    to the MAX and MIN channels only; the MIDDLE channel is *linearly
+    interpolated* between the two curved extremes so its fractional position
+    between min and max is preserved:
+
+        rr = curve(max);  bb = curve(min)
+        gg = bb + (rr - bb) * (mid - min) / (max - min)
+
+    This is NOT a per-channel curve — per-channel would shift hue/saturation on
+    chromatic pixels (Adobe's whole point in sorting). On neutral pixels
+    (r==g==b) it reduces to `curve(v)` on all three, so the neutral wedge cannot
+    distinguish the two; the difference is exactly the chromatic divergence that
+    showed up vs `dng_validate` (gym 0.79 → 0.055 mean ΔE2000 once corrected).
+
+    `rgb` shape (..., 3); `curve` is a vectorized [0,1]→[0,1] map (the
+    `DngSplineSolver.evaluate` of the ProfileToneCurve, or `apply_acr3_default`).
+    Input is pinned to [0, 1] first (Adobe `Pin_real32`); output clamped to [0, 1].
+    """
+    rgb = np.clip(rgb, 0.0, 1.0)
+    # Stable argsort along the channel axis → [min, mid, max] indices per pixel.
+    order = np.argsort(rgb, axis=-1, kind="stable")
+    mn_i, md_i, mx_i = order[..., 0], order[..., 1], order[..., 2]
+
+    def _take(idx_arr: np.ndarray) -> np.ndarray:
+        return np.take_along_axis(rgb, idx_arr[..., None], axis=-1)[..., 0]
+
+    mn, md, mx = _take(mn_i), _take(md_i), _take(mx_i)
+    mn_o = np.clip(curve(mn), 0.0, 1.0)
+    mx_o = np.clip(curve(mx), 0.0, 1.0)
+    delta = mx - mn
+    # delta == 0 ⇒ all three channels equal (neutral); curve(mid) == mn_o == mx_o.
+    safe = np.where(delta > 0.0, delta, 1.0)
+    md_o = np.where(
+        delta > 0.0,
+        mn_o + (mx_o - mn_o) * (md - mn) / safe,
+        np.clip(curve(md), 0.0, 1.0),
+    )
+
+    out = np.empty_like(rgb)
+    np.put_along_axis(out, mn_i[..., None], mn_o[..., None], axis=-1)
+    np.put_along_axis(out, md_i[..., None], md_o[..., None], axis=-1)
+    np.put_along_axis(out, mx_i[..., None], mx_o[..., None], axis=-1)
+    return np.clip(out, 0.0, 1.0).astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -474,11 +526,20 @@ def apply_adobe_pipeline(
         xyz = balanced.reshape(-1, 3) @ fm.T
         xyz = xyz.reshape(h, w, 3).astype(np.float32)
     else:
-        cm = interpolate_color_matrix(profile, scene_kelvin)
-        cm_inv = np.linalg.inv(cm)
-        xyz = camera_rgb.reshape(-1, 3) @ cm_inv.T
-        n_xyz = cm_inv @ as_shot_neutral
-        xyz = xyz / n_xyz[1]
+        # No ForwardMatrix → ColorMatrix path WITH Adobe's MapWhiteMatrix D50
+        # adaptation (dng_color_spec::SetWhiteXY no-FM branch). The bare
+        # inv(ColorMatrix) shortcut maps neutral to the scene white, not D50,
+        # and tints every neutral (~7 ΔE). This branch is what Adobe runs for
+        # FM-less embedded profiles (e.g. the dnglab-cloned synthetic DNG, whose
+        # ForwardMatrix dnglab strips) and is authored to feed the LookTable.
+        import colour
+        pcs_white_xy = tuple(
+            float(c) for c in colour.RGB_COLOURSPACES["ProPhoto RGB"].whitepoint
+        )
+        camera_to_pcs = colormatrix_camera_to_pcs(
+            profile, as_shot_neutral, pcs_white_xy,
+        )
+        xyz = camera_rgb.reshape(-1, 3) @ camera_to_pcs.T
         xyz = xyz.reshape(h, w, 3).astype(np.float32)
 
     # Colorimetric tap (Stage 3): XYZ(D50) immediately post-ForwardMatrix —
@@ -562,19 +623,17 @@ def apply_adobe_pipeline(
         rgb_post_lt = _hsv_to_rgb_dcp(h_arr, s_arr, v_arr)
         rgb = np.where(valid[..., None], rgb_post_lt, rgb)
 
-    # Stage 9: per-channel ProfileToneCurve (or ACR3 default fallback).
+    # Stage 9: ProfileToneCurve (or ACR3 default fallback), applied as Adobe's
+    # hue/saturation-preserving RGB tone (RefBaselineRGBTone), NOT per-channel.
+    # Per-channel rotates hue on chromatic pixels; Adobe curves only max+min and
+    # interpolates the middle channel. See `apply_rgb_tone`. (This is the fix
+    # that took gym 0.79 → 0.055 mean ΔE2000 vs dng_validate.)
     if profile.profile_tone_curve is not None:
-        curve = profile.profile_tone_curve
-        solver = DngSplineSolver(curve[:, 0], curve[:, 1])
-        clipped = np.clip(rgb, 0.0, 1.0)
-        for ch in range(3):
-            rgb[..., ch] = np.clip(
-                solver.evaluate(clipped[..., ch]), 0.0, 1.0,
-            ).astype(np.float32)
+        curve_pts = profile.profile_tone_curve
+        solver = DngSplineSolver(curve_pts[:, 0], curve_pts[:, 1])
+        rgb = apply_rgb_tone(rgb, solver.evaluate)
     else:
-        clipped = np.clip(rgb, 0.0, 1.0)
-        for ch in range(3):
-            rgb[..., ch] = apply_acr3_default(clipped[..., ch]).astype(np.float32)
+        rgb = apply_rgb_tone(rgb, apply_acr3_default)
 
     return rgb
 

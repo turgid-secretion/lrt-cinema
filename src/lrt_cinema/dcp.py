@@ -788,6 +788,86 @@ def xy_to_camera_neutral(profile: DCPProfile, x: float, y: float) -> np.ndarray:
     return matrix @ _xy_to_xyz(x, y)
 
 
+# Linearized Bradford cone-response matrix (DNG SDK dng_color_spec.cpp:28).
+_BRADFORD = np.array([
+    [0.8951, 0.2664, -0.1614],
+    [-0.7502, 1.7135, 0.0367],
+    [0.0389, -0.0685, 1.0296],
+])
+
+
+def map_white_matrix(white1_xy: tuple[float, float], white2_xy: tuple[float, float]) -> np.ndarray:
+    """Chromatic-adaptation matrix mapping XYZ at `white1` to XYZ at `white2`.
+
+    Direct port of `MapWhiteMatrix` (DNG SDK dng_color_spec.cpp:22-57) — the
+    linearized Bradford von-Kries adaptation Adobe uses inside the ColorMatrix
+    render path. Per-cone scale ratios are pinned to [0.1, 10].
+    """
+    w1 = np.maximum(_BRADFORD @ _xy_to_xyz(*white1_xy), 0.0)
+    w2 = np.maximum(_BRADFORD @ _xy_to_xyz(*white2_xy), 0.0)
+    ratio = np.array([
+        min(max(w2[i] / w1[i] if w1[i] > 0.0 else 10.0, 0.1), 10.0) for i in range(3)
+    ])
+    return np.linalg.inv(_BRADFORD) @ np.diag(ratio) @ _BRADFORD
+
+
+def neutral_to_xy(profile: DCPProfile, neutral: np.ndarray) -> tuple[float, float]:
+    """Camera-RGB neutral (AsShotNeutral) → scene-white CIE (x, y).
+
+    Port of `dng_color_spec::NeutralToXY` (dng_color_spec.cpp:659) — the
+    iterative inverse of `xy_to_camera_neutral`: repeatedly interpolate the
+    ColorMatrix at the current white estimate and back-solve the chromaticity,
+    until convergence. Used by the ColorMatrix (no-ForwardMatrix) render path.
+    """
+    n = np.asarray(neutral, dtype=np.float64)
+    last = np.array([0.34567, 0.35850])  # D50 starting point
+    for _ in range(30):
+        kelvin = uv_to_kelvin(*xy_to_uv(last[0], last[1]))
+        cm = interpolate_color_matrix(profile, kelvin)
+        xyz = np.linalg.inv(cm) @ n
+        s = xyz.sum()
+        nxt = np.array([xyz[0] / s, xyz[1] / s])
+        if abs(nxt[0] - last[0]) + abs(nxt[1] - last[1]) < 1e-7:
+            return float(nxt[0]), float(nxt[1])
+        last = nxt
+    return float(last[0]), float(last[1])
+
+
+def colormatrix_camera_to_pcs(
+    profile: DCPProfile,
+    neutral: np.ndarray,
+    pcs_white_xy: tuple[float, float],
+) -> np.ndarray:
+    """Camera RGB → XYZ(D50 PCS) matrix via the ColorMatrix path WITH white adaptation.
+
+    Port of the no-ForwardMatrix branch of `dng_color_spec::SetWhiteXY`
+    (dng_color_spec.cpp:570-607). Required for Adobe Camera-Matching profiles
+    whose ForwardMatrix is a ProPhoto passthrough (no colour information) and
+    for any profile that ships only a ColorMatrix — the LookTable that follows
+    is authored against THIS colour base, not a white-balance-only base.
+
+        whiteXY      = NeutralToXY(neutral)
+        CM           = interpolated ColorMatrix at whiteXY's CCT
+        PCStoCamera  = CM @ MapWhiteMatrix(PCS_white, whiteXY)
+        PCStoCamera /= max(PCStoCamera @ XYZ(PCS_white))   # white reaches on 1st-channel sat
+        CameraToPCS  = inv(PCStoCamera)
+
+    `pcs_white_xy` is the PCS (D50) chromaticity — pass the working-space
+    (ProPhoto) white so this composes exactly with the XYZ(D50)→ProPhoto matrix
+    used downstream. The naive `inv(ColorMatrix)` shortcut (no MapWhiteMatrix)
+    maps neutral to the SCENE white instead of D50 and tints every neutral.
+    """
+    white_xy = neutral_to_xy(profile, neutral)
+    kelvin = uv_to_kelvin(*xy_to_uv(*white_xy))
+    cm = interpolate_color_matrix(profile, kelvin)
+    pcs_to_camera = cm @ map_white_matrix(pcs_white_xy, white_xy)
+    scale = float(np.max(pcs_to_camera @ _xy_to_xyz(*pcs_white_xy)))
+    if scale == 0.0:
+        raise ValueError("degenerate ColorMatrix: PCStoCamera maps PCS white to zero")
+    pcs_to_camera = pcs_to_camera / scale
+    return np.linalg.inv(pcs_to_camera)
+
+
 # ---------------------------------------------------------------------------
 # RAW EXIF Make/Model probe — drives the auto-detect path
 # ---------------------------------------------------------------------------

@@ -1,16 +1,23 @@
 """Axis 3 — implementation check vs Adobe `dng_validate` on FLAT patches (D750).
 
-Complements the real-scene ship gate (test_pipeline.py, gym 0.789 mean ΔE vs
-dng_validate). That mean is dragged by demosaic-edge differences (libraw LINEAR
-vs Adobe) — its flat-pixel median is already 0.000. This test isolates the pure
-colour-math agreement: a synthetic DNG of flat known-value patches (no demosaic
-edges), rendered by BOTH our pipeline and dng_validate with the SAME DCP (so the
-Luther floor cancels), compared on patch interiors. Expected: ~0.
+Complements the real-scene ship gate (test_pipeline.py). This test isolates the
+pure colour-math agreement: a synthetic DNG of flat known-value patches (no
+demosaic edges), rendered by BOTH our pipeline and dng_validate, compared on
+patch interiors. Expected: ~0 for neutrals AND chromatics.
 
-Same camera (Nikon D750) + same Adobe DCP both sides, so this is a true
-implementation-correctness check (Axis 1/3), NOT absolute accuracy (Axis 2,
-test_colorimetric.py). The synthetic chart, byte-patch writer and patch sampler
-live in tests/synthetic_dng.py.
+Profile subtlety (load-bearing): `dnglab convert` strips the ForwardMatrix when
+it builds the uncompressed clone, so the synthetic DNG's embedded "Camera
+Standard" profile carries only a ColorMatrix. `dng_validate` uses that embedded
+profile → the ColorMatrix + MapWhiteMatrix render path. The test therefore
+strips the ForwardMatrix from the profile it hands our pipeline too, so "same
+profile both sides" actually holds (see `test_flat_patches_match_dng_validate`).
+
+History: chromatic patches once diverged ~4-8 ΔE here. That was NOT the LookTable
+(`_apply_hsv_cube` matches Adobe's `RefBaselineHueSatMap` to machine precision).
+It was (1) Stage 9 applying the tone curve per-channel instead of Adobe's
+hue-preserving `RefBaselineRGBTone`, and (2) the harness feeding our pipeline the
+system DCP's ProPhoto-passthrough ForwardMatrix while dng_validate used the
+FM-stripped embedded profile. Both fixed; chromatic residual is now ~0.05 ΔE.
 
 Skip-gated: needs the D750 DNG fixture, the `dng_validate` binary, `dnglab` (to
 make the uncompressed clone), and the system Adobe D750 Camera Standard DCP.
@@ -58,10 +65,16 @@ def _fixtures_present() -> bool:
 )
 def test_flat_patches_match_dng_validate():
     """Render a flat-patch synthetic D750 DNG through our pipeline and through
-    dng_validate (Camera Standard, both sides), compare patch interiors in
-    Lab(D65)/ΔE2000. On flat patches the colour maths bit-match the open spec,
-    so the median ΔE is ~0 — the demosaic-edge tail that lifts the real-scene
-    mean to 0.789 is absent here."""
+    dng_validate (Camera Standard, FM-stripped both sides — see module docstring),
+    compare patch interiors in Lab(D65)/ΔE2000. With no demosaic edges and the
+    same profile both sides, the colour maths bit-match: neutral median ~0 AND
+    chromatic mean ~0.05 (sRGB-quantisation floor).
+
+    Path-coverage note: because the FM is stripped, this exercises the ColorMatrix
+    + MapWhiteMatrix camera→ProPhoto path (Stage 3 no-FM branch). The FM-passthrough
+    → white-balance-base path that PRODUCTION uses for D750 Camera-Matching profiles
+    is guarded separately by test_pipeline.py's gym ship-gate (0.026 mean). A green
+    result here does NOT by itself certify the production FM path — gym does."""
     uncomp = _WORK / "DSC_4053_uncomp.dng"
     assert sd.ensure_uncompressed_clone(_SRC_DNG, uncomp), "dnglab uncompressed clone failed"
 
@@ -83,7 +96,18 @@ def test_flat_patches_match_dng_validate():
     gt8 = (gt16.astype(np.float32) / 65535.0 * 255.0).astype(np.uint8)
 
     # --- our pipeline render (full DCP shaping) -------------------------------
+    # `dnglab convert` STRIPS the ForwardMatrix when it builds the uncompressed
+    # clone, so the synthetic DNG's embedded "Camera Standard" profile has only a
+    # ColorMatrix. `dng_validate -profile "Camera Standard"` uses that embedded
+    # (FM-less) profile → it renders via the ColorMatrix-inverse + MapWhiteMatrix
+    # path. We MUST feed our pipeline the same FM-less profile, or we render via
+    # the system DCP's ForwardMatrix (a ProPhoto passthrough = white-balance-only
+    # colour) and the two sides diverge ~6 ΔE on saturated patches — an
+    # apples-to-oranges artefact, NOT a colour-pipeline bug. Stripping the FM here
+    # makes "same profile both sides" hold so the comparison is meaningful.
     profile = parse_dcp(_D750_CAMSTD)
+    profile.forward_matrix_1 = None
+    profile.forward_matrix_2 = None
     result = render_frame(synth, profile, dcp_path=_D750_CAMSTD)
     ours8 = _prophoto_to_srgb_8bit(result.prophoto)
 
@@ -121,22 +145,24 @@ def test_flat_patches_match_dng_validate():
     )
     assert de_neutral.max() < 0.5, f"neutral flat-patch max ΔE {de_neutral.max():.3f}"
 
-    # CHROMATIC patches isolate a real, known divergence: ~4-8 ΔE, confirmed in
-    # wide-gamut ProPhoto too (NOT sRGB-gamut clipping). It is localised to the
-    # LookTable (HSV cube) by elimination: the ExposureRamp + ProfileToneCurve
-    # are PURE PER-CHANNEL functions, and the neutral wedge matches at every
-    # level up to ProPhoto 0.65 — above the chromatic patches' max per-channel
-    # value (~0.58) — so those per-channel ops are verified across the chromatic
-    # channel range. The (h,s,v)-joint LookTable is the only chromatic-affecting
-    # stage neutrals (sat=0) cannot exercise, hence the only remaining suspect.
-    # This is the source of the gym's documented "~5% flat-region colour tail"
-    # (CLAUDE.md / docs/VALIDATION.md), surfaced cleanly because the gym's
-    # real-scene colours are too desaturated to probe these LookTable cells.
-    # Upper-bound only (a future LookTable fix that drives this toward 0 must NOT
-    # break the test); the headline neutral 0.000 stands regardless.
-    assert de_colour.max() < 12.0, (
-        f"chromatic flat-patch max ΔE {de_colour.max():.3f} — the LookTable "
-        f"divergence WORSENED beyond the known ~8 ΔE tail; investigate _apply_hsv_cube."
+    # CHROMATIC patches now bit-match too (same FM-less profile both sides). The
+    # earlier ~4-8 ΔE tail was NOT the LookTable — `_apply_hsv_cube` was verified
+    # equal to Adobe's `RefBaselineHueSatMap` to machine precision. It was two
+    # things, both upstream of the LookTable: (1) Stage 9 applied the tone curve
+    # per-channel instead of Adobe's hue/saturation-preserving `RefBaselineRGBTone`
+    # (curve max+min, interpolate the middle channel) — this alone took gym 0.79 →
+    # 0.055 mean ΔE; (2) the harness fed our pipeline the system DCP's ProPhoto
+    # passthrough ForwardMatrix while dng_validate used the FM-stripped embedded
+    # profile (fixed above). With both corrected the residual is sRGB-quantisation
+    # floor (~0.2). Strict gate — this is the drive-toward-0 anchor.
+    assert de_colour.mean() < 0.6, (
+        f"chromatic flat-patch mean ΔE {de_colour.mean():.3f} — regressed past the "
+        f"~0.05 colour-math floor. Suspect Stage-9 hue-preserving tone "
+        f"(`apply_rgb_tone`) or the ColorMatrix+MapWhiteMatrix path (Stage 3)."
+    )
+    assert de_colour.max() < 1.5, (
+        f"chromatic flat-patch max ΔE {de_colour.max():.3f} — regressed past the "
+        f"sRGB-quantisation floor (~0.2). Investigate the Stage 3/9 colour maths."
     )
 
 
