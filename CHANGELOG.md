@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] — v0.8 prep
 
 ### Added
+- **Dual-mode grading scaffold — `--render-intent {faithful,perceptual}`**
+  (DECISIONS.md §7, v0.9 step 1). Threads a `RenderIntent` through
+  `cli → _RenderJob → develop_ops.apply_develop_ops / apply_stage_12_perceptual`;
+  only the HSL + Color-Grade applicators branch on it. **faithful** (default) =
+  today's Adobe-hexcone ops (the sRGB TIFF / LRT round-trip — the Lightroom
+  look); **perceptual** = modern primitives (OKLCh HSL, ASC-CDL grade) for the
+  ACEScg master. The perceptual applicators (`_apply_hsl_perceptual`,
+  `_apply_color_grade_perceptual`) currently **alias the faithful ones**, so the
+  switch is wired but **byte-identical** — zero behaviour change, ship gate
+  untouched — until v0.9 steps 2-4 fill them. Routing is covered by a
+  monkeypatch test that survives those steps; identity stays byte-exact under
+  both intents. Shared op IR (`HslBands`, `ColorGrade`) across intents.
+  **`--render-intent` is the only mode switch and carries no creative values —
+  all values come from the XMP knobs (no CLI grade).** Default is **per emission
+  target** (`_default_intent_for_preset`): sRGB TIFF (`lrtimelapse`) → faithful;
+  ACEScg EXR (`cinema-linear-*`) → perceptual; the flag overrides. A new
+  **render-time warning** (`_warn_dropped_ops`) surfaces any perceptual-only op
+  (Highlights/Shadows/Whites) that is set in the XMP but dropped at render —
+  per-field + frame count, never silent (previously only `cli inspect` showed
+  it). See DECISIONS.md §5 (reopened for the perceptual path) + §7 amendments.
 - **LR Color Grading wheels baked into the render (Stage 12).** The four wheels
   — Shadows, Midtones, Highlights, Global — each {Hue, Saturation, Luminance},
   plus `ColorGradeBlending` and `ColorGradeBalance` (`crs:ColorGrade*`; the PV4+
