@@ -19,6 +19,47 @@ class TonePoint:
     y: float
 
 
+# The eight LR HSL/Color-panel hue bands, in the fixed Adobe order. Used as the
+# canonical index order for every HslBands tuple and as the crs:* tag suffix.
+HSL_BAND_NAMES = (
+    "Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta",
+)
+
+
+@dataclass(frozen=True)
+class HslBands:
+    """LR HSL / Color panel: per-hue-band Hue / Saturation / Luminance.
+
+    Eight hue bands (`HSL_BAND_NAMES` order), each adjustment −100..+100.
+    Mirrors Camera Raw's ``crs:HueAdjustment{Band}`` /
+    ``crs:SaturationAdjustment{Band}`` / ``crs:LuminanceAdjustment{Band}``
+    (a PV2012-era field set, so it appears in real LRT-emitted XMPs).
+
+    Each tuple is length 8; the default (all zeros) is the identity — see
+    `is_identity`, which lets the renderer short-circuit to a byte-exact
+    no-op so the ΔE ship gate is provably unaffected when no HSL is set.
+    """
+
+    hue: tuple[float, ...] = (0.0,) * 8
+    saturation: tuple[float, ...] = (0.0,) * 8
+    luminance: tuple[float, ...] = (0.0,) * 8
+
+    def is_identity(self) -> bool:
+        """True when every band of every channel is exactly zero (a no-op)."""
+        return not (any(self.hue) or any(self.saturation) or any(self.luminance))
+
+    def blend(self, other: HslBands, t: float) -> HslBands:
+        """Per-band linear interpolation (t=0 → self, t=1 → other)."""
+        def lerp_tup(a: tuple[float, ...], b: tuple[float, ...]) -> tuple[float, ...]:
+            return tuple(x + (y - x) * t for x, y in zip(a, b, strict=True))
+
+        return HslBands(
+            hue=lerp_tup(self.hue, other.hue),
+            saturation=lerp_tup(self.saturation, other.saturation),
+            luminance=lerp_tup(self.luminance, other.luminance),
+        )
+
+
 @dataclass
 class DevelopOps:
     """Per-frame develop instructions.
@@ -52,6 +93,10 @@ class DevelopOps:
     # Tone curve (parametric control points, x and y in 0.0–1.0).
     # Empty list = no parametric tone curve override.
     tone_curve: list[TonePoint] = field(default_factory=list)
+
+    # HSL / Color panel — 8 hue bands × {Hue, Saturation, Luminance}.
+    # Default (all-zero) is the identity. See HslBands.
+    hsl: HslBands = field(default_factory=HslBands)
 
     def blend(self, other: DevelopOps, t: float) -> DevelopOps:
         """Linearly interpolate between self (t=0) and other (t=1).
@@ -109,6 +154,7 @@ class DevelopOps:
             vibrance=lerp_f(self.vibrance, other.vibrance),
             sharpness=lerp_f(self.sharpness, other.sharpness),
             tone_curve=blended_curve,
+            hsl=self.hsl.blend(other.hsl, t),
         )
 
 

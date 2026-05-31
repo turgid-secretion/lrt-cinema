@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from lrt_cinema.ir import DevelopOps, TonePoint
+from lrt_cinema.ir import DevelopOps, HslBands, TonePoint
 from lrt_cinema.pipeline import DngSplineSolver
 
 # ---------------------------------------------------------------------------
@@ -134,6 +134,67 @@ def apply_vibrance(prophoto: np.ndarray, vib: float) -> np.ndarray:
     return _scale_hsv_saturation(prophoto, lambda s: np.clip(s + k * s * (1.0 - s), 0.0, 1.0))
 
 
+def apply_hsl(prophoto: np.ndarray, hsl: HslBands) -> np.ndarray:
+    """LR HSL / Color panel: 8 hue bands × {Hue, Saturation, Luminance}.
+
+    Applied in the Adobe hexcone HSV domain (`lut3d_baker` helpers, the same
+    space as Saturation/Vibrance and the DCP HueSatMap). For each pixel a
+    smooth, overlapping triangular **partition of unity** over the eight band
+    centres (`_HSL_BAND_CENTERS_HEX`) blends the per-band adjustments:
+
+      * Hue:        ``h_out = h + Σ wᵢ · (hueᵢ/100)·HUE_MAX``   (rotation)
+      * Saturation: ``s_out = clip(s · Σ wᵢ·(1 + satᵢ/100), 0, 1)``
+      * Luminance:  ``v_out = v · (1 + s_gate·(Σ wᵢ·(1 + lumᵢ/100) − 1))``
+
+    Because the weights sum to 1, all-equal bands collapse to a global
+    adjustment and the all-zero default is the identity. **Saturation gates the
+    luminance term** (`s_gate`) so a neutral pixel — whose hue is undefined and
+    defaults to the Red band — is left untouched even when a band's Luminance
+    slider is set (a grey wedge must stay grey; see CLAUDE.md §0). S is clamped
+    to [0,1] before recompose for the same reason `apply_saturation` clamps:
+    an S>1 would drive `_hsv_to_rgb_dcp` to emit negative ProPhoto channels
+    that `output.py`'s colour matrix then mixes in before the [0,1] clip.
+
+    **Fidelity caveat:** Adobe's exact band centres, the Hue-slider→rotation
+    magnitude (`_HSL_HUE_MAX_HEX`), and the HSL-Luminance vs HSV-Value mapping
+    are closed-source. These are the best public approximation — the band
+    layout matches the named-colour hue wheel and the ±100→±30° hue rotation
+    is the conventional reverse-engineered value. The Axis-1 oracle validates
+    this *defined* math, not absolute Lightroom fidelity (see VALIDATION.md).
+    """
+    if hsl.is_identity():
+        return prophoto
+
+    from lrt_cinema.lut3d_baker import _hsv_to_rgb_dcp, _rgb_to_hsv_dcp
+
+    h, s, v, valid = _rgb_to_hsv_dcp(prophoto)
+    weights = _hsl_band_weights(h)  # (..., 8) partition of unity
+
+    hue_shift_per_band = np.asarray(hsl.hue, dtype=np.float64) / 100.0 * _HSL_HUE_MAX_HEX
+    sat_factor_per_band = 1.0 + np.asarray(hsl.saturation, dtype=np.float64) / 100.0
+    lum_factor_per_band = 1.0 + np.asarray(hsl.luminance, dtype=np.float64) / 100.0
+
+    hue_shift = weights @ hue_shift_per_band
+    sat_mult = weights @ sat_factor_per_band
+    lum_mult = weights @ lum_factor_per_band
+
+    h_out = h + hue_shift
+    h_out = np.where(h_out < 0.0, h_out + 6.0, h_out)
+    h_out = np.where(h_out >= 6.0, h_out - 6.0, h_out)
+
+    s_out = np.clip(s * sat_mult, 0.0, 1.0)
+
+    # Gate luminance by saturation so near-neutral pixels (ill-defined hue) are
+    # not pushed by a colour band's Luminance slider. Above _HSL_LUM_SAT_GATE
+    # the band gets full luminance authority.
+    s_gate = np.clip(s / _HSL_LUM_SAT_GATE, 0.0, 1.0)
+    eff_lum_mult = 1.0 + s_gate * (lum_mult - 1.0)
+    v_out = np.maximum(v * eff_lum_mult, 0.0)
+
+    rgb_post = _hsv_to_rgb_dcp(h_out, s_out, v_out)
+    return np.where(valid[..., None], rgb_post, prophoto).astype(prophoto.dtype)
+
+
 def apply_contrast_2012(prophoto: np.ndarray, contrast: float) -> np.ndarray:
     """LR Contrast2012: -100..+100 S-curve around midtone pivot (0.18 linear,
     matching scene-linear midgray). Mapping: pivot-anchored gain
@@ -175,10 +236,17 @@ def apply_stage_12_perceptual(
     prophoto: np.ndarray, ops: DevelopOps,
 ) -> np.ndarray:
     """Apply all stage-12 perceptual-domain ops in order:
-    ToneCurve → Saturation → Vibrance → Contrast → Sharpness."""
+    ToneCurve → Saturation → Vibrance → HSL → Contrast → Sharpness.
+
+    HSL is placed after the global Saturation/Vibrance and before Contrast,
+    matching Lightroom's panel order (HSL is a colour-treatment op applied
+    after Basic presence and before the final tone shaping). Identity ops
+    short-circuit to a byte-exact no-op, so a render with no HSL intent is
+    bit-identical to the pre-HSL pipeline (the ΔE ship gate is unaffected)."""
     out = apply_tone_curve_pv2012(prophoto, ops.tone_curve)
     out = apply_saturation(out, ops.saturation)
     out = apply_vibrance(out, ops.vibrance)
+    out = apply_hsl(out, ops.hsl)
     out = apply_contrast_2012(out, ops.contrast)
     out = apply_sharpness(out, ops.sharpness)
     return out
@@ -193,6 +261,51 @@ def apply_develop_ops(
     """
     out = apply_stage_11_linear(prophoto, ops)
     return apply_stage_12_perceptual(out, ops)
+
+
+# ---------------------------------------------------------------------------
+# Internal — HSL band-weighting (hexcone hue space, [0, 6))
+# ---------------------------------------------------------------------------
+#
+# Adobe's eight HSL hue bands, expressed as centres in the hexcone hue space
+# (`[0, 6)`, sixths-of-a-turn — the same space `lut3d_baker` uses, NOT degrees).
+# Degrees → hexcone is ×6/360. The named-colour layout (Red 0°, Orange 30°,
+# Yellow 60°, Green 120°, Aqua 180°, Blue 240°, Purple 270°, Magenta 300°)
+# matches the perceptual hue wheel; the precise centres Adobe ships are
+# closed-source, so these are the conventional reverse-engineered values.
+_HSL_BAND_CENTERS_HEX = np.array(
+    [0.0, 0.5, 1.0, 2.0, 3.0, 4.0, 4.5, 5.0], dtype=np.float64,
+)  # Red, Orange, Yellow, Green, Aqua, Blue, Purple, Magenta
+
+# Hue-slider magnitude: ±100 → ±30° of hue rotation (the conventional value).
+_HSL_HUE_MAX_HEX = 30.0 * (6.0 / 360.0)
+
+# Below this HSV saturation the per-band Luminance effect ramps to zero, so
+# near-neutral pixels (undefined hue) are protected from colour-band luminance.
+_HSL_LUM_SAT_GATE = 0.1
+
+
+def _hsl_band_weights(h: np.ndarray) -> np.ndarray:
+    """Triangular partition-of-unity weights over the eight HSL band centres.
+
+    `h`: hexcone hue array in `[0, 6)`. Returns `(..., 8)` weights that sum to
+    exactly 1 per pixel — each hue lies in exactly one segment between two
+    adjacent centres and splits its weight linearly between them (the final
+    segment wraps Magenta→Red across 5.0→6.0≡0.0). The unit-sum property is
+    what makes all-equal bands behave as a single global adjustment and the
+    all-zero default an exact identity.
+    """
+    weights = np.zeros(h.shape + (8,), dtype=np.float64)
+    centers = _HSL_BAND_CENTERS_HEX
+    for j in range(8):
+        lo = centers[j]
+        hi = centers[j + 1] if j < 7 else 6.0  # wrap: Magenta → Red
+        nxt = (j + 1) % 8
+        in_seg = (h >= lo) & (h < hi)
+        frac = np.where(in_seg, (h - lo) / (hi - lo), 0.0)
+        weights[..., j] += np.where(in_seg, 1.0 - frac, 0.0)
+        weights[..., nxt] += frac
+    return weights
 
 
 # ---------------------------------------------------------------------------

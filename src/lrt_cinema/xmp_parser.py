@@ -30,8 +30,10 @@ from pathlib import Path
 from defusedxml import ElementTree as DefusedET
 
 from lrt_cinema.ir import (
+    HSL_BAND_NAMES,
     DeflickerOffset,
     DevelopOps,
+    HslBands,
     Keyframe,
     LRTMaskOffset,
     LRTSequence,
@@ -162,6 +164,27 @@ def _parse_tone_curve(desc: ET.Element) -> list[TonePoint]:
     return points
 
 
+def _parse_hsl(desc: ET.Element) -> HslBands:
+    """Parse the LR HSL/Color panel: 8 hue bands × {Hue, Saturation, Luminance}.
+
+    Reads ``crs:HueAdjustment{Band}`` / ``crs:SaturationAdjustment{Band}`` /
+    ``crs:LuminanceAdjustment{Band}`` for the eight bands in `HSL_BAND_NAMES`
+    order (Red…Magenta), each −100..+100. Absent tags default to 0 (identity),
+    so a frame that never touched HSL yields `HslBands().is_identity()`.
+    """
+    def band_values(prefix: str) -> tuple[float, ...]:
+        return tuple(
+            _parse_float(_read_attr_or_child(desc, _q("crs", f"{prefix}{band}")))
+            for band in HSL_BAND_NAMES
+        )
+
+    return HslBands(
+        hue=band_values("HueAdjustment"),
+        saturation=band_values("SaturationAdjustment"),
+        luminance=band_values("LuminanceAdjustment"),
+    )
+
+
 def _parse_description(desc: ET.Element) -> DevelopOps:
     return DevelopOps(
         exposure_ev=_parse_float(_read_attr_or_child(desc, _q("crs", "Exposure2012"))),
@@ -176,6 +199,7 @@ def _parse_description(desc: ET.Element) -> DevelopOps:
         vibrance=_parse_float(_read_attr_or_child(desc, _q("crs", "Vibrance"))),
         sharpness=_parse_float(_read_attr_or_child(desc, _q("crs", "Sharpness"))),
         tone_curve=_parse_tone_curve(desc),
+        hsl=_parse_hsl(desc),
     )
 
 
@@ -222,6 +246,8 @@ def _merge_ops(base: DevelopOps, override: DevelopOps) -> DevelopOps:
         merged.sharpness = override.sharpness
     if override.tone_curve:
         merged.tone_curve = list(override.tone_curve)
+    if not override.hsl.is_identity():
+        merged.hsl = override.hsl
     return merged
 
 
@@ -495,4 +521,5 @@ def _has_meaningful_ops(ops: DevelopOps) -> bool:
         or ops.saturation != 0.0
         or ops.vibrance != 0.0
         or (bool(ops.tone_curve) and not _is_identity_tone_curve(ops.tone_curve))
+        or not ops.hsl.is_identity()
     )

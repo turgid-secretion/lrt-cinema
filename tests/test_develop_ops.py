@@ -15,6 +15,7 @@ from lrt_cinema.develop_ops import (
     apply_contrast_2012,
     apply_develop_ops,
     apply_exposure_2012,
+    apply_hsl,
     apply_saturation,
     apply_sharpness,
     apply_stage_11_linear,
@@ -22,7 +23,7 @@ from lrt_cinema.develop_ops import (
     apply_tone_curve_pv2012,
     apply_vibrance,
 )
-from lrt_cinema.ir import DevelopOps, TonePoint
+from lrt_cinema.ir import DevelopOps, HslBands, TonePoint
 
 # ---------------------------------------------------------------------------
 # Stage 11 — Exposure2012
@@ -171,6 +172,68 @@ def test_vibrance_boosts_low_sat_more_than_high_sat():
     rel_low = (chroma_low_out - chroma_low_in) / chroma_low_in
     rel_high = (chroma_high_out - chroma_high_in) / max(chroma_high_in, 1e-9)
     assert rel_low > rel_high  # low-sat pixel gains more relative chroma
+
+
+# ---------------------------------------------------------------------------
+# Stage 12 — HSL panel (8 hue bands × {Hue, Saturation, Luminance})
+# ---------------------------------------------------------------------------
+
+
+def test_hsl_default_is_byte_exact_no_op():
+    """Default (all-zero) HslBands → byte-exact passthrough (short-circuit before
+    the lossy HSV round-trip). Guarantees the ΔE ship gate is unaffected."""
+    x = np.random.rand(8, 8, 3).astype(np.float32)
+    np.testing.assert_array_equal(apply_hsl(x, HslBands()), x)
+
+
+def test_hsl_saturation_band_targets_only_its_hue():
+    """Red-band +Saturation boosts a red pixel's chroma but leaves a blue pixel
+    (a different band) essentially unchanged."""
+    red = np.array([[[0.6, 0.2, 0.2]]], dtype=np.float32)
+    blue = np.array([[[0.2, 0.2, 0.6]]], dtype=np.float32)
+    red_sat = HslBands(saturation=(80.0, 0, 0, 0, 0, 0, 0, 0))
+
+    def chroma(a):
+        return float(a.max() - a.min())
+
+    assert chroma(apply_hsl(red, red_sat)) > chroma(red) + 1e-3   # red gains chroma
+    np.testing.assert_allclose(apply_hsl(blue, red_sat), blue, atol=1e-6)  # blue untouched
+
+
+def test_hsl_luminance_leaves_neutrals_unchanged():
+    """A neutral grey has no hue → the saturation gate must keep ANY band's
+    Luminance slider from moving it (a grey wedge stays grey; CLAUDE.md §0).
+    The same slider DOES darken a saturated pixel of that band."""
+    grey = np.array([[[0.5, 0.5, 0.5]]], dtype=np.float32)
+    red = np.array([[[0.7, 0.1, 0.1]]], dtype=np.float32)
+    red_lum_down = HslBands(luminance=(-60.0, 0, 0, 0, 0, 0, 0, 0))
+    np.testing.assert_allclose(apply_hsl(grey, red_lum_down), grey, atol=1e-6)
+    assert apply_hsl(red, red_lum_down).max() < red.max() - 1e-3  # red darkens
+
+
+def test_hsl_saturated_past_gamut_emits_no_negative_channels():
+    """An already-saturated pixel × a large +Saturation pushes HSV S past 1;
+    without the [0,1] clamp on recompose, _hsv_to_rgb_dcp would emit negative
+    ProPhoto channels (the apply_saturation lesson). Must stay non-negative."""
+    x = np.array([[[0.80, 0.10, 0.05]]], dtype=np.float32)  # S≈0.94
+    out = apply_hsl(x, HslBands(saturation=(100.0, 0, 0, 0, 0, 0, 0, 0)))
+    assert out.min() >= 0.0, f"negative channel leaked: min={out.min()}"
+
+
+def test_hsl_invalid_negative_pixel_passes_through():
+    """A pixel with a negative channel (out-of-gamut, hue undefined) is passed
+    through unchanged — matching the HueSatMap / apply_saturation convention."""
+    x = np.array([[[0.6, -0.05, 0.2]]], dtype=np.float32)
+    np.testing.assert_array_equal(apply_hsl(x, HslBands(saturation=(50.0,) * 8)), x)
+
+
+def test_hsl_all_bands_equal_acts_as_global_saturation():
+    """Partition-of-unity property: setting all 8 Saturation bands to the same
+    value is equivalent to a single global Saturation (weights sum to 1)."""
+    x = np.array([[[0.6, 0.3, 0.2], [0.2, 0.5, 0.4], [0.1, 0.2, 0.7]]], dtype=np.float64)
+    out_hsl = apply_hsl(x, HslBands(saturation=(50.0,) * 8))
+    out_global = apply_saturation(x, 50.0)
+    np.testing.assert_allclose(out_hsl, out_global, atol=1e-6)
 
 
 # ---------------------------------------------------------------------------

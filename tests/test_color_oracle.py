@@ -26,6 +26,13 @@ import pytest
 colour = pytest.importorskip("colour")  # noqa: F841  (output.py needs it; gate import)
 
 from lrt_cinema.dcp import DCPProfile, HsvCube, interpolate_color_matrix  # noqa: E402
+from lrt_cinema.develop_ops import (  # noqa: E402
+    _HSL_BAND_CENTERS_HEX,
+    _HSL_HUE_MAX_HEX,
+    _HSL_LUM_SAT_GATE,
+    apply_hsl,
+)
+from lrt_cinema.ir import HslBands  # noqa: E402
 from lrt_cinema.lut3d_baker import (  # noqa: E402
     _apply_hsv_cube,
     _hsv_to_rgb_dcp,
@@ -535,3 +542,146 @@ def test_hsv_cube_rotation_detects_wrong_degree_scale():
     assert abs(correct - wrong) > 0.5, "the two degree scales must be distinguishable"
     assert abs(h2[0, 0] - correct) < 1e-5      # real op uses the correct scale
     assert abs(h2[0, 0] - wrong) > 0.5         # ... and is NOT the buggy scale
+
+
+# ---------------------------------------------------------------------------
+# HSL panel (develop_ops.apply_hsl) — 8 hue bands × {Hue, Saturation, Luminance}
+#
+# Axis-1 ground truth is an INDEPENDENT scalar reimplementation of apply_hsl's
+# *defined* math: a hand-coded hexcone HSV round-trip + an explicit per-pixel
+# band-segment search — a wholly different code path from the production
+# vectorised `_rgb_to_hsv_dcp` / matmul-weighted form, so agreement is a real
+# cross-check, not a tautology. (LR's exact band centres / slider magnitudes
+# are closed-source; this validates our defined spec, NOT Lightroom fidelity —
+# see VALIDATION.md "Validation axes".) `centers` / `hue_max` are injectable so
+# the sensitivity legs can prove the check discriminates a wrong layout.
+# ---------------------------------------------------------------------------
+
+
+def _oracle_hsl(rgb, hsl, centers=None, hue_max=None):
+    centers = list(_HSL_BAND_CENTERS_HEX) if centers is None else list(centers)
+    hue_max = _HSL_HUE_MAX_HEX if hue_max is None else hue_max
+    gate = _HSL_LUM_SAT_GATE
+    hue_adj = [x / 100.0 * hue_max for x in hsl.hue]
+    sat_fac = [1.0 + x / 100.0 for x in hsl.saturation]
+    lum_fac = [1.0 + x / 100.0 for x in hsl.luminance]
+
+    flat = rgb.reshape(-1, 3).astype(np.float64)
+    out = np.empty_like(flat)
+    for i in range(flat.shape[0]):
+        r, g, b = (float(c) for c in flat[i])
+        mx, mn = max(r, g, b), min(r, g, b)
+        if mn < 0.0:                       # invalid (negative) pixel → passthrough
+            out[i] = (r, g, b)
+            continue
+        v = mx
+        delta = mx - mn
+        s = 0.0 if mx <= 0.0 else delta / mx
+        if delta <= 1e-10:
+            h = 0.0
+        elif r == mx:
+            h = (g - b) / delta
+        elif g == mx:
+            h = 2.0 + (b - r) / delta
+        else:
+            h = 4.0 + (r - g) / delta
+        h = h + 6.0 if h < 0.0 else h
+        h = h - 6.0 if h >= 6.0 else h
+
+        # Triangular band weights via an explicit per-segment search.
+        w = [0.0] * 8
+        for j in range(8):
+            lo = centers[j]
+            hi = centers[j + 1] if j < 7 else 6.0
+            if lo <= h < hi:
+                frac = (h - lo) / (hi - lo)
+                w[j] += 1.0 - frac
+                w[(j + 1) % 8] += frac
+
+        hue_shift = sum(w[k] * hue_adj[k] for k in range(8))
+        sat_mult = sum(w[k] * sat_fac[k] for k in range(8))
+        lum_mult = sum(w[k] * lum_fac[k] for k in range(8))
+
+        h2 = h + hue_shift
+        h2 = h2 + 6.0 if h2 < 0.0 else h2
+        h2 = h2 - 6.0 if h2 >= 6.0 else h2
+        s2 = min(max(s * sat_mult, 0.0), 1.0)
+        s_gate = min(max(s / gate, 0.0), 1.0)
+        v2 = max(v * (1.0 + s_gate * (lum_mult - 1.0)), 0.0)
+
+        sector = min(max(int(np.floor(h2)), 0), 5)
+        f = h2 - np.floor(h2)
+        p = v2 * (1.0 - s2)
+        q = v2 * (1.0 - f * s2)
+        t = v2 * (1.0 - (1.0 - f) * s2)
+        out[i] = [
+            (v2, t, p), (q, v2, p), (p, v2, t),
+            (p, q, v2), (t, p, v2), (v2, p, q),
+        ][sector]
+    return out.reshape(rgb.shape)
+
+
+def test_hsl_matches_independent_oracle():
+    """apply_hsl must equal the independent scalar oracle to ~0 over random
+    pixels + saturated / past-gamut-edge / neutral edge cases, with a non-trivial
+    mix of Hue/Sat/Lum sliders set across several bands."""
+    rng = np.random.default_rng(20260531)
+    rgb = rng.random((2048, 3)).astype(np.float64).reshape(-1, 1, 3)
+    edge = np.array([
+        [1.0, 0.0, 0.0],   # primary red, on the gamut edge
+        [0.0, 1.0, 0.0],   # primary green
+        [0.05, 0.4, 0.95],  # saturated blue-ish
+        [0.4, 0.4, 0.4],   # neutral (hue undefined)
+        [0.95, 0.92, 0.05],  # saturated yellow
+        [1.2, 0.1, 0.3],   # overrange + saturated (past the [0,1] box)
+    ], dtype=np.float64).reshape(-1, 1, 3)
+    rgb = np.concatenate([rgb, edge], axis=0)
+
+    hsl = HslBands(
+        hue=(20.0, -10.0, 0.0, 15.0, 0.0, -25.0, 0.0, 5.0),
+        saturation=(40.0, 0.0, -30.0, 60.0, 0.0, 50.0, 0.0, -20.0),
+        luminance=(-35.0, 0.0, 25.0, 0.0, 0.0, -40.0, 0.0, 30.0),
+    )
+    got = apply_hsl(rgb, hsl)
+    want = _oracle_hsl(rgb, hsl)
+    np.testing.assert_allclose(got, want, atol=1e-6)
+
+
+def test_hsl_oracle_detects_wrong_band_centers():
+    """Sensitivity: the band centres are load-bearing. A buggy oracle using
+    evenly-spaced (45°) centres instead of the named-colour layout assigns a
+    clearly different band weight, diverging on a band-targeted Luminance
+    adjustment (chosen over Saturation so the [0,1] sat clamp can't mask the
+    gap) — so the exact-match in the agreement test is discriminating."""
+    rgb = np.array([[[0.15, 0.8, 0.1]]], dtype=np.float64)  # a saturated green pixel
+    hsl = HslBands(luminance=(0.0, 0.0, 0.0, -50.0, 0.0, 0.0, 0.0, 0.0))  # Green Lum −50
+    correct = _oracle_hsl(rgb, hsl)
+    even = np.linspace(0.0, 6.0, 8, endpoint=False)  # 0,0.75,1.5,… — wrong layout
+    wrong = _oracle_hsl(rgb, hsl, centers=even)
+    assert np.max(np.abs(correct - wrong)) > 1e-2
+    np.testing.assert_allclose(apply_hsl(rgb, hsl), correct, atol=1e-6)
+
+
+def test_hsl_oracle_detects_wrong_hue_magnitude():
+    """Sensitivity: a doubled Hue-slider magnitude (a plausible unit-scale bug)
+    rotates a band's hue twice as far — the real op matches the defined
+    magnitude and not the doubled one."""
+    rgb = np.array([[[0.9, 0.2, 0.2]]], dtype=np.float64)  # a red pixel
+    hsl = HslBands(hue=(100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))  # Red hue +100
+    correct = _oracle_hsl(rgb, hsl)
+    wrong = _oracle_hsl(rgb, hsl, hue_max=2.0 * _HSL_HUE_MAX_HEX)
+    assert np.max(np.abs(correct - wrong)) > 1e-2
+    np.testing.assert_allclose(apply_hsl(rgb, hsl), correct, atol=1e-6)
+
+
+def test_hsl_identity_is_byte_exact_no_op():
+    """The all-zero HslBands default must be a BYTE-exact no-op (the short-circuit
+    returns the input before any lossy HSV round-trip). This is the structural
+    guarantee that the ΔE ship gate is unaffected when no HSL is authored."""
+    rgb = np.random.default_rng(1).random((16, 16, 3)).astype(np.float32)
+    np.testing.assert_array_equal(apply_hsl(rgb, HslBands()), rgb)
+    # An explicitly-all-zero (non-default-object) HslBands is identity too.
+    np.testing.assert_array_equal(
+        apply_hsl(rgb, HslBands(hue=(0.0,) * 8, saturation=(0.0,) * 8, luminance=(0.0,) * 8)),
+        rgb,
+    )
