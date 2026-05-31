@@ -30,8 +30,11 @@ from pathlib import Path
 from defusedxml import ElementTree as DefusedET
 
 from lrt_cinema.ir import (
+    HSL_BAND_NAMES,
+    ColorGrade,
     DeflickerOffset,
     DevelopOps,
+    HslBands,
     Keyframe,
     LRTMaskOffset,
     LRTSequence,
@@ -162,6 +165,68 @@ def _parse_tone_curve(desc: ET.Element) -> list[TonePoint]:
     return points
 
 
+def _parse_hsl(desc: ET.Element) -> HslBands:
+    """Parse the LR HSL/Color panel: 8 hue bands × {Hue, Saturation, Luminance}.
+
+    Reads ``crs:HueAdjustment{Band}`` / ``crs:SaturationAdjustment{Band}`` /
+    ``crs:LuminanceAdjustment{Band}`` for the eight bands in `HSL_BAND_NAMES`
+    order (Red…Magenta), each −100..+100. Absent tags default to 0 (identity),
+    so a frame that never touched HSL yields `HslBands().is_identity()`.
+    """
+    def band_values(prefix: str) -> tuple[float, ...]:
+        return tuple(
+            _parse_float(_read_attr_or_child(desc, _q("crs", f"{prefix}{band}")))
+            for band in HSL_BAND_NAMES
+        )
+
+    return HslBands(
+        hue=band_values("HueAdjustment"),
+        saturation=band_values("SaturationAdjustment"),
+        luminance=band_values("LuminanceAdjustment"),
+    )
+
+
+def _read_crs_float(
+    desc: ET.Element, primary: str, fallback: str | None = None, default: float = 0.0,
+) -> float:
+    """Read a crs:* float, falling back to a legacy alias tag if the primary is
+    absent. Used for Color Grade fields that ACR aliases onto crs:SplitToning*."""
+    text = _read_attr_or_child(desc, _q("crs", primary))
+    if text is None and fallback is not None:
+        text = _read_attr_or_child(desc, _q("crs", fallback))
+    return _parse_float(text, default)
+
+
+def _parse_color_grade(desc: ET.Element) -> ColorGrade:
+    """Parse the LR Color Grading panel (PV4+ successor to Split Toning).
+
+    Four wheels × {Hue, Sat, Lum} + Blending + Balance. ACR aliases the
+    Shadow/Highlight Hue+Sat and the Balance onto the legacy ``crs:SplitToning*``
+    tags (the Color Grade panel is built on Split Toning), and Split Toning is
+    itself a PV2012-era edit — so reading both makes a pure Split-Toning XMP
+    drive the Shadow/Highlight wheels too. Midtone, Global, the per-wheel
+    Luminance and Blending have no legacy alias. Blending defaults to 50.
+    """
+    return ColorGrade(
+        shadow_hue=_read_crs_float(desc, "ColorGradeShadowHue", "SplitToningShadowHue"),
+        shadow_sat=_read_crs_float(desc, "ColorGradeShadowSat", "SplitToningShadowSaturation"),
+        shadow_lum=_read_crs_float(desc, "ColorGradeShadowLum"),
+        midtone_hue=_read_crs_float(desc, "ColorGradeMidtoneHue"),
+        midtone_sat=_read_crs_float(desc, "ColorGradeMidtoneSat"),
+        midtone_lum=_read_crs_float(desc, "ColorGradeMidtoneLum"),
+        highlight_hue=_read_crs_float(desc, "ColorGradeHighlightHue", "SplitToningHighlightHue"),
+        highlight_sat=_read_crs_float(
+            desc, "ColorGradeHighlightSat", "SplitToningHighlightSaturation",
+        ),
+        highlight_lum=_read_crs_float(desc, "ColorGradeHighlightLum"),
+        global_hue=_read_crs_float(desc, "ColorGradeGlobalHue"),
+        global_sat=_read_crs_float(desc, "ColorGradeGlobalSat"),
+        global_lum=_read_crs_float(desc, "ColorGradeGlobalLum"),
+        blending=_read_crs_float(desc, "ColorGradeBlending", default=50.0),
+        balance=_read_crs_float(desc, "ColorGradeBalance", "SplitToningBalance"),
+    )
+
+
 def _parse_description(desc: ET.Element) -> DevelopOps:
     return DevelopOps(
         exposure_ev=_parse_float(_read_attr_or_child(desc, _q("crs", "Exposure2012"))),
@@ -176,6 +241,8 @@ def _parse_description(desc: ET.Element) -> DevelopOps:
         vibrance=_parse_float(_read_attr_or_child(desc, _q("crs", "Vibrance"))),
         sharpness=_parse_float(_read_attr_or_child(desc, _q("crs", "Sharpness"))),
         tone_curve=_parse_tone_curve(desc),
+        hsl=_parse_hsl(desc),
+        color_grade=_parse_color_grade(desc),
     )
 
 
@@ -222,6 +289,10 @@ def _merge_ops(base: DevelopOps, override: DevelopOps) -> DevelopOps:
         merged.sharpness = override.sharpness
     if override.tone_curve:
         merged.tone_curve = list(override.tone_curve)
+    if not override.hsl.is_identity():
+        merged.hsl = override.hsl
+    if not override.color_grade.is_identity():
+        merged.color_grade = override.color_grade
     return merged
 
 
@@ -495,4 +566,6 @@ def _has_meaningful_ops(ops: DevelopOps) -> bool:
         or ops.saturation != 0.0
         or ops.vibrance != 0.0
         or (bool(ops.tone_curve) and not _is_identity_tone_curve(ops.tone_curve))
+        or not ops.hsl.is_identity()
+        or not ops.color_grade.is_identity()
     )
