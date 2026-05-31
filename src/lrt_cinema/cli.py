@@ -42,7 +42,7 @@ from lrt_cinema.interpolation import (
     apply_lrt_mask_offsets,
     materialize_all_frames,
 )
-from lrt_cinema.ir import DevelopOps
+from lrt_cinema.ir import DevelopOps, RenderIntent
 from lrt_cinema.presets import DEFAULT_PRESET, PRESETS, STAGE_7_PRESETS
 from lrt_cinema.xmp_parser import parse_sequence
 
@@ -112,6 +112,19 @@ def _build_parser() -> argparse.ArgumentParser:
             "Advanced: explicit output preset, overrides --target. Choices: "
             "lrtimelapse, cinema-linear-finished, cinema-linear-master, "
             "stills-finished (deferred)."
+        ),
+    )
+    render.add_argument(
+        "--render-intent", dest="render_intent",
+        default=RenderIntent.FAITHFUL.value,
+        choices=[i.value for i in RenderIntent],
+        help=(
+            "Stage-12 grading applicator (DECISIONS.md §7). "
+            "faithful (default) → Adobe-hexcone HSL/Color-Grade, the Lightroom "
+            "look for the sRGB TIFF / LRT round-trip; perceptual → modern "
+            "primitives (OKLCh / ASC-CDL) for the ACEScg master. NOTE: the "
+            "perceptual applicators are not yet implemented — they alias "
+            "faithful today, so the flag is byte-exact until v0.9 steps 2-3."
         ),
     )
     render.add_argument(
@@ -188,6 +201,7 @@ class _RenderJob:
     preset: str
     no_dng_convert: bool
     dng_cache_dir: Path
+    intent: RenderIntent = RenderIntent.FAITHFUL
 
 
 @dataclass
@@ -232,7 +246,7 @@ def _render_one_frame(job: _RenderJob) -> _RenderResult:
             dng_path, profile, dcp_path=job.dcp_path, develop_ops=job.ops,
             stop_after_stage=stop_after_stage,
         )
-        with_dev_ops = apply_develop_ops(result.prophoto, job.ops)
+        with_dev_ops = apply_develop_ops(result.prophoto, job.ops, job.intent)
         write_preset_output(
             with_dev_ops, job.dst_stem, job.preset,
             provenance={
@@ -428,6 +442,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
 
     # --preset (advanced) overrides --target's preset bundle.
     preset = args.preset or _TARGET_TO_PRESET[args.target]
+    intent = RenderIntent(args.render_intent)
 
     jobs = []
     for i in range(args.from_frame, to_frame):
@@ -442,13 +457,15 @@ def _cmd_render(args: argparse.Namespace) -> int:
             preset=preset,
             no_dng_convert=args.no_dng_convert,
             dng_cache_dir=dng_cache_dir,
+            intent=intent,
         ))
 
     if args.dry_run:
         sys.stderr.write(
             f"dry-run: would render {len(jobs)} frame(s) "
             f"[{args.from_frame}..{to_frame}) → {args.output} "
-            f"(target={args.target}, preset={preset}, workers={args.workers}).\n",
+            f"(target={args.target}, preset={preset}, intent={intent.value}, "
+            f"workers={args.workers}).\n",
         )
         return 0
 

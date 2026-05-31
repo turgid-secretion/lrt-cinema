@@ -64,6 +64,7 @@ def test_render_help_lists_9_flag_surface(capsys):
         "--dry-run", "--quiet",
         "--apply-lrt-offsets", "--no-lrt-offsets",
         "--dcp", "--workers", "--no-dng-convert",
+        "--render-intent",  # v0.9 dual-mode (DECISIONS.md §7)
     ):
         assert flag in out, f"missing {flag}"
 
@@ -145,6 +146,33 @@ def test_dry_run_reports_what_would_render(tmp_path, capsys):
     # Dry-run must not have written any output TIFFs.
     assert not list(out.glob("*.tif"))
     assert not list(out.glob("*.exr"))
+
+
+def test_render_intent_defaults_faithful_and_reports_in_dry_run(tmp_path, capsys):
+    """--render-intent defaults to faithful and surfaces in the dry-run line;
+    an explicit perceptual is accepted (DECISIONS.md §7 dual-mode scaffold)."""
+    src = tmp_path / "input"
+    src.mkdir()
+    (src / "frame_0001.CR3").write_bytes(b"raw-stub")
+    shutil.copy(FIXTURES / "synthetic_keyframe_a.xmp", src / "frame_0001.CR3.xmp")
+    out = tmp_path / "out"
+
+    rc = main(["render", "--input", str(src), "--output", str(out), "--dry-run", "--quiet"])
+    assert rc == 0
+    assert "intent=faithful" in capsys.readouterr().err
+
+    rc = main(["render", "--input", str(src), "--output", str(out),
+               "--render-intent", "perceptual", "--dry-run", "--quiet"])
+    assert rc == 0
+    assert "intent=perceptual" in capsys.readouterr().err
+
+
+def test_render_rejects_unknown_intent(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["render", "--input", str(tmp_path), "--output", str(tmp_path / "o"),
+              "--render-intent", "bogus", "--dry-run"])
+    assert exc.value.code != 0
+    assert "render-intent" in capsys.readouterr().err.lower()
 
 
 def test_dry_run_does_not_touch_source_xmp(tmp_path):

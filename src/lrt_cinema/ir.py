@@ -9,6 +9,27 @@ inputs.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from enum import Enum
+
+
+class RenderIntent(str, Enum):
+    """Grading applicator mode for the Stage-12 develop ops (DECISIONS.md §7).
+
+    - **FAITHFUL** — today's Adobe-hexcone HSL + additive split-tone Color
+      Grade. Reproduces the Lightroom look; feeds the **sRGB display TIFF**
+      (the LRT round-trip). The default.
+    - **PERCEPTUAL** — modern primitives (OKLCh HSL, ASC-CDL grade,
+      local-Laplacian texture) for the **ACEScg EXR master**.
+
+    The op IR (`HslBands`, `ColorGrade`) is shared across intents; only the
+    *applicator* differs (`develop_ops.apply_stage_12_perceptual`). Until the
+    perceptual primitives land (steps 2-4) PERCEPTUAL aliases FAITHFUL, so the
+    switch is wired but byte-exact. `str, Enum` so the value ("faithful" /
+    "perceptual") is directly usable as a CLI choice.
+    """
+
+    FAITHFUL = "faithful"
+    PERCEPTUAL = "perceptual"
 
 
 @dataclass(frozen=True)
