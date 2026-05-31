@@ -20,10 +20,9 @@ See [CHANGELOG.md](CHANGELOG.md) for the release history.
 | Per-camera DCP profile loading + ColorMatrix interpolation | shipped | `dcp.py`; auto-detect from `$LRT_CINEMA_PROFILES` / `~/.config/lrt-cinema/profiles` (open `.npz`); clean-room `.dcp` reader for `--dcp` |
 | LR Exposure2012, Blacks2012, ToneCurvePV2012, Saturation, Vibrance, Contrast2012 | shipped | `develop_ops.py` (greenfield from public LR formulas) |
 | NEF→DNG preprocessing | shipped | `dng_convert.py` wraps **dnglab** (open-source, LGPL-2.1; Adobe-free); mtime+size cache |
-| `cinema-linear-finished` output (16-bit half DWAB EXR; γ) | **shipped v0.7.0** | `output.py`; v0.7 default; 10–18× smaller than `cinema-aces` |
-| `cinema-linear-master` output (16-bit half DWAB EXR at Stage 7; β) | **shipped v0.7.1** | `output.py` + `pipeline.py` `stop_after_stage=7`; skips DCP LookTable + ProfileToneCurve for HDR headroom |
-| `cinema-linear` output (32-bit float linear Rec.2020 TIFF) | shipped | `output.py` via `tifffile`; v0.6 back-compat |
-| `cinema-aces` output (32-bit float linear Rec.2020 PIZ EXR) | **deprecated** | `output.py`; one-time `DeprecationWarning`; removal in v0.8 |
+| `lrtimelapse` output (16-bit sRGB display TIFF, embedded ICC, `LRT_NNNNN`) | **shipped; v0.8 DEFAULT** | `output.py`; the LRT video round-trip emission |
+| `cinema-linear-finished` output (16-bit half DWAB EXR, ACEScg; γ) | shipped | `output.py`; scene-linear master for Resolve / ACES |
+| `cinema-linear-master` output (16-bit half DWAB EXR at Stage 7, ACEScg; β) | shipped | `output.py` + `pipeline.py` `stop_after_stage=7`; skips DCP LookTable + ProfileToneCurve for HDR headroom |
 | Parallel worker pool | shipped | `--workers N`, `ProcessPoolExecutor` |
 
 ## Known limitations / deferred
@@ -90,15 +89,16 @@ part we *own and can tune* from the reference's own irreducible look:
 For the Adobe purge, `dng_validate` stays a test-only oracle and the proven
 **0.789** is the target to tune open-DCP renders back toward.
 
-## CLI surface (9 flags)
+## CLI surface
 
 ```
 lrt-cinema render
   --input PATH               (required)  source RAW + LRT XMP folder
   --output PATH              (required)  destination folder
-  --preset NAME              default cinema-linear-finished
-                             (cinema-linear-finished | cinema-linear |
-                              cinema-aces | stills-finished)
+  --target {lrtimelapse,resolve,master}  default lrtimelapse; expands to a preset
+  --preset NAME              advanced; overrides --target
+                             (lrtimelapse | cinema-linear-finished |
+                              cinema-linear-master | stills-finished)
   --from-frame N             default 0
   --to-frame N               default = end of sequence
   --dry-run                  print what would render; no I/O

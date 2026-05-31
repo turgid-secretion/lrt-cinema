@@ -102,7 +102,7 @@ Power-user knobs:
 
 ```bash
 lrt-cinema render \
-  --input ... --output ... --preset cinema-aces \
+  --input ... --output ... --target resolve \
   --dcp /path/to/camera.dcp \
   --workers 4 \
   --from-frame 0 --to-frame 500 \
@@ -111,7 +111,7 @@ lrt-cinema render \
   --dry-run
 ```
 
-See `lrt-cinema render --help` for the full surface (9 flags).
+See `lrt-cinema render --help` for the full flag surface.
 
 ## Scope and non-goals
 
