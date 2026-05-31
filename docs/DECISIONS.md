@@ -7,11 +7,15 @@ research dump. The raw research that produced these verdicts (the `v06`/`v07`/
 records) was archived and removed in the Phase-4 doc reduction; recover any of it
 from git tag **`phase4-research-archive`** (e.g. `git show phase4-research-archive:<path>`).
 
-Two research docs survived the cull as **live authorities** and are cited below:
+These research docs are **live authorities** and are cited below (the `v06`–`v08`
+series was otherwise archived in the Phase-4 cull):
 - [`research/v08-linear-exr-gamut-resolve-nuke.md`](research/v08-linear-exr-gamut-resolve-nuke.md)
   — the colour-space allowlist authority (on-box Resolve verification).
 - [`research/v08-synthetic-chromatic-rootcause.md`](research/v08-synthetic-chromatic-rootcause.md)
   — the 2026-05-30 chromatic-fix trace.
+- [`research/v09-perceptual-grading-frontier.md`](research/v09-perceptual-grading-frontier.md)
+  — the dual-mode grading authority (§7): perceptual-space candidates + the
+  measurable-"better" axes.
 
 Canonical companions: [`PIPELINE.md`](PIPELINE.md) (the as-built engine),
 [`VALIDATION.md`](VALIDATION.md) (the three validation axes),
@@ -189,6 +193,76 @@ choice is then decided empirically by that spike (web/Electron if proxy-readback
 latency is acceptable; Qt/QML zero-copy if not), starting from a licence-clean
 snapshot fork of vkdt at 1.0.0 (rewrite qvk behind its `qvk.h` interface;
 Makefile → CMake for Windows).
+
+---
+
+## 7. Dual-mode grading — `--render-intent {faithful, perceptual}`; faithful default; modern primitives on the master
+
+**Decision.** The Stage-12 grading ops (HSL, Color Grade, and future
+Texture/Clarity) become **dual-mode**, selected by a `--render-intent` switch:
+- **`faithful` (default)** — today's Adobe-hexcone HSL + additive split-tone
+  Color Grade. Feeds the **sRGB display TIFF** (the LRT round-trip). Its job is
+  to reproduce the **Lightroom look** the LRT user authored.
+- **`perceptual`** — modern primitives: **OKLCh** HSL (gamut-agnostic,
+  D50/~D60→D65 adapted — *not* Okhsl, which is sRGB-gamut-bound), **ASC CDL
+  (SOP+saturation)** Color Grade in a log domain, **local-Laplacian /
+  guided-filter** Texture/Clarity. Feeds the **ACEScg EXR master**
+  (Resolve/ACES).
+
+The op IR dataclasses (`HslBands`, `ColorGrade`) are **shared**; only the
+*applicator* branches on intent. Both modes preserve the hard invariants:
+zero-slider **byte-exact identity** (the ΔE ship gate is untouched —
+[`PIPELINE.md`](PIPELINE.md), [`VALIDATION.md`](VALIDATION.md)); the
+**colour-space allowlist** (perceptual spaces are internal *working* transforms —
+emission stays sRGB / ACEScg, no new gamut, §1); and **neutrals-passing ≠
+correct** (validate the perceptual ops against *saturated* colour). The master's
+perceptual ops may exceed AP1 → apply **ACES Reference Gamut Compression** before
+the AP1 encode (`colour` 0.4.x has no general gamut compression; use the ACES RGC
+CTL or OCIO ≥ 2.1).
+
+**Why.** This maps 1:1 onto the project's **two-fold purpose**. (1) The
+sRGB-TIFF path proves an Adobe-free workflow is *feasible inside LRT's current
+paradigm* — same look, straight back into LRTimelapse for Motion Blur — so
+faithfulness **is** correctness there and the path must not drift from Adobe.
+(2) The ACEScg-master path demonstrates what an Adobe dependence *leaves on the
+table* — hue-stable HSL (no Abney / Bezold–Brücke drift), standards-native CDL
+that round-trips losslessly into a colorist's first node, halo-free local
+contrast — the "advantageous, not merely feasible" argument aimed at getting on
+the LRTimelapse creator's radar. A single mode cannot serve both: an
+all-perceptual pipeline breaks TIFF round-trip fidelity; an all-faithful pipeline
+forfeits the Mode-2 advantage that is half the reason this repo exists. "Better"
+here is the **measurable** set only (perceptual-uniformity, hue-constancy, gamut,
+halos) — not an aesthetic claim (that needs an observer panel we do not have).
+Full per-op candidates, metrics, and primary sources in the live authority
+[`research/v09-perceptual-grading-frontier.md`](research/v09-perceptual-grading-frontier.md).
+
+**Faithful-path improvement policy** (the one nuance). Research improvements
+**do** land on the faithful/TIFF path when they are **compliance-safe** — i.e.
+they remove a defect *ours* has that Adobe does **not** (negative ProPhoto
+channels, NaN, gamut clipping / posterization on saturated boosts), which moves
+the TIFF *toward* the Adobe look, never away. But a **working-domain switch** on
+the TIFF (e.g. HSV-hexcone → OKLCh) is **not** made speculatively — it is **gated
+on Tier-1 ACR golden-set evidence** (the grading-sweep harness,
+`tools/grading_sweep/`) showing the modern primitive is *also more faithful*
+(lower ΔE vs ACR across the lever sweep). Until that data exists the TIFF stays
+Adobe-hexcone. This keeps the feasibility claim evidence-backed and turns the
+fidelity question into a measurement, not a guess.
+
+**Sequencing.** (1) dual-mode scaffold (shared dataclass + intent dispatch
+through `cli`/`pipeline`/`develop_ops`); (2) Color Grade → CDL on the master
+(lowest risk, native ACES interchange); (3) HSL → OKLCh on the master (+ ACES RGC
+pass); (4) Texture/Clarity (local Laplacian) only on demand; (5) TIFF ops stay
+faithful and untouched pending Tier-1 ACR data.
+
+**Rejected alternatives** (one line each):
+- **Single perceptual pipeline** — breaks the LRT round-trip (the TIFF must
+  *match* the Lightroom look, not "improve" on it).
+- **Single faithful pipeline** — forfeits the Mode-2 "what Adobe costs you"
+  demonstration; defeats half the project's purpose.
+- **Speculative TIFF domain-swap to OKLCh** — risks moving the TIFF *away* from
+  the Adobe look with no evidence; gated on the ACR golden set instead.
+- **Okhsl / Okhsv on the master** — sRGB-gamut-bound by construction; wrong for
+  wide-gamut ACEScg (use OKLCh proper).
 
 ---
 
