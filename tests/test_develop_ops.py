@@ -241,3 +241,17 @@ def test_apply_stage_11_then_stage_12_matches_full_dispatcher():
     full = apply_develop_ops(x, ops)
     decomposed = apply_stage_12_perceptual(apply_stage_11_linear(x, ops), ops)
     np.testing.assert_array_equal(full, decomposed)
+
+
+def test_saturation_past_s1_emits_no_negative_channels():
+    """Axis-1 oracle for the apply_saturation HSV-S clamp (the headline bug).
+
+    An already-saturated pixel × a big +sat pushes S*mult > 1; without clamping
+    S to [0,1], _hsv_to_rgb_dcp emits NEGATIVE linear-ProPhoto channels, which
+    output.py's ProPhoto→target matrix then mixes in BEFORE the [0,1] clip — so
+    saturated colour renders wrong (a grey wedge is blind; see CLAUDE.md §0).
+    The clamp mirrors apply_vibrance. NB: a pixel sitting ON S=1 cannot detect
+    this — S*mult must EXCEED 1, so use a sub-1-S pixel with a large +sat."""
+    x = np.array([[[0.80, 0.10, 0.05]]], dtype=np.float32)  # S≈0.94 (< 1)
+    out = apply_saturation(x, 80.0)  # mult=1.8 → S*1.8≈1.69 > 1 before clamp
+    assert out.min() >= 0.0, f"negative linear-ProPhoto channel leaked: min={out.min()}"

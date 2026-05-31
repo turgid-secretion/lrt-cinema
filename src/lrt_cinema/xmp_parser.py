@@ -96,6 +96,22 @@ def _parse_float(text: str | None, default: float = 0.0) -> float:
     return value if math.isfinite(value) else default
 
 
+def _try_finite_float(text: str | None) -> float | None:
+    """Parse a float, returning None on malformed OR non-finite (NaN/Inf) input.
+
+    The single guarded entry point for numeric parses that feed pixel values
+    (tone-curve points, mask/deflicker EV deltas). Non-finite values otherwise
+    propagate into exposure_ev / struct.pack and render a solid black frame with
+    no diagnostic — the hazard `_parse_float` documents, here applied uniformly."""
+    if text is None:
+        return None
+    try:
+        value = float(text.strip().lstrip("+"))
+    except ValueError:
+        return None
+    return value if math.isfinite(value) else None
+
+
 def _parse_int(text: str | None) -> int | None:
     if text is None:
         return None
@@ -103,10 +119,13 @@ def _parse_int(text: str | None) -> int | None:
     try:
         return int(cleaned)
     except ValueError:
-        try:
-            return int(round(float(cleaned)))
-        except ValueError:
-            return None
+        pass
+    # Fall back to a float parse (e.g. "5500.0"). Guard non-finite: int(round(
+    # ±inf)) raises OverflowError (an ArithmeticError, NOT a ValueError) which
+    # would escape parse_sequence's skip-and-warn handler and abort the whole
+    # batch. "1e999"/"inf"/"nan" therefore degrade to None, not a crash.
+    value = _try_finite_float(cleaned)
+    return None if value is None else int(round(value))
 
 
 def _read_attr_or_child(elem: ET.Element, qname: str) -> str | None:
@@ -135,12 +154,11 @@ def _parse_tone_curve(desc: ET.Element) -> list[TonePoint]:
         parts = [p.strip() for p in li.text.split(",")]
         if len(parts) != 2:
             continue
-        try:
-            x = float(parts[0]) / 255.0
-            y = float(parts[1]) / 255.0
-        except ValueError:
-            continue
-        points.append(TonePoint(x=x, y=y))
+        xv = _try_finite_float(parts[0])
+        yv = _try_finite_float(parts[1])
+        if xv is None or yv is None:
+            continue  # malformed or non-finite tone point → skip (not black frame)
+        points.append(TonePoint(x=xv / 255.0, y=yv / 255.0))
     return points
 
 
@@ -254,12 +272,9 @@ def _parse_lrt_mask_offsets(desc: ET.Element) -> list[tuple[str, float]]:
         ev_str = inner.get(_q("crs", "LocalExposure2012"))
         if ev_str is None:
             continue
-        try:
-            ev = float(ev_str)
-        except ValueError:
-            continue
-        if ev == 0.0:
-            continue  # filter initialized-but-unused corrections
+        ev = _try_finite_float(ev_str)
+        if ev is None or ev == 0.0:
+            continue  # malformed/non-finite, or initialized-but-unused correction
         results.append((kind, ev))
     return results
 
@@ -338,10 +353,7 @@ def parse_xmp_file(
                 desc, LRT_NS_HINTS["deflicker_attr_synthetic"],
             )
             if deflicker_value is not None:
-                try:
-                    deflicker_delta = float(deflicker_value)
-                except ValueError:
-                    deflicker_delta = None
+                deflicker_delta = _try_finite_float(deflicker_value)
 
         mask_offsets.extend(_parse_lrt_mask_offsets(desc))
 
@@ -388,11 +400,15 @@ def parse_sequence(folder: Path, raw_extensions: tuple[str, ...] = (
             ops, is_kf, deflicker_delta, rating, mask_offsets = (
                 parse_xmp_file(xmp)
             )
-        except (ET.ParseError, ValueError) as exc:
-            # Silent skip-on-corruption is a data-loss path: a half-written
-            # XMP (LRT crash, partial save) silently degrades the frame to
-            # defaults and the render produces a flat frame mid-sequence.
-            # Surface the skip so the user can investigate.
+        except (ET.ParseError, ValueError, OSError, ArithmeticError) as exc:
+            # Skip-and-warn on a single corrupt sidecar rather than aborting the
+            # whole batch parse. Covers: ParseError/ValueError (incl.
+            # defusedxml's XXE/billion-laughs guard — a ValueError subclass);
+            # OSError (sidecar deleted/permission-denied between the exists()
+            # check and parse — a TOCTOU window); ArithmeticError (OverflowError
+            # from a non-finite Temperature/Tint). Surface the skip so a
+            # half-written XMP (LRT crash, partial save) is investigable rather
+            # than silently degrading one frame to defaults mid-sequence.
             sys.stderr.write(
                 f"warning: skipping unreadable XMP {xmp.name}: {exc}\n"
             )

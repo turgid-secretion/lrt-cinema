@@ -203,3 +203,42 @@ def test_inspect_show_fields_dumps_per_keyframe_ops(tmp_path, capsys):
     rc = main(["inspect", "--input", str(src), "--show-fields"])
     assert rc == 0
     assert "ev=" in capsys.readouterr().out
+
+
+def test_render_help_lists_target_flag(capsys):
+    with pytest.raises(SystemExit):
+        main(["render", "--help"])
+    assert "--target" in capsys.readouterr().out
+
+
+def _stub_seq(tmp_path):
+    src = tmp_path / "in"
+    src.mkdir()
+    (src / "frame_0001.CR3").write_bytes(b"raw-stub")
+    shutil.copy(FIXTURES / "synthetic_keyframe_a.xmp", src / "frame_0001.CR3.xmp")
+    return src
+
+
+def test_target_default_expands_to_lrtimelapse(tmp_path, capsys):
+    src = _stub_seq(tmp_path)
+    rc = main(["render", "--input", str(src), "--output", str(tmp_path / "out"),
+               "--dry-run", "--quiet"])
+    assert rc == 0
+    assert "preset=lrtimelapse" in capsys.readouterr().err
+
+
+def test_target_resolve_expands_to_cinema_linear_finished(tmp_path, capsys):
+    src = _stub_seq(tmp_path)
+    rc = main(["render", "--input", str(src), "--output", str(tmp_path / "out"),
+               "--target", "resolve", "--dry-run", "--quiet"])
+    assert rc == 0
+    assert "preset=cinema-linear-finished" in capsys.readouterr().err
+
+
+def test_preset_overrides_target(tmp_path, capsys):
+    src = _stub_seq(tmp_path)
+    rc = main(["render", "--input", str(src), "--output", str(tmp_path / "out"),
+               "--target", "resolve", "--preset", "lrtimelapse",
+               "--dry-run", "--quiet"])
+    assert rc == 0
+    assert "preset=lrtimelapse" in capsys.readouterr().err

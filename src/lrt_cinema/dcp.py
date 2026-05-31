@@ -59,8 +59,11 @@ References
 
 from __future__ import annotations
 
+import os
 import struct
 import sys
+import tempfile
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO
@@ -1136,17 +1139,43 @@ def save_profile(profile: DCPProfile, path: Path) -> None:
         )
         arrays["look_srgb_gamma"] = np.int32(1 if lt.srgb_gamma else 0)
         arrays["look_data"] = lt.data_1.astype(np.float32)
-    np.savez_compressed(path, **arrays)
+    # Atomic write — a crashed or concurrent extract must not leave a
+    # half-written archive that then crashes every render auto-detecting it
+    # (load_profile would raise BadZipFile/KeyError). Write to a temp file in
+    # the same dir, then os.replace (atomic on the same filesystem). Pass a file
+    # object so np.savez_compressed does not re-append ".npz" to the temp name.
+    fd, tmp = tempfile.mkstemp(suffix=".npz.tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            np.savez_compressed(fh, **arrays)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def load_profile(path: Path) -> DCPProfile:
     """Deserialize a DCPProfile from lrt-cinema's `.npz` extracted format.
 
-    Raises ValueError on missing required fields (ColorMatrix1, profile name)
-    or on a format-version we don't recognize. Optional fields default
-    consistently with `parse_dcp`'s behavior on a DCP that simply omits them.
+    Honors the `(FileNotFoundError, ValueError)` error contract every callsite
+    relies on (mirrors `parse_dcp`): a corrupt/incomplete `.npz` — missing key,
+    bad zip, truncated archive — is rewrapped as ValueError rather than leaking a
+    bare KeyError/BadZipFile that escapes the CLI's `--dcp` preflight. Raises
+    ValueError on missing required fields, an unknown format-version, or a
+    malformed archive; FileNotFoundError when the path is absent.
     """
     path = Path(path)
+    try:
+        return _load_profile_npz(path)
+    except (FileNotFoundError, ValueError):
+        raise  # already the documented contract types, with good messages
+    except (KeyError, zipfile.BadZipFile, EOFError, OSError) as exc:
+        raise ValueError(
+            f"{path}: malformed extracted profile ({type(exc).__name__}: {exc})"
+        ) from exc
+
+
+def _load_profile_npz(path: Path) -> DCPProfile:
     with np.load(path, allow_pickle=False) as data:
         version = int(data["format_version"])
         if version != _PROFILE_FORMAT_VERSION:

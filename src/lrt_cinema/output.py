@@ -32,6 +32,7 @@ Library boundary:
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 from typing import Literal
 
@@ -216,6 +217,18 @@ def write_tiff_display(
             )
 
     encoded = _prophoto_to_display(prophoto, colorspace)
+    # np.clip does NOT sanitize NaN (nan→clip→nan→uint cast→0): a non-finite
+    # pixel would silently render solid black with no diagnostic. Scrub + warn
+    # so upstream corruption is visible, never a silent black/white frame.
+    n_nonfinite = int(np.count_nonzero(~np.isfinite(encoded)))
+    if n_nonfinite:
+        warnings.warn(
+            f"{n_nonfinite} non-finite (NaN/Inf) pixel value(s) scrubbed before "
+            f"quantising {Path(dst).name} — upstream produced invalid pixels; "
+            f"investigate rather than ship a silently-corrupt frame.",
+            stacklevel=2,
+        )
+        encoded = np.nan_to_num(encoded, nan=0.0, posinf=1.0, neginf=0.0)
     clipped = np.clip(encoded, 0.0, 1.0)
     if bit_depth == 16:
         pixels = (clipped * 65535.0 + 0.5).astype(np.uint16)
@@ -307,6 +320,16 @@ def write_exr_scene_linear(
         )
 
     pixels = _prophoto_to_linear(prophoto, colorspace).astype(np.float32)
+    # Scene-linear keeps intended overrange (>1), but NaN/Inf are corruption —
+    # scrub (NaN→0, +Inf→half-max, -Inf→0) and warn so it is never silent.
+    n_nonfinite = int(np.count_nonzero(~np.isfinite(pixels)))
+    if n_nonfinite:
+        warnings.warn(
+            f"{n_nonfinite} non-finite (NaN/Inf) pixel value(s) scrubbed before "
+            f"writing {Path(dst).name} — upstream produced invalid pixels.",
+            stacklevel=2,
+        )
+        pixels = np.nan_to_num(pixels, nan=0.0, posinf=65504.0, neginf=0.0)
     if bit_depth == "half":
         pixels = pixels.astype(np.float16)
     dst = Path(dst)
