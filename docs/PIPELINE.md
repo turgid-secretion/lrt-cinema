@@ -265,9 +265,10 @@ re-ingests (LRT → Render from Intermediate → Motion Blur); see
   **piecewise-linear only** (Catmull-Rom deleted, 2026-05-24), constant
   extrapolation at ends. `apply_deflicker` + `apply_lrt_mask_offsets` add EV
   deltas (Holy-Grail/Deflicker/Global).
-- **`dng_convert`**: NEF→DNG via **dnglab** (default; Adobe DNG Converter
-  fallback). It does no tag manipulation itself — but **dnglab strips the
-  ForwardMatrix** (see [§3](#3-the-camera→prophoto-colour-transform-stage-3-4)).
+- **`dng_convert`**: NEF→DNG via **dnglab** — the sole, Adobe-free converter
+  (the Adobe DNG Converter binary discovery + fallback were removed in the
+  Phase-3 Adobe purge). It does no tag manipulation itself — but **dnglab strips
+  the ForwardMatrix** (see [§3](#3-the-camera→prophoto-colour-transform-stage-3-4)).
 
 ---
 

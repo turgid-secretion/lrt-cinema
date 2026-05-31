@@ -944,20 +944,21 @@ def read_raw_make_model(raw_path: Path) -> tuple[str, str] | None:
 
 
 # ---------------------------------------------------------------------------
-# Adobe DCP install paths + camera Make/Model → DCP filename
+# Camera Make/Model → extracted-profile filename label
 # ---------------------------------------------------------------------------
 #
-# Per Adobe DNG Converter convention (also LR Classic's bundled set), DCPs
-# install at one of:
-#   <root>/Adobe Standard/<Make> <Model> Adobe Standard.dcp
-#   <root>/Camera/<Make> <Model>/<Make> <Model> Camera <variant>.dcp
-# Real LRT XMP carries `crs:CameraProfile="Camera Standard"` by default, so
-# our auto-detect prefers the Camera Standard variant over the Adobe Standard
-# fallback — that matches what LR rendered the LRT preview with.
+# Extracted `.npz` profiles are named `<Make> <Model> <variant>.npz`; the
+# convention mirrors Adobe's DCP filenames (e.g. "Nikon D750 Camera
+# Standard.npz") so a one-shot extraction from a user's own DCP install yields
+# predictable, auto-detectable names. Real LRT XMP carries
+# `crs:CameraProfile="Camera Standard"` by default, so
+# `find_extracted_profile_for_camera` prefers the Camera Standard variant over
+# the Adobe Standard fallback — that matches what LR rendered the LRT preview
+# with.
 
-# EXIF Make → Adobe's DCP-filename Make. Adobe normalizes vendor strings
-# from EXIF caps + corporate-suffix forms ("NIKON CORPORATION") to the
-# friendly form ("Nikon"). PENTAX is uppercase per Adobe's own filenames.
+# EXIF Make → filename Make. Vendor strings are normalized from EXIF caps +
+# corporate-suffix forms ("NIKON CORPORATION") to the friendly form ("Nikon").
+# PENTAX is uppercase to match the established profile-filename convention.
 _ADOBE_MAKE_NORMALIZE = {
     "NIKON CORPORATION": "Nikon",
     "NIKON": "Nikon",
@@ -985,9 +986,10 @@ def adobe_make_for_camera(make: str) -> str:
 
 
 def _adobe_camera_label(make: str, model: str) -> str:
-    """Build the `<Make> <Model>` label Adobe uses in DCP filenames.
+    """Build the `<Make> <Model>` label used as the extracted-profile filename
+    stem (the convention mirrors Adobe's DCP naming, e.g. "Nikon D750").
 
-    Adobe strips a leading Make from Model when present. The strip is
+    A leading Make is stripped from Model when present. The strip is
     against the NORMALIZED Make (the first word, uppercased) so a NEF
     whose EXIF Make is "NIKON CORPORATION" and Model "NIKON D750" still
     yields label "Nikon D750" (Model's "NIKON" prefix matches the
@@ -1000,64 +1002,16 @@ def _adobe_camera_label(make: str, model: str) -> str:
     make_head = make.strip().split()[0].upper() if make.strip() else ""
     if make_head and m.upper().startswith(make_head):
         m = m[len(make_head):].strip()
-    return f"{norm_make} {m}".strip()
-
-
-def _adobe_dcp_search_roots() -> list[Path]:
-    """DCP install roots present on this system, in lookup order.
-
-    Adobe DNG Converter is the canonical install path. LR Classic ships a
-    duplicate set under its .app bundle on macOS; we include it as a
-    fallback for users who installed LR but not the standalone converter.
-    Linux has no canonical Adobe install location.
-    """
-    roots: list[Path] = []
-    if sys.platform == "darwin":
-        roots.append(Path("/Library/Application Support/Adobe/CameraRaw/CameraProfiles"))
-        lr_bundle = Path(
-            "/Applications/Adobe Lightroom Classic/"
-            "Adobe Lightroom Classic.app/Contents/Resources/CameraProfiles"
-        )
-        roots.append(lr_bundle)
-    elif sys.platform == "win32":
-        import os
-        program_data = Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData"))
-        roots.append(program_data / "Adobe" / "CameraRaw" / "CameraProfiles")
-    return [r for r in roots if r.is_dir()]
-
-
-def find_dcp_for_camera(
-    make: str,
-    model: str,
-    extra_roots: list[Path] | None = None,
-) -> Path | None:
-    """Locate a DCP for (`make`, `model`) under standard Adobe install paths.
-
-    Lookup order (first hit wins):
-      1. `Camera/<label>/<label> Camera Standard.dcp`
-         — matches LR's default `crs:CameraProfile="Camera Standard"`
-      2. `Camera/<label>/<label> Adobe Standard.dcp`
-         — some camera subfolders use the Adobe-Standard naming
-      3. `Adobe Standard/<label> Adobe Standard.dcp`
-         — Adobe's universal fallback, present for every supported body
-
-    Returns None when no DCP is found across all roots and naming
-    variants. The caller is expected to log a clear warning and fall
-    back to the no-DCP code path.
-    """
-    label = _adobe_camera_label(make, model)
-    roots = _adobe_dcp_search_roots()
-    if extra_roots:
-        roots.extend(r for r in extra_roots if r.is_dir())
-    for root in roots:
-        for candidate in (
-            root / "Camera" / label / f"{label} Camera Standard.dcp",
-            root / "Camera" / label / f"{label} Adobe Standard.dcp",
-            root / "Adobe Standard" / f"{label} Adobe Standard.dcp",
-        ):
-            if candidate.is_file():
-                return candidate
-    return None
+    label = f"{norm_make} {m}".strip()
+    # Harden against EXIF→path-traversal (bug #8). This label is interpolated
+    # into a filesystem path by `find_extracted_profile_for_camera`
+    # (`<root>/<label> <variant>.npz`), and EXIF Make/Model is attacker-
+    # controllable. Strip path separators and NUL so a hostile Model like
+    # "x/../../../../etc/evil" cannot escape the profile search root: with these
+    # removed the label is always a single path segment, and the appended
+    # "<variant>.npz" suffix means it can never resolve to "." or "..". A mangled
+    # label simply matches no profile → auto-detect returns None.
+    return label.translate({ord("/"): None, ord("\\"): None, ord("\x00"): None})
 
 
 # ---------------------------------------------------------------------------
@@ -1240,8 +1194,8 @@ def _extracted_profile_search_roots() -> list[Path]:
        absolute directory (typically points at a cloned sister
        `lrt-cinema-profiles` repo or a custom local cache).
     2. `~/.config/lrt-cinema/profiles/` — XDG-style per-user config dir,
-       written by `tools/extract_dcp_library.py` when the user runs the
-       one-shot extraction against their Adobe DCP install.
+       written by `tools/extract_dcp_library.py <source_root>` when the user
+       runs the one-shot extraction against a `.dcp` source they supply.
 
     Linux / macOS use the XDG path verbatim; Windows uses the
     `%APPDATA%/lrt-cinema/profiles` equivalent. Honors the
@@ -1297,21 +1251,18 @@ def auto_detect_profile(
     raw_path: Path,
     extra_extracted_roots: list[Path] | None = None,
 ) -> tuple[DCPProfile, Path] | None:
-    """End-to-end profile lookup: try extracted `.npz` first, then Adobe `.dcp`.
+    """End-to-end profile lookup via the Adobe-free extracted `.npz` roots.
 
-    Probes the RAW's EXIF Make/Model, then:
-      1. Searches the extracted-profile roots (env var, user config,
-         optional `extra_extracted_roots`). When a match is found, loads
-         and returns the DCPProfile directly — no Adobe install required.
-      2. Falls back to the Adobe DCP install paths (matches dt's libraw
-         /lr's bundled-profile convention on macOS / Windows). Parses the
-         `.dcp` and returns the DCPProfile.
-      3. Returns None when neither path turns up a match (caller logs a
-         clear "install profile data or pass --dcp" message).
+    Probes the RAW's EXIF Make/Model, then searches the extracted-profile
+    roots (`$LRT_CINEMA_PROFILES`, the per-user config dir, and any
+    `extra_extracted_roots`). On a match, loads and returns the DCPProfile —
+    no Adobe install required. Returns None when no match is found; the caller
+    logs a clear "populate $LRT_CINEMA_PROFILES or pass --dcp" message and can
+    still supply a profile explicitly via `--dcp` (a `.npz`, or a
+    clean-room-parsed `.dcp`).
 
     Returns `(profile, source_path)` so callers can log where the profile
-    came from. Both lookup arms share the same DCPProfile shape — the
-    caller doesn't need to know which arm fired.
+    came from.
     """
     info = read_raw_make_model(raw_path)
     if info is None:
@@ -1322,7 +1273,4 @@ def auto_detect_profile(
     )
     if extracted_path is not None:
         return load_profile(extracted_path), extracted_path
-    dcp_path = find_dcp_for_camera(make, model)
-    if dcp_path is not None:
-        return parse_dcp(dcp_path), dcp_path
     return None

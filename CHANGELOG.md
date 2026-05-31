@@ -31,12 +31,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `acesImageContainerFlag`. The < 1 ΔE pipeline ship gate is unaffected (output
   colourspace is independent of the validated render). See
   `docs/research/v08-linear-exr-gamut-resolve-nuke.md`.
-- **RAW→DNG conversion is now Adobe-free (dnglab).** `dng_convert.py` uses
-  **dnglab** (open, LGPL-2.1) by default — a verified drop-in for the Adobe DNG
-  Converter (dnglab-DNG vs Adobe-DNG on the same pipeline+DCP = mean ΔE 0.059,
-  100 % < 1 ΔE). Adobe DNG Converter retained only as a fallback
-  (`$LRT_CINEMA_DNG_CONVERTER`); discovery order is `$LRT_CINEMA_DNGLAB` → PATH →
-  common installs → Adobe. The render chain no longer requires any Adobe binary.
+- **The runtime is now fully Adobe-free (Phase 3).** dnglab (open-source,
+  LGPL-2.1) is the **sole** RAW→DNG converter — discovery is
+  `$LRT_CINEMA_DNGLAB` → PATH → common installs. The Adobe DNG Converter binary
+  discovery and the `$LRT_CINEMA_DNG_CONVERTER` fallback are **removed**
+  (`find_dng_converter`, `_DNG_CONVERTER_PATHS`). dnglab is a verified drop-in
+  (dnglab-DNG vs Adobe-DNG on the same pipeline+DCP = mean ΔE 0.059, 100 % < 1
+  ΔE) and ships Linux/macOS/Windows builds; `--no-dng-convert` remains the
+  libraw-direct fallback for boxes with no dnglab binary. DCP auto-detect no
+  longer scans an Adobe install directory (`find_dcp_for_camera`,
+  `_adobe_dcp_search_roots` removed) — profiles resolve only from the open
+  `.npz` roots (`$LRT_CINEMA_PROFILES`, `~/.config/lrt-cinema/profiles/`).
+  `--dcp` still accepts a `.dcp` (read by the clean-room `parse_dcp` reader, a
+  file-format reader — not an Adobe dependency) or an extracted `.npz`.
+  `tools/extract_dcp_library.py` now takes an **explicit** `<source_root>`
+  argument instead of hardcoding the Adobe install path. The `dng_validate`
+  reference renderer and system `.dcp` profiles remain **test-only** oracles
+  (the ΔE ship gate is unchanged). See `docs/PIPELINE.md` §8.
+
+### Security
+- **Fixed an EXIF→path-traversal in profile auto-detect (bug #8).** Camera
+  Make/Model read from untrusted RAW EXIF is interpolated into the
+  extracted-profile filename, so a hostile `Model` (e.g. `x/../../etc/evil`)
+  could make `find_extracted_profile_for_camera` probe a path outside the
+  profile search root. `_adobe_camera_label` now strips path separators and
+  NUL, keeping the label a single contained path segment. (Removing the
+  Adobe-install `.dcp` scan closed the sibling sink in the same class — the
+  original framing of bug #8.) Regression tests:
+  `test_camera_label_strips_path_separators_bug8`,
+  `test_find_extracted_profile_no_exif_path_traversal_bug8`.
 
 ### Verified (DaVinci Resolve Studio 21, headless — tools/resolve_verify/)
 - **ACEScg round-trip:** our ACEScg EXR, ingested via the named "ACEScg" Input
