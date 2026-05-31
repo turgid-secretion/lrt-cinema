@@ -42,7 +42,7 @@ from lrt_cinema.interpolation import (
     apply_lrt_mask_offsets,
     materialize_all_frames,
 )
-from lrt_cinema.ir import DevelopOps
+from lrt_cinema.ir import DevelopOps, RenderIntent
 from lrt_cinema.presets import DEFAULT_PRESET, PRESETS, STAGE_7_PRESETS
 from lrt_cinema.xmp_parser import parse_sequence
 
@@ -58,6 +58,19 @@ _TARGET_TO_PRESET = {
     "resolve": "cinema-linear-finished",   # ACEScg EXR master for Resolve/ACES
     "master": "cinema-linear-master",      # ACEScg EXR at Stage 7 (HDR headroom)
 }
+
+# Default render-intent per emission target (DECISIONS.md §7): the sRGB TIFF
+# (LRT round-trip) defaults to FAITHFUL (match the Lightroom look); the ACEScg
+# EXR masters default to PERCEPTUAL (our better math — the path with no Adobe
+# fidelity obligation, where the DR-compression / OKLCh / CDL ops live).
+# `--render-intent` overrides. Revisit the EXR→perceptual default only if a
+# control-loop mismatch in the LR-edit→render→review loop proves untameable.
+_PERCEPTUAL_DEFAULT_PRESETS = frozenset({"cinema-linear-finished", "cinema-linear-master"})
+
+
+def _default_intent_for_preset(preset: str) -> RenderIntent:
+    return (RenderIntent.PERCEPTUAL if preset in _PERCEPTUAL_DEFAULT_PRESETS
+            else RenderIntent.FAITHFUL)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -112,6 +125,21 @@ def _build_parser() -> argparse.ArgumentParser:
             "Advanced: explicit output preset, overrides --target. Choices: "
             "lrtimelapse, cinema-linear-finished, cinema-linear-master, "
             "stills-finished (deferred)."
+        ),
+    )
+    render.add_argument(
+        "--render-intent", dest="render_intent",
+        default=None,
+        choices=[i.value for i in RenderIntent],
+        help=(
+            "Stage-12 grading math (DECISIONS.md §7) — NOT a creative control; "
+            "all creative values come from the XMP knobs. faithful → "
+            "Adobe-matching math (the Lightroom look); perceptual → our modern "
+            "math (OKLCh / ASC-CDL / local-tone DR-compression). DEFAULT is "
+            "per-target: sRGB TIFF (lrtimelapse) → faithful; ACEScg EXR "
+            "(cinema-linear-*) → perceptual. This flag overrides that default. "
+            "NOTE: the perceptual applicators are not yet implemented — they "
+            "alias faithful today, so the switch is byte-exact until v0.9 steps 2-4."
         ),
     )
     render.add_argument(
@@ -188,6 +216,7 @@ class _RenderJob:
     preset: str
     no_dng_convert: bool
     dng_cache_dir: Path
+    intent: RenderIntent = RenderIntent.FAITHFUL
 
 
 @dataclass
@@ -232,7 +261,7 @@ def _render_one_frame(job: _RenderJob) -> _RenderResult:
             dng_path, profile, dcp_path=job.dcp_path, develop_ops=job.ops,
             stop_after_stage=stop_after_stage,
         )
-        with_dev_ops = apply_develop_ops(result.prophoto, job.ops)
+        with_dev_ops = apply_develop_ops(result.prophoto, job.ops, job.intent)
         write_preset_output(
             with_dev_ops, job.dst_stem, job.preset,
             provenance={
@@ -260,6 +289,29 @@ def _load_dcp_dispatch(path: Path) -> DCPProfile:
 
 
 _DROPPED_AT_EMIT_FIELDS = ("highlights", "shadows", "whites")
+
+
+def _warn_dropped_ops(per_frame: list[DevelopOps]) -> None:
+    """Surface, at RENDER time, any develop op that is SET in the XMP but will
+    NOT be applied — so a drop is never silent (DECISIONS.md §5/§7).
+
+    Today the PV5 basic-tone ops (Highlights/Shadows/Whites) have no applied
+    implementation in either intent; the forthcoming perceptual local-tone
+    DR-compression op (driven by these same XMP knobs) will apply them under
+    better-math. Emits one stderr line per set-but-dropped field, with the
+    frame count, so the user knows their edit is being set aside and that it
+    will not match their Lightroom preview.
+    """
+    n = len(per_frame)
+    for field in _DROPPED_AT_EMIT_FIELDS:
+        count = sum(1 for ops in per_frame if getattr(ops, field) != 0.0)
+        if count:
+            sys.stderr.write(
+                f"warning: crs:{field.capitalize()}2012 set on {count}/{n} frame(s) "
+                f"but NOT applied at render (DECISIONS §5; the perceptual local-tone "
+                f"DR-compression op that will honour it is forthcoming). These frames "
+                f"will not match your Lightroom preview.\n",
+            )
 
 
 def _cmd_inspect(args: argparse.Namespace) -> int:
@@ -428,6 +480,13 @@ def _cmd_render(args: argparse.Namespace) -> int:
 
     # --preset (advanced) overrides --target's preset bundle.
     preset = args.preset or _TARGET_TO_PRESET[args.target]
+    # Intent default is per-target (sRGB→faithful, EXR→perceptual); --render-intent
+    # overrides. All creative values still come from the XMP — intent only picks
+    # the grading math (DECISIONS.md §7).
+    intent = (RenderIntent(args.render_intent) if args.render_intent
+              else _default_intent_for_preset(preset))
+
+    _warn_dropped_ops(per_frame)
 
     jobs = []
     for i in range(args.from_frame, to_frame):
@@ -442,13 +501,15 @@ def _cmd_render(args: argparse.Namespace) -> int:
             preset=preset,
             no_dng_convert=args.no_dng_convert,
             dng_cache_dir=dng_cache_dir,
+            intent=intent,
         ))
 
     if args.dry_run:
         sys.stderr.write(
             f"dry-run: would render {len(jobs)} frame(s) "
             f"[{args.from_frame}..{to_frame}) → {args.output} "
-            f"(target={args.target}, preset={preset}, workers={args.workers}).\n",
+            f"(target={args.target}, preset={preset}, intent={intent.value}, "
+            f"workers={args.workers}).\n",
         )
         return 0
 

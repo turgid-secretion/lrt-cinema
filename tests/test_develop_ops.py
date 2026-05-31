@@ -24,7 +24,7 @@ from lrt_cinema.develop_ops import (
     apply_tone_curve_pv2012,
     apply_vibrance,
 )
-from lrt_cinema.ir import ColorGrade, DevelopOps, HslBands, TonePoint
+from lrt_cinema.ir import ColorGrade, DevelopOps, HslBands, RenderIntent, TonePoint
 
 # ---------------------------------------------------------------------------
 # Stage 11 — Exposure2012
@@ -334,6 +334,75 @@ def test_sharpness_is_no_op_in_v06():
 def test_apply_develop_ops_all_default_is_no_op():
     x = np.random.rand(4, 4, 3).astype(np.float32)
     np.testing.assert_array_equal(apply_develop_ops(x, DevelopOps()), x)
+
+
+# ---------------------------------------------------------------------------
+# Dual-mode render intent (DECISIONS.md §7) — the Stage-12 applicator seam
+# ---------------------------------------------------------------------------
+
+
+def test_render_intent_default_is_faithful():
+    """apply_develop_ops with no intent == explicit FAITHFUL."""
+    x = np.random.rand(4, 4, 3).astype(np.float32)
+    ops = DevelopOps(hsl=HslBands(saturation=(40.0, 0, 0, 0, 0, 0, 0, 0)))
+    np.testing.assert_array_equal(
+        apply_develop_ops(x, ops), apply_develop_ops(x, ops, RenderIntent.FAITHFUL),
+    )
+
+
+def test_render_intent_identity_byte_exact_both_modes():
+    """Default ops are a byte-exact no-op under BOTH intents — the ship-gate
+    guarantee survives the dual-mode seam."""
+    x = np.random.rand(8, 8, 3).astype(np.float32)
+    for intent in RenderIntent:
+        np.testing.assert_array_equal(apply_develop_ops(x, DevelopOps(), intent), x)
+
+
+def test_render_intent_routes_to_perceptual_applicators(monkeypatch):
+    """The seam wiring: PERCEPTUAL routes HSL + Color-Grade through the
+    `_apply_*_perceptual` functions (in order); FAITHFUL does not touch them.
+    Tested via monkeypatch so it validates ROUTING independent of the currently
+    aliased stub bodies — it survives steps 2-3 filling in the real primitives."""
+    import lrt_cinema.develop_ops as do
+
+    calls: list[str] = []
+
+    def hsl_p(pp, hsl):
+        calls.append("hsl_perceptual")
+        return pp
+
+    def cg_p(pp, cg):
+        calls.append("cg_perceptual")
+        return pp
+
+    monkeypatch.setattr(do, "_apply_hsl_perceptual", hsl_p)
+    monkeypatch.setattr(do, "_apply_color_grade_perceptual", cg_p)
+
+    x = np.zeros((2, 2, 3), dtype=np.float32)
+    ops = DevelopOps(
+        hsl=HslBands(saturation=(10.0, 0, 0, 0, 0, 0, 0, 0)),
+        color_grade=ColorGrade(shadow_sat=10.0),
+    )
+    do.apply_develop_ops(x, ops, RenderIntent.FAITHFUL)
+    assert calls == []                                  # faithful: not routed
+    do.apply_develop_ops(x, ops, RenderIntent.PERCEPTUAL)
+    assert calls == ["hsl_perceptual", "cg_perceptual"]  # perceptual: routed, in order
+
+
+def test_perceptual_aliases_faithful_until_primitives_land():
+    """Scaffold-state contract: the perceptual applicators alias the faithful
+    ones today (steps 2-3 not yet implemented), so the two intents are
+    byte-identical even with HSL + Color-Grade engaged. Step 2 (CDL) / step 3
+    (OKLCh) WILL intentionally flip this — update this test when they land."""
+    x = np.random.rand(8, 8, 3).astype(np.float32)
+    ops = DevelopOps(
+        hsl=HslBands(saturation=(50.0, 0, 0, 0, 0, 0, 0, 0)),
+        color_grade=ColorGrade(global_hue=120.0, global_sat=50.0),
+    )
+    np.testing.assert_array_equal(
+        apply_develop_ops(x, ops, RenderIntent.FAITHFUL),
+        apply_develop_ops(x, ops, RenderIntent.PERCEPTUAL),
+    )
 
 
 def test_apply_develop_ops_chains_in_order():
