@@ -144,7 +144,8 @@ def test_ship_gate_gym_de_under_1():
         f"Gym mean ΔE {m['mean']:.3f} exceeds ship gate {_SHIP_GATE_DE_MEAN}. "
         f"Detail: P50={m['P50']:.3f} P95={m['P95']:.3f} max={m['max']:.3f} "
         f"<1ΔE pixels={m['pct_lt_1']:.1f}%. "
-        "Baseline (research/python-pipeline-seed): 0.79 mean."
+        "Baseline: 0.026 mean (hue-preserving RefBaselineRGBTone, 2026-05-30; "
+        "was 0.79 with per-channel tone)."
     )
 
 
@@ -163,7 +164,8 @@ def test_ship_gate_rose_de_under_1():
         f"Rose mean ΔE {m['mean']:.3f} exceeds ship gate {_SHIP_GATE_DE_MEAN}. "
         f"Detail: P50={m['P50']:.3f} P95={m['P95']:.3f} max={m['max']:.3f} "
         f"<1ΔE pixels={m['pct_lt_1']:.1f}%. "
-        "Baseline (research/python-pipeline-seed): 0.84 mean."
+        "Baseline: 0.545 mean (hue-preserving RefBaselineRGBTone, 2026-05-30; "
+        "was 0.84 with per-channel tone)."
     )
 
 

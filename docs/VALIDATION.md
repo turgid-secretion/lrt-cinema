@@ -323,19 +323,17 @@ vs `dng_validate`; v0.8 `lrtimelapse` sRGB default vs LRT 7.5.3 preview.
 
 | Scene | mean ΔE | P50 (all) | P95 | max | <1 ΔE |
 |---|---:|---:|---:|---:|---:|
-| Gym (Camera Standard) | **0.789** | 0.198 | 4.19 | 10.55 | 76.8% |
-| Rose (Adobe Standard) | **0.844** | 0.803 | 1.70 | 7.72 | 69.6% |
+| Gym (Camera Standard) | **0.026** | 0.000 | 0.32 | 2.06 | 100% |
+| Rose (Adobe Standard) | **0.545** | 0.577 | 0.90 | 2.13 | 97.8% |
 
-Decomposition (gym): **flat non-edge pixels match Adobe EXACTLY — median ΔE
-0.000 over 94% of pixels.** The colour maths (matrix + tone curve + HueSatMap +
-LookTable) bit-match the open-spec reference. The mean is dragged by **edge
-pixels (1.62 ΔE, ~6% — a real demosaic-algorithm difference, libraw LINEAR vs
-Adobe; crop misalignment ruled out by an offset sweep, center-crop is optimal)**
-and a small flat-region colour tail (~5% of flat px above 4 ΔE). There is **no
-theoretical floor on the colour maths**; the real-scene mean floor is the
-demosaic choice (the DNG spec does not mandate a demosaic algorithm). A
-synthetic flat-patch chart (the planned Axis-2/3 harness) measures the pure
-colour-math agreement without edge/demosaic noise and can be driven toward ~0.
+History: gym was **0.789** until 2026-05-30. The drop is one fix — Stage 9 now
+applies the ProfileToneCurve as Adobe's hue/saturation-preserving
+`RefBaselineRGBTone` (curve max+min, interpolate the middle channel) instead of
+per-channel. The old "flat-region colour tail" and most of the "demosaic-edge
+tail" were that per-channel tone error firing wherever channels differ (edges +
+saturated colour); per-channel and hue-preserving are identical on neutrals
+(r=g=b), so the 0.000 flat-pixel median never exposed it. There is **no
+theoretical floor on the colour maths** — gym is now an effective bit-match.
 
 **vs LRT preview (v0.8 sRGB default, gym, identity develop):**
 - RAW: mean 2.92, P50 2.55, P95 7.36.
@@ -346,8 +344,8 @@ colour-math agreement without edge/demosaic noise and can be driven toward ~0.
   + ~2 (PV5 + JPEG — the reference's own look).**
 
 **North-star for the open-tool transition (Adobe purge):** keep `dng_validate`
-as a test-only oracle and tune open-DCP renders back toward the **proven 0.789**
-(median 0.000 — the maths already bit-match). The preview is the human-facing
+as a test-only oracle and tune open-DCP renders back toward the **proven 0.026**
+(gym, median 0.000 — the maths bit-match). The preview is the human-facing
 end-to-end check, reported as raw + affine-residual with the PV5 floor named so
 it is never mistaken for our error or chased past what is closed-source.
 
@@ -370,18 +368,23 @@ measurement point for both nonzero-floor axes.
   absolute accuracy.)
 - **Axis 3 — implementation vs `dng_validate`** (`tests/test_synthetic_dng.py`,
   D750). A flat-patch synthetic DNG (dnglab uncompressed clone + raw-strip
-  byte-patch honouring BlackLevel 600 / WhiteLevel 15520) rendered both sides
-  with Camera Standard. **Neutral wedge: median ΔE 0.000** across the tonal
-  range (incl. bright levels up to ProPhoto 0.65) — the clean isolation of the
-  bit-match, free of the demosaic-edge tail. **Chromatic flats diverge ~4–8 ΔE**,
-  confirmed in wide-gamut ProPhoto (so NOT sRGB-gamut clipping). Localised to the
-  **LookTable** by elimination: the per-channel ExposureRamp + ProfileToneCurve
-  are exonerated because the neutral wedge — pure per-channel inputs — matches at
-  every level *above* the chromatic patches' max per-channel value, leaving the
-  (h,s,v)-joint LookTable as the only chromatic-affecting stage neutrals (sat=0)
-  can't exercise. This IS the gym's documented "~5% flat-region colour tail",
-  now surfaced cleanly (real-scene colours are too desaturated to probe these
-  cells) and the concrete **drive-toward-0 target** for the open-DCP transition.
+  byte-patch honouring BlackLevel 600 / WhiteLevel 15520) rendered both sides.
+  **Neutral wedge: median ΔE 0.000; chromatic flats: mean 0.05, max 0.21** (was
+  ~4–8 ΔE before 2026-05-30). The chromatic divergence was NOT the LookTable —
+  `_apply_hsv_cube` was verified equal to Adobe's `RefBaselineHueSatMap` to
+  machine precision (a scalar reimpl gives dh=ds=dv=0). It was two upstream
+  things: **(1)** the per-channel tone curve (the gym fix above); **(2)** a
+  harness profile mismatch — `dnglab` **strips the ForwardMatrix** when it builds
+  the clone, so the synthetic DNG's embedded profile is FM-less and
+  `dng_validate` renders it via the **ColorMatrix + MapWhiteMatrix** path, while
+  our pipeline was using the system DCP's ProPhoto-passthrough ForwardMatrix
+  (= white-balance-only colour). The test now strips the FM from the profile it
+  feeds our pipeline so "same profile both sides" holds, and the ColorMatrix
+  no-FM branch (`dcp.colormatrix_camera_to_pcs`) carries Adobe's D50 Bradford
+  adaptation. Caution for future work: neutrals are blind to BOTH the tone-curve
+  application mode AND the camera-matrix colour rotation (sat=0 / r=g=b), so a
+  green neutral wedge does NOT certify the chromatic colour path — only the
+  chromatic patches do. Full trace: `docs/research/v08-synthetic-chromatic-rootcause.md`.
 
 ### Empirical finding 2026-05-23 — lrt-cinema vs LRT 7.5.3 preview (SUPERSEDED — darktable-era, pre-v0.6 Python pipeline; kept for history)
 

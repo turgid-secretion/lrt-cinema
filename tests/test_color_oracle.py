@@ -32,7 +32,11 @@ from lrt_cinema.lut3d_baker import (  # noqa: E402
     _rgb_to_hsv_dcp,
 )
 from lrt_cinema.output import _prophoto_to_display, write_tiff_display  # noqa: E402
-from lrt_cinema.pipeline import DngSplineSolver, make_exposure_ramp  # noqa: E402
+from lrt_cinema.pipeline import (  # noqa: E402
+    DngSplineSolver,
+    apply_rgb_tone,
+    make_exposure_ramp,
+)
 
 # ---------------------------------------------------------------------------
 # Independent, spec-sourced re-implementation (the oracle)
@@ -328,6 +332,95 @@ def test_tone_curve_spline_matches_independent_scipy_natural_cubic():
 
     not_a_knot = interp.CubicSpline(x_knots, y_knots, bc_type="not-a-knot")
     assert np.max(np.abs(solver.evaluate(xs) - not_a_knot(xs))) > 1e-3
+
+
+# ---------------------------------------------------------------------------
+# Hue/saturation-preserving RGB tone (DNG SDK RefBaselineRGBTone)
+# ---------------------------------------------------------------------------
+
+
+def _ref_baseline_rgb_tone(rgb, curve):
+    """Independent scalar port of `RefBaselineRGBTone` (dng_reference.cpp:1871),
+    written as the explicit 7-case max/mid/min sort — a DIFFERENT code path from
+    `pipeline.apply_rgb_tone`'s vectorised argsort, so agreement is a real
+    cross-check, not a tautology. Curve the max & min channels; linearly
+    interpolate the middle one to preserve its position between them."""
+    def c(x):
+        return float(np.clip(curve(np.asarray(float(x))), 0.0, 1.0))
+
+    def tone(a, b, d):  # a >= b >= d (max, mid, min)
+        aa, dd = c(a), c(d)
+        bb = dd + ((aa - dd) * (b - d) / (a - d)) if a > d else c(b)
+        return aa, bb, dd
+
+    out = np.empty_like(rgb, dtype=np.float64)
+    flat = np.clip(rgb.reshape(-1, 3), 0.0, 1.0)
+    of = out.reshape(-1, 3)
+    for i in range(flat.shape[0]):
+        r, g, b = (float(v) for v in flat[i])
+        if r >= g:
+            if g > b:            # r >= g > b
+                rr, gg, bb = tone(r, g, b)
+            elif b > r:          # b > r >= g
+                bb, rr, gg = tone(b, r, g)
+            elif b > g:          # r >= b > g
+                rr, bb, gg = tone(r, b, g)
+            else:                # r >= g == b
+                rr = c(r)
+                gg = c(g)
+                bb = gg
+        else:
+            if r >= b:           # g > r >= b
+                gg, rr, bb = tone(g, r, b)
+            elif b > g:          # b > g > r
+                bb, gg, rr = tone(b, g, r)
+            else:                # g >= b > r
+                gg, bb, rr = tone(g, b, r)
+        of[i] = (rr, gg, bb)
+    return out
+
+
+def test_rgb_tone_matches_independent_refbaseline_oracle():
+    """`apply_rgb_tone` must equal the explicit 7-case RefBaselineRGBTone port to
+    machine precision across random triples plus the tie/extreme edge cases
+    (neutral r==g==b, two-equal r==g>b, clip, near-black)."""
+    solver = DngSplineSolver(
+        np.array([0.0, 0.2, 0.45, 0.7, 1.0]),
+        np.array([0.0, 0.32, 0.62, 0.84, 1.0]),
+    )
+    rng = np.random.default_rng(20260530)
+    rgb = rng.random((4096, 3)).astype(np.float32)
+    edge = np.array([
+        [0.3, 0.3, 0.3], [0.5, 0.5, 0.2], [0.2, 0.5, 0.5], [0.5, 0.2, 0.5],
+        [0.0, 0.0, 0.0], [1.0, 1.0, 1.0], [0.6, 0.4, 0.1], [0.05, 0.5, 0.95],
+    ], dtype=np.float32)
+    rgb = np.concatenate([rgb, edge], axis=0)
+
+    got = apply_rgb_tone(rgb, solver.evaluate)
+    want = _ref_baseline_rgb_tone(rgb, solver.evaluate)
+    np.testing.assert_allclose(got, want, atol=1e-6)
+
+
+def test_rgb_tone_is_not_per_channel_but_preserves_neutrals():
+    """Discriminating: the hue-preserving tone must DIFFER from naive per-channel
+    on chromatic pixels (else it's the bug we removed), yet be identical on
+    neutrals (r==g==b → curve(v) on all three)."""
+    solver = DngSplineSolver(
+        np.array([0.0, 0.5, 1.0]), np.array([0.0, 0.72, 1.0]),  # strongly convex
+    )
+    def per_channel(rgb):
+        return np.stack(
+            [np.clip(solver.evaluate(rgb[..., k]), 0, 1) for k in range(3)], axis=-1,
+        )
+
+    chroma = np.array([[0.6, 0.35, 0.1]], dtype=np.float32)
+    assert np.max(np.abs(apply_rgb_tone(chroma, solver.evaluate)
+                         - per_channel(chroma))) > 1e-2
+
+    neutral = np.array([[0.4, 0.4, 0.4], [0.7, 0.7, 0.7]], dtype=np.float32)
+    np.testing.assert_allclose(
+        apply_rgb_tone(neutral, solver.evaluate), per_channel(neutral), atol=1e-6,
+    )
 
 
 # ---------------------------------------------------------------------------
