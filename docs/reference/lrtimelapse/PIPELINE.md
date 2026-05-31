@@ -23,8 +23,9 @@ at the "Export & Render" step.
   files"* and *"the quality will be inferior to the quality provided by
   the Lightroom Export via the LRTExport plugin"*
   (https://lrtimelapse.com/workflow/internal-workflow/). This is the
-  path our project replaces with darktable to obtain 16-bit linear
-  TIFFs.
+  path our project replaces with an in-process Python renderer to obtain
+  higher-quality 16-bit intermediates (an LRT-ready sRGB TIFF sequence by
+  default, scene-linear ACEScg EXR as an opt-in target).
 - **Lightroom path.** "Export & Render (Lightroom)" hands off via the
   bundled LRTExport plugin. The user first imports the sequence into
   Lightroom Classic (drag-and-drop from LRT's UI), runs *Metadata →
@@ -119,9 +120,9 @@ shape, what fields are animated, what is held constant).
 
 - The per-frame XMPs LRT writes after Auto Transition are our IR
   source. Parser must accept the schema documented in XMP_SCHEMA.md.
-- The internal-render path (8-bit sRGB JPG) is what we are
-  substituting darktable for, to obtain 16-bit linear cinema
-  intermediates (render fidelity: [`VALIDATION.md`](../../VALIDATION.md)).
+- The internal-render path (8-bit sRGB JPG) is what we replace with our
+  in-process Python renderer, to obtain 16-bit cinema intermediates
+  (render fidelity: [`VALIDATION.md`](../../VALIDATION.md)).
 - We do *not* depend on LRT's preview pipeline at runtime. Our
   understanding of it matters only because it shaped LRT's design
   assumptions (8-bit sRGB output, Adobe DNG Converter dependency) that

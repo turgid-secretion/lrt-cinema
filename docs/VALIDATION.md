@@ -190,9 +190,9 @@ relevant, URL or document number.
 
 ### Existing test infrastructure to reuse, not reinvent
 
-- **darktable's `src/tests/`** — darktable's own regression tests; relevant because `lrt-cinema` is a thin wrapper around `darktable-cli` and shouldn't re-test what darktable already covers. <https://github.com/darktable-org/darktable/tree/master/src/tests>
+- **darktable's `src/tests/`** — prior-art reference for how an open-source raw pipeline structures its regression tests. (lrt-cinema no longer wraps darktable — the render path is now in-process Python, removed in v0.6 — but the test patterns remain a useful model.) <https://github.com/darktable-org/darktable/tree/master/src/tests>
 - **OCIO's `tests/`** — OCIO's color-transform round-trip tests cover the linear↔gamma↔log conversions we depend on. <https://github.com/AcademySoftwareFoundation/OpenColorIO/tree/main/tests>
-- **AMPAS aces-dev `images/`** — golden images for end-to-end IDT/RRT/ODT pipeline tests; running these through `darktable-cli` with the ACES preset and diffing against the published ODT output is the cleanest "end-to-end" sanity check available. <https://github.com/ampas/aces-dev/tree/master/images>
+- **AMPAS aces-dev `images/`** — golden images for end-to-end IDT/RRT/ODT pipeline tests; running these through lrt-cinema's scene-linear ACEScg path and diffing against the published ODT output is the cleanest "end-to-end" sanity check available. <https://github.com/ampas/aces-dev/tree/master/images>
 
 ## Honest assessment
 
@@ -445,6 +445,12 @@ LRT's interpolation is asymmetric around the keyframe (less negative approaching
 **Practical conclusion for the interpolation question:** for typical timelapse keyframe spacing (≥1000 frames per EV stop), `--interpolation linear` (lrt-cinema's default) and `--interpolation smooth` produce indistinguishable output through darktable, both indistinguishable from LRT's own Auto Transition output through darktable. At aggressive keyframe spacing (e.g., +3 EV across 200 frames) the smooth/linear divergence would become visible; `--interpolation smooth` is closer to LRT's spline behavior and is recommended for such cases. None of this constitutes evidence that lrt-cinema's output matches ACR's — only that our pipeline is internally consistent.
 
 ## Known environment issues (not lrt-cinema bugs)
+
+> **Historical (darktable-era).** The darktable render path was removed in
+> v0.6 (replaced by the in-process Python Adobe-DNG-1.7.1 pipeline; see
+> [CHANGELOG](../CHANGELOG.md) 0.6.0). The darktable-specific environment
+> issues below no longer affect lrt-cinema's runtime and are retained only
+> as a record.
 
 ### darktable.app cask on macOS arm64 — SQLite/ICU mismatch (5.4.1 release)
 

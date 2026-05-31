@@ -11,7 +11,7 @@ shelling out to Lightroom or any other RAW pipeline. Scene-linear ACEScg OpenEXR
 
 **Status:** Pre-alpha. Color science gates < 1 ΔE2000 mean against Adobe
 `dng_validate` on the project test scenes. Workflow polish, third-camera
-calibration coverage, and `stills-finished` AgX preset are v0.6.x scope.
+calibration coverage, and the `stills-finished` AgX preset remain deferred.
 
 **Companion, not fork.** lrt-cinema does not modify or distribute
 LRTimelapse. It reads the XMP sidecars LRT writes and routes the develop
@@ -102,7 +102,7 @@ Power-user knobs:
 
 ```bash
 lrt-cinema render \
-  --input ... --output ... --preset cinema-aces \
+  --input ... --output ... --preset cinema-linear-finished \
   --dcp /path/to/camera.dcp \
   --workers 4 \
   --from-frame 0 --to-frame 500 \
@@ -122,11 +122,11 @@ See `lrt-cinema render --help` for the full surface (9 flags).
 - Holy Grail kelvin override + LRT mask-correction per-frame deltas.
 - Three output presets (above).
 
-**Out of scope (v0.6):**
+**Out of scope:**
 - Lightroom PV5 parametric tone math (Highlights/Shadows/Whites — closed
   source). These fields drop at render.
 - Sharpening (`sharpness` is a no-op — sharpening belongs in the grade).
-- AgX display transform (`stills-finished` preset — v0.6.x).
+- AgX display transform (`stills-finished` preset — deferred).
 - CinemaDNG, ProRes, image-sequence-to-movie muxing.
 
 See [SCOPE.md](SCOPE.md) for per-feature implementation status.
@@ -141,12 +141,16 @@ Latest measurement (v0.8 head, re-run 2026-05-30, gym + rose vs `dng_validate`):
 
 | Scene | Mean ΔE | P50 | P95 | < 1 ΔE pixels |
 |---|---:|---:|---:|---:|
-| Gym (D750 Camera Standard) | **0.789** | 0.198 | 4.19 | 76.8% |
-| Rose (D750 Adobe Standard) | **0.844** | 0.803 | 1.70 | 69.6% |
+| Gym (D750 Camera Standard) | **0.026** | 0.000 | 0.32 | 100% |
+| Rose (D750 Adobe Standard) | **0.545** | 0.577 | 0.90 | 97.8% |
 
-The gym mean is dragged by demosaic-edge pixels (libraw LINEAR vs Adobe);
-**flat non-edge pixels match `dng_validate` exactly (median ΔE 0.000, 94% of
-px)** — the colour science bit-matches the open-spec reference. See
+Gym is now an effective bit-match — P50 0.000, 100% of pixels under 1 ΔE. The
+drop from the pre-fix 0.789 was a single change: Stage 9 now applies the DCP
+ProfileToneCurve as Adobe's hue/saturation-preserving `RefBaselineRGBTone`
+(curve the max and min channel, interpolate the middle) instead of per-channel.
+The old per-channel tone error fired wherever channels differ (edges and
+saturated colour) and was invisible on neutrals, which is why the flat-pixel
+median was already 0.000 before the fix. See
 [docs/VALIDATION.md](docs/VALIDATION.md).
 
 ## License
