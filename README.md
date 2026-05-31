@@ -40,9 +40,9 @@ LRT workflow renders those XMPs through Adobe Lightroom Classic.
 
 Per-frame color is within < 1 ΔE2000 of `dng_validate` (Adobe's own DNG
 SDK reference renderer) on the project's test scenes. See
-[docs/research/v06-architecture.md](docs/research/v06-architecture.md) for
-the full pipeline spec and [docs/research/dng-pipeline-findings.md](docs/research/dng-pipeline-findings.md)
-for the empirical journey.
+[docs/PIPELINE.md](docs/PIPELINE.md) for the full as-built pipeline reference
+and [CHANGELOG.md](CHANGELOG.md) for the empirical journey from 6.37 ΔE
+(darktable) to the in-process Python pipeline.
 
 ## Output presets
 

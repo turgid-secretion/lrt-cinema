@@ -92,5 +92,5 @@ ProPhoto-passthrough ForwardMatrix (LookTable does the colour) — see
 
 ## Settled — do NOT re-explore
 Standalone GUI app, vkdt-fork, β-XML Resolve sidecar, CDNG-as-default — all ruled out
-with reasons in docs/research. PV5 basic tone (Highlights/Shadows/Whites) + Dehaze are
+with reasons in [docs/DECISIONS.md](docs/DECISIONS.md). PV5 basic tone (Highlights/Shadows/Whites) + Dehaze are
 closed-source → permanently dropped, surfaced as render-time warnings (never hidden).

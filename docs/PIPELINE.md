@@ -5,10 +5,10 @@ the *as-built* map: every render stage, the file/function that owns it, the
 colour space in→out, what is load-bearing, the known gotchas, and where tests
 tap in. CLAUDE.md is the index of invariants; this is the engine itself.
 
-> **Status:** repo-truth as of **2026-05-30** (branch `feat/v0.8-synthetic-color-validation`).
-> Supersedes the pipeline sections of `docs/research/v06-architecture.md` (that
-> doc is a 2026-05-27 *pre-implementation advisory spec* and carries at least one
-> now-wrong claim — see [§11](#11-document-map--what-supersedes-what)).
+> **Status:** repo-truth as of **2026-05-30**. This is the canonical as-built
+> engine reference; the 2026-05-27 pre-implementation spec it supersedes
+> (`v06-architecture.md`, now-wrong on Stage 9) was archived in the Phase-4 doc
+> reduction — see [§11](#11-document-map--what-supersedes-what).
 
 ---
 
@@ -307,14 +307,18 @@ History: gym/rose were 0.789/0.844 before the 2026-05-30 hue-preserving-tone fix
   the colorimetric tap rule, current numbers). Up to date.
 - **`docs/LRT_ROUNDTRIP.md`** — the default-emission (sRGB TIFF) round-trip
   contract. Up to date.
+- **`docs/DECISIONS.md`** — the binding decisions log (emission format, Adobe
+  purge, CDNG/β-XML/GUI dead-ends, dropped ops). Up to date.
 - **`docs/research/v08-synthetic-chromatic-rootcause.md`** — full trace of the
-  v0.8 colour fix (why it wasn't the LookTable). Up to date.
-- **`docs/research/v06-architecture.md`** — the 2026-05-27 pre-implementation
-  spec. Historical. **STALE/WRONG where it documents Stage 9 as "per-channel
-  ProfileToneCurve" (§Stage 9 / §Color-science scope) — that is the exact bug the
-  2026-05-30 fix reversed; the correct behaviour is hue-preserving
-  `RefBaselineRGBTone` ([§5](#5-the-tone-curve-stage-9--load-bearing)).** Its
-  gym/rose numbers (0.79/0.84) are also stale.
-- **Emission verification records** (`EMISSION_FORMAT_VERIFIED.md`,
-  `EMISSION_FORMAT_VERDICT.md`, `EXR_VERIFICATION.md`) — conclusions current;
-  their incidental `0.79`/`0.84` ΔE citations are pre-fix and now read 0.026/0.545.
+  v0.8 colour fix (why it wasn't the LookTable). Kept live authority.
+- **`docs/research/v08-linear-exr-gamut-resolve-nuke.md`** — the colour-space
+  allowlist authority (on-box Resolve verification). Kept live authority.
+- **Archived under git tag `phase4-research-archive`** (Phase-4 doc reduction):
+  the `v06`/`v07`/`v08`/`v09` research series, the `color-option-space` set, and
+  the superseded emission records (`EMISSION_FORMAT_VERDICT.md`,
+  `EMISSION_FORMAT_VERIFIED.md`, `EXR_VERIFICATION.md`). `v06-architecture.md`
+  was STALE/WRONG on Stage 9 (per-channel vs hue-preserving `RefBaselineRGBTone`
+  — [§5](#5-the-tone-curve-stage-9--load-bearing)); its gym/rose numbers
+  (0.79/0.84) are pre-fix (now 0.026/0.545). All binding conclusions live in
+  `docs/DECISIONS.md`; recover any archived file with
+  `git show phase4-research-archive:<path>`.
