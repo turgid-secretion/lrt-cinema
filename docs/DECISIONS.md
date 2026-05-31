@@ -154,6 +154,29 @@ is intentionally a no-op. (Note: `pipeline.py`'s `shadows` parameter is the DCP
 black-render scalar — unrelated to PV5 `Shadows`.) See [`PIPELINE.md`](PIPELINE.md)
 §9.
 
+**Amendment (2026-05-31) — Highlights/Shadows/Whites reopened on the PERCEPTUAL
+path; the FAITHFUL path is unchanged.** The *capability* these knobs gesture at
+— **surgically compress a large dynamic range while retaining local/perceived
+contrast** (the user's most-used tool, esp. day↔night timelapses) — is reopened
+on the **perceptual** render-intent (§7), where no Adobe fidelity is owed and a
+measurably-better open operator can ship. It is implemented as a **scene-referred
+local DR-compression op driven by the *existing* `crs:Highlights2012` /
+`crs:Shadows2012` / `crs:Whites2012` XMP knobs** — **no new control, no CLI
+grade; all creative values come from the LR/LRT sliders the user already sets** —
+built as the base-attenuation mode of the **shared edge-aware base/detail engine**
+(Local Laplacian fast variant / guided filter; the same engine as Texture/Clarity,
+§7). On the **faithful** path these ops stay **dropped + warn-only**: Adobe's math
+is closed and **un-fittable** from the flat-patch grading-sweep harness (Door B
+rejected — see [`research/v10-local-tone-mapping-dr-compression.md`](research/v10-local-tone-mapping-dr-compression.md)
+§4). The drop is now surfaced at **render time** (`cli._warn_dropped_ops` — per
+field + frame count, with a pointer to better-math), not only via `cli inspect`.
+"Better" is the **measurable** set only (DR-compression, local-contrast retention,
+halo/gradient-reversal, temporal coherence) — **not** an aesthetic claim (no
+observer panel). This does **not** re-introduce Adobe's closed math; it ships an
+independent open operator. The central open derivation (the scene-referred
+base-attenuation law around a fixed log anchor, no display clamp) precedes the op
+— full method/ranking/sources in the v10 research doc.
+
 ---
 
 ## 6. Standalone GUI app (LRT replacement) & vkdt engine fork — NO-GO as currently staffed
@@ -253,6 +276,40 @@ through `cli`/`pipeline`/`develop_ops`); (2) Color Grade → CDL on the master
 (lowest risk, native ACES interchange); (3) HSL → OKLCh on the master (+ ACES RGC
 pass); (4) Texture/Clarity (local Laplacian) only on demand; (5) TIFF ops stay
 faithful and untouched pending Tier-1 ACR data.
+
+**Amendment (2026-05-31) — XMP-driven principle, per-target defaults, render-time
+drop policy, and DR-first re-sequencing.**
+- **Everything is XMP-knob-driven; `--render-intent` is the *only* mode switch
+  and carries NO creative values.** All creative values come from the LR/LRT
+  develop sliders in the XMP. Intent selects *which math* implements a knob
+  (Adobe-matching vs our better math) — render-wide, set once, like an
+  output-quality setting. There is **no CLI grade and no second editing stage**
+  (an explicitly rejected design): the user edits in LR/LRT, the renderer reads
+  and applies the knobs.
+- **Default intent is per emission target** (`cli._default_intent_for_preset`):
+  the **sRGB display TIFF (lrtimelapse) → `faithful`** (the LRT round-trip wants
+  the Lightroom look); the **ACEScg EXR masters (`cinema-linear-*`) →
+  `perceptual`** (no Adobe-fidelity obligation; the path where DR-compression /
+  OKLCh / CDL live). `--render-intent` overrides. **Revisit the EXR→perceptual
+  default only if** a control-loop mismatch in the LR-edit→render→review loop
+  proves untameable.
+- **A perceptual-only op (an op with *no* Adobe-matching math: today
+  Highlights/Shadows/Whites; later Texture/Clarity) is DROPPED under `faithful`
+  with an actionable, per-field, frame-counted RENDER-TIME warning**
+  (`cli._warn_dropped_ops`) — never a silent drop, and naming better-math as the
+  place it is applied. The "always apply Highlights/Shadows even under faithful"
+  hybrid is **rejected**: it would silently make "match Lightroom" *not* match
+  Lightroom.
+- **Re-sequencing (DR-compression pulled forward — it is the user's #1 need and
+  the guaranteed-win demo).** The original step order above optimised for risk;
+  the priority order is now: **the shared base/detail engine + the single gated
+  RGC pass first, then the DR-compression op** (driven by the Highlights/Shadows
+  XMP knobs, §5 amendment), **then** the CDL / OKLCh upgrades and Texture/Clarity
+  detail. CDL's RGC pass and the Texture engine are shared infra the DR op
+  consumes, so they still land first as *infrastructure* — but the DR op, not the
+  HSL/grade upgrades, is the headline deliverable they unblock. **Precondition
+  (open, do first):** derive the scene-referred base-attenuation law (§5
+  amendment; v10 research §3.4/§6).
 
 **Rejected alternatives** (one line each):
 - **Single perceptual pipeline** — breaks the LRT round-trip (the TIFF must
