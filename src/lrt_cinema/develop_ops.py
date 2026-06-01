@@ -553,10 +553,13 @@ def apply_stage_12_perceptual(
     `intent` selects the HSL + Color-Grade applicator (DECISIONS.md §7):
     **FAITHFUL** (default) uses the Adobe-hexcone ops — the sRGB TIFF / LRT
     round-trip path; **PERCEPTUAL** uses the modern primitives for the ACEScg
-    master. The perceptual applicators currently alias the faithful ones (steps
-    2-3 fill them), so the two intents are byte-identical today — the seam is in
-    place without changing any output. Only the HSL/ColorGrade applicators
-    branch; ToneCurve/Sat/Vib/Contrast/Sharpness are intent-independent."""
+    master. **ColorGrade** diverges under PERCEPTUAL (offset-only ASC-CDL in
+    ACEScct log, v0.9 step 2 — `_apply_color_grade_perceptual`); **HSL** still
+    aliases faithful (OKLCh, step 3, pending). Each perceptual applicator
+    short-circuits to a byte-exact no-op when its IR `is_identity()`, so a render
+    with no grade intent stays bit-identical across intents (the ΔE ship gate,
+    stages 1–9, is untouched). Only the HSL/ColorGrade applicators + DR-compression
+    branch on intent; ToneCurve/Sat/Vib/Contrast/Sharpness are intent-independent."""
     out = apply_tone_curve_pv2012(prophoto, ops.tone_curve)
     out = apply_saturation(out, ops.saturation)
     out = apply_vibrance(out, ops.vibrance)
@@ -679,11 +682,16 @@ _CG_LUM_STRENGTH = 0.10     # per unit Luminance/100, uniform across channels
 # of 2 in scene-linear). Global and per-wheel Luminance share this one scale.
 _CG_LUM_LOG_STRENGTH = 1.0 / 17.52  # K_lum_log — a stop per slider unit-of-100
 
-# Log chroma offset per unit Saturation/100 along the (zero-sum) hue direction.
-# Matched to the faithful `_CG_CHROMA_STRENGTH` magnitude so the two intents
-# carry comparable grade authority; applied as a per-channel additive log delta
-# (the direction is mean-subtracted → zero-sum, carries no net lift).
-_CG_CHROMA_LOG_STRENGTH = 0.30
+# Log chroma offset per unit Saturation/100 along the (zero-sum) hue direction,
+# applied as a per-channel additive log delta (the direction is mean-subtracted →
+# zero-sum, carries no net lift). Pinned to **faithful's 3:1 chroma:lum ratio**
+# (`_CG_CHROMA_STRENGTH / _CG_LUM_STRENGTH = 0.30/0.10`) expressed log-natively =
+# 3·K_lum_log ≈ 0.171 → a full primary wheel (sat=100) is ≈ 2 stops on its
+# strongest channel (vs the Luminance lift's 1 stop/wheel). NB this is NOT the
+# linear `_CG_CHROMA_STRENGTH=0.30` reused verbatim — 0.30 *code units* would be
+# ~3.5 stops/wheel (ACEScct Δcode×17.52 = Δstops); only the RATIO carries across
+# the linear→log domain change. Tuning, not LR fidelity.
+_CG_CHROMA_LOG_STRENGTH = 3.0 * _CG_LUM_LOG_STRENGTH
 
 # Black / white anchors (scene-linear) for the log-domain zone proxy fed to
 # `_color_grade_zone_weights`. The proxy is `0.5 + (log2(L) − log2(0.18)) /
