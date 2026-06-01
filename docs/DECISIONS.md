@@ -198,9 +198,33 @@ blend half-widths 0.5 stops, guided r≈8 / ε≈0.01, eps 1e-6) are best-effort
 Lightroom fidelity — the perceptual path makes **no fidelity claim** (notably Whites
 *compresses* the top, the inverse of LR). **Remaining follow-ups (out of this op's
 scope):** ~~the downstream ACES **RGC** gamut pass in `output.py` for out-of-AP1
-excursions~~ (**SHIPPED** — see §7 amendment below); the **local-Laplacian**
-halo-free base-producer upgrade; **Texture/Clarity** (the boost-detail mode of the
-same shared engine).
+excursions~~ (**SHIPPED** — see §7 amendment below); ~~the **local-Laplacian**
+halo-free base-producer upgrade~~ (**DEFERRED — escape hatch fired, 2026-05-31**, see
+below); **Texture/Clarity** (the boost-detail mode of the same shared engine).
+
+**Amendment (2026-05-31) — the local-Laplacian base-producer upgrade is DEFERRED; the
+guided filter STAYS.** v0.9 step 4 (v10 §3.2) proposed swapping the DR op's
+guided-filter base producer for a **fast Local Laplacian filter** (Aubry 2014). A
+*correct* clean-room fast LLF was built (real Paris-2011 remap `fd=d^α`/`fe=β·a`, NO
+gradient term; base-extractor config α>1, β=1; σr in **log2**; fixed scene-referred γ
+grid every σr — no per-frame statistic; display tail discarded) and **verified
+faithful** (α=β=1 → identity to 9e-16; edge preserved). Measured on the v10 §1.3
+halo protocol (textured step edge through the full op) it **does not beat the shipping
+guided filter** (eps=0.01): refining the fast γ grid toward exact makes edge overshoot
+**worse, monotonically** (σr→0.060, σr/2→0.088, σr/4→0.098 vs guided's 0.068), and the
+**exact** O(N²) LLF is worst (0.112). The coarse-γ "win" is a fast-approximation
+artifact, not real. **Two findings:** (a) LLF's halo-free guarantee is a property of
+its *integrated tone-map output*, **not** transferable to an LLF *base* feeding an
+external compression law — the v10b architecture (fixed log law on a separately
+extracted base) severs it; (b) at the shipping eps=0.01 the guided halo is **flat in
+radius** (r=8→0.0685, r=16→0.0646), contradicting the v10 premise that motivated the
+upgrade. Per the task's escape hatch, **a proven defer beats an unproven base
+producer** — the DR op is untouched (`apply_dr_compression`, `_guided_base_log`, the
+law). The clean-room LLF prototype is preserved
+(`docs/research/_proto_local_laplacian.py`, unwired) for **Texture/Clarity**, where
+LLF is used as designed (small-radius detail boost, α<1). Full method + measurements +
+honesty caveat (synthetic + exact-method evidence, not real day/night frames):
+[`research/v10c-local-laplacian-base-deferred.md`](research/v10c-local-laplacian-base-deferred.md).
 
 ---
 
