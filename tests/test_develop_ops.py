@@ -740,11 +740,44 @@ def test_texture_boost_raises_fine_band_rms():
 
 
 def test_texture_negative_smooths_fine_band():
-    """Texture −N must DECREASE fine-scale contrast (a smoother) — the inverse arm."""
+    """A MODERATE negative Texture (−40 → gain 0.4, comfortably positive, no
+    edge-masking subtlety) attenuates fine-scale contrast — the smoother arm on real
+    content. (The sign-FLOOR property — that a strong negative slider can't INVERT
+    detail — is tested at the gain unit in `test_texture_clarity_band_gains_*`, where
+    it discriminates the bug; an image-level inversion probe is masked by the guided
+    filter's edge classification and would not discriminate.)"""
     img = _tc_textured_image()
     base = _tc_band_rms(img, 5)
-    smoothed = _tc_band_rms(apply_texture_clarity(img, -100.0, 0.0), 5)
-    assert smoothed < base * 0.95, f"negative texture did not smooth: {smoothed/base:.3f}"
+    smoothed = _tc_band_rms(apply_texture_clarity(img, -40.0, 0.0), 5)
+    assert smoothed < base * 0.97, f"negative texture did not smooth: {smoothed/base:.3f}"
+
+
+def test_texture_clarity_band_gains_floored_no_inversion():
+    """The band-gain floor is the no-inversion guarantee, tested at its unit (the
+    production `_tc_band_gains`, not re-derived). A strong NEGATIVE slider must drive
+    the gain to 0 (maximum smoothing), NEVER negative (which phase-inverts detail —
+    a bright speckle → dark; LR's negative arm never inverts). Deleting the
+    `max(0, …)` floor makes the −100 assertions fail (the gain would be −0.5)."""
+    from lrt_cinema.develop_ops import _TC_CLARITY_GAIN, _TC_TEXTURE_GAIN, _tc_band_gains
+
+    # Positive arm UNCLAMPED — the floor must not weaken the boost (guards a regression).
+    tg_pos, cg_pos = _tc_band_gains(100.0, 100.0, 1.0)  # midtone_w=1 at the anchor
+    assert tg_pos == pytest.approx(1.0 + _TC_TEXTURE_GAIN)   # 2.5
+    assert float(cg_pos) == pytest.approx(1.0 + _TC_CLARITY_GAIN)
+
+    # Negative extreme FLOORED at 0 — NOT the unfloored −0.5 (the inversion).
+    tg_neg, cg_neg = _tc_band_gains(-100.0, -100.0, 1.0)
+    assert tg_neg == 0.0, f"texture gain not floored: {tg_neg}"
+    assert float(cg_neg) == 0.0, f"clarity gain not floored: {cg_neg}"
+    unfloored = 1.0 + _TC_TEXTURE_GAIN * (-100.0 / 100.0)
+    assert unfloored < 0.0  # the bug the floor prevents (−0.5)
+
+    # Monotone non-decreasing and >= 0 across the whole slider sweep (both arms).
+    sweep = np.linspace(-100.0, 100.0, 41)
+    tgains = np.array([_tc_band_gains(s, 0.0, 1.0)[0] for s in sweep])
+    cgains = np.array([float(_tc_band_gains(0.0, s, 1.0)[1]) for s in sweep])
+    assert np.all(tgains >= 0.0) and np.all(np.diff(tgains) >= -1e-12)
+    assert np.all(cgains >= 0.0) and np.all(np.diff(cgains) >= -1e-12)
 
 
 def test_clarity_boost_raises_mid_band_rms():

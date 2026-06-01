@@ -1457,8 +1457,10 @@ def _oracle_texture_clarity(
         midtone_w = np.ones_like(log_l)
     else:
         midtone_w = np.exp(-0.5 * ((log_l - _DR_LOG_ANCHOR) / _TC_MIDTONE_SIGMA) ** 2)
-    texture_gain = 1.0 + _TC_TEXTURE_GAIN * (texture / 100.0)
-    clarity_gain = 1.0 + _TC_CLARITY_GAIN * (clarity / 100.0) * midtone_w
+    # Band gains floored at 0 (no detail phase-inversion below slider ≈ −67) — the
+    # same clamp the production op applies; reimplemented here independently.
+    texture_gain = max(0.0, 1.0 + _TC_TEXTURE_GAIN * (texture / 100.0))
+    clarity_gain = np.maximum(0.0, 1.0 + _TC_CLARITY_GAIN * (clarity / 100.0) * midtone_w)
     log_l_out = base_coarse + texture_gain * texture_band + clarity_gain * clarity_band
     lum_out = np.maximum(np.exp2(log_l_out) - eps, 0.0)
     if per_channel:  # the §0 hue-rotation bug — boost re-derived per channel, no ratio
