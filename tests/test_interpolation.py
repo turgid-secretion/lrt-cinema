@@ -74,6 +74,24 @@ def test_interpolate_threads_hsl_through_blend():
     assert interpolate(seq, 10).hsl.is_identity()
 
 
+def test_interpolate_threads_texture_clarity_through_blend():
+    """Texture/Clarity must survive per-frame interpolation — a field dropped from
+    DevelopOps.blend() would silently zero here. Keyframe A sets both; B is default;
+    the midpoint frame must carry ~half of each."""
+    a = DevelopOps(texture=60.0, clarity=-40.0)
+    seq = _seq(11, [
+        Keyframe(frame_index=0, ops=a),
+        Keyframe(frame_index=10, ops=DevelopOps()),  # default: texture 0, clarity 0
+    ])
+    mid = interpolate(seq, 5)
+    assert mid.texture == pytest.approx(30.0)
+    assert mid.clarity == pytest.approx(-20.0)
+    # Endpoints exact.
+    assert interpolate(seq, 0).texture == pytest.approx(60.0)
+    assert interpolate(seq, 10).texture == pytest.approx(0.0)
+    assert interpolate(seq, 10).clarity == pytest.approx(0.0)
+
+
 def test_interpolate_threads_color_grade_through_blend():
     """Color Grade must survive per-frame interpolation — a field dropped from
     DevelopOps.blend()/ColorGrade.blend() would silently zero here."""
