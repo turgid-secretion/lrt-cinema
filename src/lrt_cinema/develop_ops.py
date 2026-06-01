@@ -341,7 +341,12 @@ def _apply_color_grade_perceptual(prophoto: np.ndarray, cg: ColorGrade) -> np.nd
 
     # ACEScg → ACEScct log (library toe; NOT floored — the linear toe is
     # invertible for the small negatives an out-of-AP1 colour produces).
-    log_in = colour.models.log_encoding_ACEScct(acescg)
+    # `log_encoding_ACEScct` computes log2 over ALL inputs before np.where-masking
+    # in the toe, so true-black / negative-AP1 channels make it warn on a log2
+    # value it then DISCARDS — the toe result is correct. Silence that internal
+    # divide/invalid so real renders (which always carry some black) stay clean.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        log_in = colour.models.log_encoding_ACEScct(acescg)
 
     # Zone weights on a log-domain luminance proxy (AP1 luminance is the ACEScg
     # green-dominant Y; reuse the ProPhoto luminance row on the ProPhoto pixels —
