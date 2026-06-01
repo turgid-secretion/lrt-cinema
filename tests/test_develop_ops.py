@@ -29,6 +29,7 @@ from lrt_cinema.develop_ops import (
     apply_sharpness,
     apply_stage_11_linear,
     apply_stage_12_perceptual,
+    apply_texture_clarity,
     apply_tone_curve_pv2012,
     apply_vibrance,
 )
@@ -689,3 +690,270 @@ def test_dr_compression_runs_after_color_grade_before_contrast(monkeypatch):
     ops = DevelopOps(highlights=10.0, color_grade=ColorGrade(shadow_sat=10.0), contrast=5.0)
     do.apply_stage_12_perceptual(x, ops, RenderIntent.PERCEPTUAL)
     assert calls == ["color_grade", "dr", "contrast"]
+
+
+# ---------------------------------------------------------------------------
+# Texture / Clarity (develop_ops.apply_texture_clarity) — PERCEPTUAL local-contrast
+# boost (the boost-detail mode of the shared guided base/detail engine).
+# ---------------------------------------------------------------------------
+
+
+def _tc_textured_image(h=80, w=80, fine_amp=0.12, coarse_amp=0.4):
+    """A neutral midtone field carrying a FINE (high-freq) detail layer + a COARSE
+    (low-freq) mid-scale layer in log-luminance — so a fine boost (Texture) and a
+    mid-scale boost (Clarity) each have a band to act on."""
+    yy, xx = np.mgrid[0:h, 0:w]
+    fine = fine_amp * np.sin(xx * 2.0) * np.sin(yy * 2.0)
+    coarse = coarse_amp * np.sin(xx * 0.3) * np.sin(yy * 0.3)
+    lum = 0.18 * 2.0 ** (fine + coarse)
+    return np.repeat(lum[..., None], 3, axis=2)
+
+
+def _tc_band_rms(img, size):
+    """RMS of the log-luminance high-pass at a given box scale (band energy)."""
+    log_l = np.log2(np.maximum(img @ _PROPHOTO_LUMINANCE, 0.0) + 1e-6)
+    from scipy.ndimage import uniform_filter
+    return float(np.std(log_l - uniform_filter(log_l, size=size, mode="nearest")))
+
+
+def test_texture_clarity_default_is_byte_exact_no_op():
+    """Both sliders 0 → byte-exact passthrough (short-circuit before any filter
+    math). slope-1 bands do NOT telescope to L bit-for-bit through log2/exp2, so
+    this guards the ΔE ship gate on the perceptual path."""
+    x = np.random.default_rng(40).random((8, 8, 3)).astype(np.float32)
+    np.testing.assert_array_equal(apply_texture_clarity(x, 0.0, 0.0), x)
+
+
+def test_texture_clarity_preserves_dtype():
+    x = np.random.default_rng(41).random((16, 16, 3)).astype(np.float32)
+    assert apply_texture_clarity(x, 40.0, -20.0).dtype == np.float32
+
+
+def test_texture_boost_raises_fine_band_rms():
+    """Texture +N must INCREASE fine-scale local contrast (the headline). Measured
+    at the fine band's own scale (size=5) — NOT cross-measured against the coarse
+    band, which crosstalks."""
+    img = _tc_textured_image()
+    base = _tc_band_rms(img, 5)
+    boosted = _tc_band_rms(apply_texture_clarity(img, 80.0, 0.0), 5)
+    assert boosted > base * 1.1, f"texture did not boost fine detail: {boosted/base:.3f}"
+
+
+def test_texture_negative_smooths_fine_band():
+    """Texture −N must DECREASE fine-scale contrast (a smoother) — the inverse arm."""
+    img = _tc_textured_image()
+    base = _tc_band_rms(img, 5)
+    smoothed = _tc_band_rms(apply_texture_clarity(img, -100.0, 0.0), 5)
+    assert smoothed < base * 0.95, f"negative texture did not smooth: {smoothed/base:.3f}"
+
+
+def test_clarity_boost_raises_mid_band_rms():
+    """Clarity +N must INCREASE mid-scale local contrast, measured at the mid band's
+    own (larger) scale (size=21) — not the fine scale, which it does not target."""
+    img = _tc_textured_image()
+    base = _tc_band_rms(img, 21)
+    boosted = _tc_band_rms(apply_texture_clarity(img, 0.0, 80.0), 21)
+    assert boosted > base * 1.02, f"clarity did not boost mid-scale contrast: {boosted/base:.3f}"
+
+
+def test_clarity_is_midtone_weighted():
+    """Clarity's mid-scale boost is midtone-weighted — a midtone region gains MORE
+    local contrast than a deep-shadow or bright-highlight region carrying the same
+    coarse texture (Lightroom's Clarity is a midtone control)."""
+    yy, xx = np.mgrid[0:64, 0:64]
+    coarse = 0.4 * np.sin(xx * 0.25) * np.sin(yy * 0.25)
+
+    def gain_at(level):
+        lum = level * 2.0 ** coarse
+        img = np.repeat(lum[..., None], 3, axis=2)
+        base = _tc_band_rms(img, 21)
+        return _tc_band_rms(apply_texture_clarity(img, 0.0, 80.0), 21) / base
+
+    g_mid = gain_at(0.18)      # the anchor
+    g_shadow = gain_at(0.01)   # ~4 stops below
+    g_highlight = gain_at(3.0) # ~4 stops above
+    assert g_mid > g_shadow, f"midtone gain {g_mid:.3f} not > shadow gain {g_shadow:.3f}"
+    assert g_mid > g_highlight, f"midtone gain {g_mid:.3f} not > highlight gain {g_highlight:.3f}"
+
+
+def test_texture_clarity_flat_image_is_no_op():
+    """On a spatially flat-luminance image both guided bands equal L, both bands are
+    0, and the op is the identity regardless of slider (only LOCAL contrast is
+    touched, never global tone). Random hues renormalised to one luminance."""
+    rng = np.random.default_rng(42)
+    pix = rng.random((24, 24, 3)) + 0.1
+    lum = pix @ _PROPHOTO_LUMINANCE
+    pix = (pix * (0.42 / lum)[..., None]).astype(np.float64)
+    out = apply_texture_clarity(pix, 80.0, 80.0)
+    np.testing.assert_allclose(out, pix, atol=1e-9)
+
+
+def test_texture_clarity_no_halo_overshoot_at_step_edge():
+    """The op-family's defining property: a clean step edge (NO texture → the ideal
+    boost is a no-op) driven through the full op must not ring — any excursion beyond
+    the two INPUT plateau levels is pure halo. The guided split is edge-aware (a→1
+    across the step → both detail bands ≈0 there), so the boosted output stays within
+    <1% of the plateau range at FULL sliders. (Mirrors the DR halo test; the guided
+    filter is the measured-clean first cut, not provably halo-free.)"""
+    h = w = 64
+    lum = np.full((h, w), 0.1)
+    lum[:, w // 2:] = 4.0  # a strong step (~5.3 stops), no texture
+    img = np.repeat(lum[..., None], 3, axis=2)
+    out_lum = apply_texture_clarity(img, 100.0, 100.0) @ _PROPHOTO_LUMINANCE
+
+    lo, hi = 0.1, 4.0  # the input plateau levels (ideal boost leaves them unchanged)
+    tol = 0.01 * (hi - lo)  # <1% of the plateau range
+    assert out_lum.min() >= lo - tol, f"undershoot halo: {lo - out_lum.min():.4f}"
+    assert out_lum.max() <= hi + tol, f"overshoot halo: {out_lum.max() - hi:.4f}"
+
+
+def test_texture_clarity_naive_usm_would_halo():
+    """Injected-bug leg: a NAIVE unsharp-mask (single-Gaussian high-pass, NOT
+    edge-aware) drives the SAME boost recombination and FAILS the halo bound the
+    edge-aware op passes — proving edge-awareness is load-bearing (v09 frontier
+    §2.3: naive USM *guarantees* halos). Reuses the production constants so only the
+    base-extractor differs."""
+    from scipy.ndimage import gaussian_filter
+
+    import lrt_cinema.develop_ops as do
+
+    h = w = 64
+    lum = np.full((h, w), 0.1)
+    lum[:, w // 2:] = 4.0
+    img = np.repeat(lum[..., None], 3, axis=2)
+
+    # Naive USM: same two-band boost recombination, but Gaussian low-pass bases
+    # (NOT the guided edge-preserving base). This is the bug the edge-aware op avoids.
+    def usm(prophoto, texture, clarity):
+        eps = do._DR_EPS
+        L = prophoto @ do._PROPHOTO_LUMINANCE
+        log_l = np.log2(np.maximum(L, 0.0) + eps)
+        b_fine = gaussian_filter(log_l, sigma=do._TC_RADIUS_FINE, mode="nearest")
+        b_coarse = gaussian_filter(log_l, sigma=do._TC_RADIUS_COARSE, mode="nearest")
+        tex_band = log_l - b_fine
+        cla_band = b_fine - b_coarse
+        mw = do._tc_midtone_weight(log_l)
+        tg = 1.0 + do._TC_TEXTURE_GAIN * (texture / 100.0)
+        cg = 1.0 + do._TC_CLARITY_GAIN * (clarity / 100.0) * mw
+        lo = b_coarse + tg * tex_band + cg * cla_band
+        lum_out = np.maximum(np.exp2(lo) - eps, 0.0)
+        return np.maximum(prophoto * (lum_out / np.maximum(L, eps))[..., None], 0.0)
+
+    edge_aware = apply_texture_clarity(img, 100.0, 100.0) @ _PROPHOTO_LUMINANCE
+    naive = usm(img, 100.0, 100.0) @ _PROPHOTO_LUMINANCE
+    lo, hi = 0.1, 4.0
+    rng = hi - lo
+    edge_halo = (max(0.0, edge_aware.max() - hi) + max(0.0, lo - edge_aware.min())) / rng
+    naive_halo = (max(0.0, naive.max() - hi) + max(0.0, lo - naive.min())) / rng
+    assert edge_halo < 0.01, f"edge-aware op ringed: {edge_halo*100:.2f}%"
+    assert naive_halo > 0.10, f"naive USM did NOT halo (test toothless): {naive_halo*100:.2f}%"
+
+
+def test_texture_clarity_preserves_hue_and_chroma_on_saturated():
+    """§0: the out/in luminance-RATIO reapply preserves hue + chroma RATIOS exactly
+    on a saturated pixel — a positive per-pixel scalar cannot rotate hue. Checked on
+    a flat saturated field (so the op is the local no-op + ratio=1) AND on a textured
+    saturated field (so the boost actually fires). Clarity +100."""
+    # Flat saturated red field → op is a no-op (ratio 1), trivially hue-preserving;
+    # the meaningful check is a TEXTURED saturated field where the boost fires.
+    yy, xx = np.mgrid[0:48, 0:48]
+    fine = 0.12 * np.sin(xx * 2.0) * np.sin(yy * 2.0)
+    red = np.stack([
+        0.8 * 2.0 ** fine, 0.05 * 2.0 ** fine, 0.02 * 2.0 ** fine,
+    ], axis=-1)
+    out = apply_texture_clarity(red, 0.0, 100.0)
+    # Hue/chroma ratio = channel ratios; a luminance-ratio reapply scales all three
+    # channels by the SAME factor, so g/r and b/r are preserved pixel-by-pixel.
+    in_gr, in_br = red[..., 1] / red[..., 0], red[..., 2] / red[..., 0]
+    out_gr, out_br = out[..., 1] / out[..., 0], out[..., 2] / out[..., 0]
+    np.testing.assert_allclose(out_gr, in_gr, atol=1e-6)
+    np.testing.assert_allclose(out_br, in_br, atol=1e-6)
+
+
+def test_texture_clarity_no_top_clamp_preserves_overrange():
+    """No top clamp — a >1 specular survives the op (scene-referred; out-of-AP1 is
+    the downstream RGC pass's job). A bright textured specular stays overrange."""
+    yy, xx = np.mgrid[0:48, 0:48]
+    fine = 0.12 * np.sin(xx * 2.0) * np.sin(yy * 2.0)
+    lum = 3.0 * 2.0 ** fine  # far overrange specular with texture
+    spec = np.repeat(lum[..., None], 3, axis=2).astype(np.float32)
+    out = apply_texture_clarity(spec, 100.0, 0.0)
+    assert out.max() > 1.0, f"top clamp leaked: max={out.max()}"
+
+
+def test_texture_clarity_no_negative_channels_on_saturated_overrange():
+    """A saturated + overrange textured pixel under a strong boost stays non-negative
+    (floor at 0; the ratio reapply cannot introduce a negative)."""
+    yy, xx = np.mgrid[0:32, 0:32]
+    fine = 0.2 * np.sin(xx * 2.0) * np.sin(yy * 2.0)
+    sat = np.stack([3.0 * 2.0 ** fine, 0.05 * 2.0 ** fine, 0.02 * 2.0 ** fine], axis=-1)
+    out = apply_texture_clarity(sat.astype(np.float32), 100.0, 100.0)
+    assert out.min() >= 0.0, f"negative channel leaked: min={out.min()}"
+
+
+# ---------------------------------------------------------------------------
+# Dual-mode: Texture/Clarity is PERCEPTUAL-only (faithful drops it)
+# ---------------------------------------------------------------------------
+
+
+def test_texture_clarity_applies_under_perceptual_only():
+    """Texture/Clarity drive a real change under PERCEPTUAL but are DROPPED under
+    FAITHFUL — faithful output with them set is byte-identical to faithful with them
+    zeroed, while perceptual diverges (the §7-step-4 contract; faithful unchanged)."""
+    x = _tc_textured_image(48, 48).astype(np.float32)
+    ops_set = DevelopOps(texture=80.0, clarity=60.0)
+    ops_zero = DevelopOps()
+
+    faithful_set = apply_develop_ops(x, ops_set, RenderIntent.FAITHFUL)
+    faithful_zero = apply_develop_ops(x, ops_zero, RenderIntent.FAITHFUL)
+    np.testing.assert_array_equal(faithful_set, faithful_zero)  # dropped on faithful
+
+    perceptual_set = apply_develop_ops(x, ops_set, RenderIntent.PERCEPTUAL)
+    assert np.max(np.abs(perceptual_set - faithful_set)) > 1e-3  # applied on perceptual
+
+
+def test_texture_clarity_perceptual_identity_still_byte_exact():
+    """With Texture/Clarity 0, PERCEPTUAL stays byte-identical to FAITHFUL even
+    though the op is wired into the perceptual branch (short-circuit holds the ship
+    gate). Isolated with an intent-independent op (global Saturation)."""
+    x = np.random.default_rng(43).random((8, 8, 3)).astype(np.float32)
+    ops = DevelopOps(saturation=20.0)  # texture/clarity 0; no HSL/Color-Grade
+    np.testing.assert_array_equal(
+        apply_develop_ops(x, ops, RenderIntent.FAITHFUL),
+        apply_develop_ops(x, ops, RenderIntent.PERCEPTUAL),
+    )
+
+
+def test_texture_clarity_runs_after_dr_before_contrast(monkeypatch):
+    """Order check: under PERCEPTUAL Texture/Clarity runs AFTER DR-compression (set
+    the tonal range, then add local contrast) and BEFORE Contrast2012."""
+    import lrt_cinema.develop_ops as do
+
+    calls: list[str] = []
+    monkeypatch.setattr(do, "apply_dr_compression",
+                        lambda pp, hi, sh, wh: (calls.append("dr"), pp)[1])
+    monkeypatch.setattr(do, "apply_texture_clarity",
+                        lambda pp, tx, cl: (calls.append("texture_clarity"), pp)[1])
+    monkeypatch.setattr(do, "apply_contrast_2012",
+                        lambda pp, c: (calls.append("contrast"), pp)[1])
+
+    x = np.zeros((2, 2, 3), dtype=np.float32)
+    ops = DevelopOps(highlights=10.0, texture=20.0, contrast=5.0)
+    do.apply_stage_12_perceptual(x, ops, RenderIntent.PERCEPTUAL)
+    assert calls == ["dr", "texture_clarity", "contrast"]
+
+
+def test_texture_clarity_not_applied_on_faithful_via_dispatcher():
+    """Faithful path must NEVER call apply_texture_clarity (it lives only in the
+    PERCEPTUAL branch) — guards against an accidental faithful-path regression."""
+    import lrt_cinema.develop_ops as do
+
+    called = []
+    monkeypatch_target = do.apply_texture_clarity
+    do.apply_texture_clarity = lambda pp, tx, cl: (called.append(1), pp)[1]
+    try:
+        x = _tc_textured_image(16, 16).astype(np.float32)
+        do.apply_stage_12_perceptual(x, DevelopOps(texture=80.0), RenderIntent.FAITHFUL)
+    finally:
+        do.apply_texture_clarity = monkeypatch_target
+    assert called == [], "apply_texture_clarity must not run on the faithful path"

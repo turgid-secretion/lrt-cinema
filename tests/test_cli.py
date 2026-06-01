@@ -230,6 +230,52 @@ def test_dropped_basic_tone_not_warned_under_perceptual(tmp_path, capsys):
     assert "2012 set on" not in err  # no dropped-op warning under perceptual
 
 
+def _texture_clarity_seq_input(tmp_path):
+    """A one-frame sequence whose XMP sets crs:Texture + crs:Clarity2012."""
+    src = tmp_path / "input"
+    src.mkdir()
+    (src / "f0001.CR3").write_bytes(b"raw-stub")
+    xmp = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<x:xmpmeta xmlns:x="adobe:ns:meta/">\n'
+        ' <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">\n'
+        '  <rdf:Description rdf:about=""\n'
+        '    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"\n'
+        '    crs:Texture="40" crs:Clarity2012="-25"/>\n'
+        ' </rdf:RDF>\n'
+        '</x:xmpmeta>\n'
+    )
+    (src / "f0001.CR3.xmp").write_text(xmp)
+    return src
+
+
+def test_dropped_texture_clarity_warns_at_render_with_own_wording(tmp_path, capsys):
+    """Texture/Clarity set but dropped on FAITHFUL surface a per-field warning with
+    THEIR OWN wording (the local-contrast op), NOT the DR-compression message — a
+    drop is never silent and never mislabelled (DECISIONS §7 step 4)."""
+    src = _texture_clarity_seq_input(tmp_path)
+    rc = main(["render", "--input", str(src), "--output", str(tmp_path / "out"),
+               "--render-intent", "faithful", "--dry-run", "--quiet"])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "Texture set on 1/1" in err
+    assert "Clarity2012 set on 1/1" in err
+    assert "apply_texture_clarity" in err  # TC's own op, not the DR-compression story
+    assert "DR-compression" not in err     # must NOT be mislabelled as the tone op
+
+
+def test_dropped_texture_clarity_not_warned_under_perceptual(tmp_path, capsys):
+    """Under PERCEPTUAL the local-contrast op APPLIES Texture/Clarity, so they are
+    not dropped — the warning is suppressed (the intent-aware _warn_dropped_ops)."""
+    src = _texture_clarity_seq_input(tmp_path)
+    rc = main(["render", "--input", str(src), "--output", str(tmp_path / "out"),
+               "--render-intent", "perceptual", "--dry-run", "--quiet"])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "Texture set on" not in err
+    assert "Clarity2012 set on" not in err
+
+
 def test_dry_run_does_not_touch_source_xmp(tmp_path):
     src = tmp_path / "input"
     src.mkdir()
