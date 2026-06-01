@@ -200,7 +200,8 @@ Lightroom fidelity — the perceptual path makes **no fidelity claim** (notably 
 scope):** ~~the downstream ACES **RGC** gamut pass in `output.py` for out-of-AP1
 excursions~~ (**SHIPPED** — see §7 amendment below); ~~the **local-Laplacian**
 halo-free base-producer upgrade~~ (**DEFERRED — escape hatch fired, 2026-05-31**, see
-below); **Texture/Clarity** (the boost-detail mode of the same shared engine).
+below); ~~**Texture/Clarity** (the boost-detail mode of the same shared engine)~~
+(**SHIPPED** — see §7 amendment below).
 
 **Amendment (2026-05-31) — the local-Laplacian base-producer upgrade is DEFERRED; the
 guided filter STAYS.** v0.9 step 4 (v10 §3.2) proposed swapping the DR op's
@@ -225,6 +226,12 @@ law). The clean-room LLF prototype is preserved
 LLF is used as designed (small-radius detail boost, α<1). Full method + measurements +
 honesty caveat (synthetic + exact-method evidence, not real day/night frames):
 [`research/v10c-local-laplacian-base-deferred.md`](research/v10c-local-laplacian-base-deferred.md).
+**Postscript (2026-05-31, Texture/Clarity shipped):** when Texture/Clarity was built
+(§7 step 4 below), the **guided filter beat the LLF proto on the same halo metric for
+the boost role too** — a guided two-band detail boost rings sub-1% of the plateau range
+at full sliders vs a naive single-Gaussian USM at ~580%, while the LLF proto is
+comparable but fragile and costs a non-byte-exact pyramid + its own oracle. So the LLF
+proto remains **unwired** (measured-only); Texture/Clarity ships on the guided engine.
 
 ---
 
@@ -359,6 +366,32 @@ drop policy, and DR-first re-sequencing.**
   HSL/grade upgrades, is the headline deliverable they unblock. **Precondition
   (open, do first):** derive the scene-referred base-attenuation law (§5
   amendment; v10 research §3.4/§6).
+
+**Amendment (2026-05-31) — step 4 Texture/Clarity SHIPPED on the perceptual path
+(the last v0.9 dual-mode op).** `develop_ops.apply_texture_clarity`, driven by the
+existing `crs:Texture`/`crs:Clarity2012` knobs (no new control), is the **boost-detail
+mode of the SAME guided base/detail engine** the DR op uses (the inverse: a two-band
+guided split *boosts* detail rather than *attenuating* the base). Texture = a uniform
+fine-detail boost (`L−B_fine`); Clarity = a midtone-weighted mid-scale local-contrast
+boost (`B_fine−B_coarse`, weighted by a C∞ Gaussian bump around the 0.18 log-anchor).
+PERCEPTUAL-only; on faithful it joins the dropped + warn-only set with **its own**
+intent-aware wording (`_DROPPED_TEXTURE_CLARITY_FIELDS`, pointing at the local-contrast
+op — NOT the DR-compression/closed-PV5 story). §0-safe (luminance + out/in-ratio
+reapply, never per-channel), floor 0, **no top clamp** (overrange → the shared gated
+ACES RGC pass); byte-exact identity at both sliders 0 (the guided round-trip is not
+bit-exact) → the gym/rose ΔE ship gate is untouched. **Engine choice — guided, not the
+LLF proto** (the §7-step-4 "local Laplacian" candidate): on the step-edge halo protocol
+the guided two-band boost rings **sub-1% of the plateau range at +100/+100** vs a naive
+single-Gaussian USM at **~580%** (the op-family's defining failure); the LLF proto is
+comparable but fragile + costs a non-byte-exact pyramid and its own oracle, so per the
+escape hatch the proven guided engine ships and the proto stays unwired (same direction
+as v10c's base-role defer). The guided filter is the **measured-clean first cut, NOT
+provably halo-free** (only LLF is); this bounds the measured ring + discriminates the
+naive USM, it is not a real-content halo-freedom claim. Constants (`_TC_*`) are
+documented tuning; the Axis-1 oracle hand-rolls the two-band guided split + boost +
+ratio via `scipy.ndimage.uniform_filter` (a different code path from the production
+cumsum box; interior-only, ≥2·r_coarse from borders) — validating the *defined* math,
+not LR appearance. **All v0.9 dual-mode steps (1–5) are now complete.**
 
 **Rejected alternatives** (one line each):
 - **Single perceptual pipeline** — breaks the LRT round-trip (the TIFF must

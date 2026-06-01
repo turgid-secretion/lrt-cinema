@@ -100,6 +100,37 @@ def test_hsl_only_frame_is_flagged_meaningful(tmp_path):
     ) is True
 
 
+def test_parse_texture_clarity_round_trip(tmp_path):
+    """Texture/Clarity parse from the real ACR tags (crs:Texture is PV-less;
+    crs:Clarity2012 is PV2012-suffixed) into DevelopOps, and flag a keyframe."""
+    _write_xmp(tmp_path, 'crs:Texture="35" crs:Clarity2012="-20"')
+    seq = parse_sequence(tmp_path)
+    assert len(seq.keyframes) == 1          # Texture/Clarity intent flags a keyframe
+    ops = seq.keyframes[0].ops
+    assert ops.texture == 35.0
+    assert ops.clarity == -20.0
+
+
+def test_parse_texture_clarity_2012_alias(tmp_path):
+    """A 2012-suffixed Texture tag (the spec-named alias / older serialisation)
+    still drives the slider via the fallback — and a PV-less Clarity tag likewise."""
+    _write_xmp(tmp_path, 'crs:Texture2012="40" crs:Clarity="15"')
+    ops = parse_sequence(tmp_path).keyframes[0].ops
+    assert ops.texture == 40.0
+    assert ops.clarity == 15.0
+
+
+def test_texture_clarity_only_frame_is_flagged_meaningful():
+    """A frame carrying only Texture or Clarity intent is detected as a keyframe
+    via _has_meaningful_ops — proves the fields are threaded into the heuristic (a
+    field omitted there is silently dropped per-frame)."""
+    from lrt_cinema.ir import DevelopOps
+    from lrt_cinema.xmp_parser import _has_meaningful_ops
+    assert _has_meaningful_ops(DevelopOps()) is False
+    assert _has_meaningful_ops(DevelopOps(texture=10.0)) is True
+    assert _has_meaningful_ops(DevelopOps(clarity=-10.0)) is True
+
+
 def test_parse_color_grade_round_trip(tmp_path):
     """ColorGrade* tags parse into the four wheels; Blending defaults to 50."""
     _write_xmp(
