@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — v0.8 prep
 
+### Added
+- **Optional numba compute backend + proxy preview (`perf/gpu-render`).** A thin
+  backend abstraction (`lrt_cinema.accel`) JIT-accelerates the per-pixel
+  DCP-render hotspots — the HSV cube (Stage 5/8) and the hue-preserving tone
+  curve (Stage 9) — as fused, multi-core `@njit` kernels, **colour-identical to
+  the numpy reference** (max ΔE2000 vs numpy on a real frame **6.4e-5**, and
+  **2.4e-7** at the linear Stage-9 ship-gate point — ~16000× under the 1.0
+  gate). numpy stays the default + reference + fallback; numba is an optional
+  `[fast]` extra, selected via `--backend {auto,numpy,numba}` (default `auto`).
+  Measured M1 Max: cube **~49×**, tone **~44×**; DCP-render full-res frame
+  **6.6×**; 10-frame pool throughput **7.1×** (0.97 s/frame). The Stage-13
+  output encode is also de-floated (cached float32 ProPhoto→sRGB matrix + OETF,
+  ≤1 16-bit code unit, helps both backends). NB: the Stage-12 **faithful** grade
+  ops (Saturation/Vibrance/HSL/Color-Grade) are **not yet accelerated**, so a
+  heavily-graded full-res frame is ~1.8× — the documented #1 follow-up
+  (docs/PIPELINE.md §11).
+- **Low-resolution preview mode (`--preview-scale {1,2,4,8}`).** Fast 2×2-bin
+  demosaic + linear-domain area downsample for rapid grade/sequence iteration
+  (~18–34× faster even on heavily-graded frames, since it shrinks Stage-12 too).
+  **Not colour-exact** — exempt from the ΔE gate, marked `preview: true` in the
+  TIFF provenance; for visual iteration, not the LRT round-trip / final delivery.
+- **`tools/perf/bench_render.py`** — repeatable s/frame + frames/s benchmark and
+  the numpy↔accelerated ΔE-equivalence guard (perf-regression seed).
+
 ### Changed
 - **Perceptual-path review-fix pass (v0.9, `/caveman-review` follow-ups).** Four
   corrections to the just-shipped PERCEPTUAL render intent, none of which touch the

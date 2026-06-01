@@ -191,8 +191,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Per-pixel compute backend (default: auto). numpy = the reference "
             "(no extra dep, the ΔE-gate path); numba = fused multi-core JIT "
-            "kernels for the hot stages (~7x full-res single-frame, colour-"
-            "identical to numpy — max ΔE2000 < 1e-4); auto = numba if installed "
+            "kernels for the DCP-render stages (~7x full-res single-frame on "
+            "that path, colour-identical to numpy — max ΔE2000 < 1e-4; Stage-12 "
+            "faithful grading is not yet accelerated); auto = numba if installed "
             "else numpy. With >1 worker, intra-frame threads are capped to "
             "cores/workers to avoid oversubscription."
         ),

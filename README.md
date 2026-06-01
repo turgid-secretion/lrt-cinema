@@ -131,17 +131,28 @@ Measured on an Apple M1 Max (10 cores, D750 Camera Standard, full-res 24 MP):
 
 | Path | numpy | numba | speed-up |
 |---|---|---|---|
-| Single frame, full res (10 threads) | 16.9 s | 2.5 s | **6.6×** |
-| The cube + tone stages alone | 12.7 s | 0.27 s | **~48×** |
-| Throughput, 10-frame pool | 6.9 s/frame | **0.97 s/frame** | **7.1×** |
+| DCP-render stages (1–9), no grade | 16.9 s | 2.5 s | **6.6×** |
+| └ the cube + tone stages alone | 12.7 s | 0.27 s | **~48×** |
+| Throughput, 10-frame pool (DCP-render) | 6.9 s/frame | **0.97 s/frame** | **7.1×** (10 workers vs 6) |
 
-For rapid grade/sequence iteration, add `--preview-scale {2,4,8}` to render a
-low-resolution **preview** (fast 2×2-bin demosaic + downsample) — up to ~30×
-faster per frame. **Preview output is not colour-exact** (it is exempt from the
-ΔE gate) and is for visual iteration, not the LRT round-trip or final delivery:
+**Scope — what's accelerated:** the numba backend covers the **DCP-render
+stages (1–9)** + the output encode. The **Stage-12 faithful grade ops**
+(Saturation / Vibrance / HSL / Color-Grade) are **not yet accelerated** — they
+add the same cost on both backends, so a heavily-graded frame's full-res
+speed-up shrinks (e.g. a render with HSL + Color-Grade set: ~26 s → ~14.5 s,
+**1.8×**). Accelerating those (same backend, same approach) is the next step;
+see [docs/PIPELINE.md](docs/PIPELINE.md) §11.
+
+For rapid grade/sequence iteration the **preview path is the answer** — and
+because it downsamples *before* the colour math, it shrinks Stage-12 grading
+too, so it stays fast even on heavily-graded frames. Add `--preview-scale
+{2,4,8}` (fast 2×2-bin demosaic + downsample): a heavily-graded frame renders
+**~18× (scale 4) to ~34× (scale 8)** faster. **Preview output is not
+colour-exact** (exempt from the ΔE gate) — for visual iteration, not the LRT
+round-trip or final delivery:
 
 ```bash
-lrt-cinema render --input ... --output ... --preview-scale 4   # ~1/4 res, ~24× faster
+lrt-cinema render --input ... --output ... --preview-scale 4   # ~1/4 res
 ```
 
 ## Scope and non-goals
