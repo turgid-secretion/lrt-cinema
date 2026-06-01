@@ -356,8 +356,9 @@ the aces-dev reference DCTL — `colour` 0.4.x has **no** general gamut compress
 with the **exact published reference constants**: per-channel threshold
 `[0.815, 0.803, 0.880]`, limit `[1.147, 1.264, 1.312]`, power `1.2` (these are
 Academy defaults, **not** tuning). It rolls out-of-AP1 excursions (the **negative
-AP1 channels** that the perceptual ops — DR-compression shipped; OKLCh/CDL coming —
-produce) smoothly back toward the achromatic axis instead of hard-clipping at the
+AP1 channels** that the perceptual ops — DR-compression + ASC-CDL ColorGrade
+shipped; OKLCh HSL coming — produce) smoothly back toward the achromatic axis
+instead of hard-clipping at the
 encode. **Always-on for ACEScg** (general gamut safety, not intent-gated) but
 **gated on actual out-of-AP1 content** → byte-exact no-op (returns the literal
 input) when nothing reaches threshold, so an in-gamut EXR is bit-identical to the
@@ -376,6 +377,42 @@ dependency). Method/params authority:
 §3.5; [`PIPELINE.md`](PIPELINE.md) §7. **Out of scope (still follow-ups):** OKLCh
 HSL + ASC-CDL grade (the other perceptual-op consumers of this pass),
 local-Laplacian, Texture/Clarity.
+
+**Amendment (2026-05-31) — step 2 (Color Grade → ASC CDL) SHIPPED.**
+`_apply_color_grade_perceptual` is implemented as an **offset-only ASC-CDL** grade
+(slope = power = 1) in **ACEScct log**, behind the existing PERCEPTUAL branch; the
+faithful split-tone `apply_color_grade` (additive-in-linear-ProPhoto) is unchanged.
+Chain (contract 1, ProPhoto-in/out): ProPhoto→ACEScg (Bradford, **same params as
+`output._prophoto_to_linear`** — the op does **not** claim ACEScg in/out, which
+would double-transform via `output.py`, the §0 trap) → `colour.models.
+log_encoding_ACEScct` (library toe — the raw v09 spec's toe was sign-flipped/wrong;
+`log_encoding_ACEScct(0.18) → 0.413588`) → per-channel offset → `log_decoding_ACEScct`
+→ inverse Bradford → ProPhoto, **floor 0, no top clamp** (out-of-AP1 → the shared
+RGC pass above). The offset is `out_log[c] = log_in[c] + offset_lum + offset_chroma[c]`:
+**Luminance is a log lift** (uniform per-channel offset, `K_lum_log = 1/17.52` = one
+stop per slider unit-of-100; global + per-wheel share one scale) and **Hue+Sat** is
+the **same zero-sum chroma direction** as faithful `_color_grade_wheel_tint`, applied
+as a per-channel additive log delta scaled by sat/100, zone-weighted by
+`_color_grade_zone_weights` on a **log-domain** luminance proxy (0.18→0.5, white→1.0;
+Resolve Log-wheel placement). **Two verifier corrections folded in (not relayed):**
+(a) the invented multiplicative **"slope" heuristic is DROPPED** — ColorGrade has no
+control mapping to a CDL slope, Luminance is a *lift* = an offset in log; offset-only
+is **the decision** (not "confirm later"), valid ASC-CDL v1.2 that round-trips
+losslessly into a colorist's first Resolve node. (b) the spurious **unified 10th
+ASC-CDL saturation number is DROPPED** — four per-wheel Saturations, no global one,
+no IR source. Constants (`_CG_*_LOG_STRENGTH`, `_CG_ZONE_PROXY_*`) are documented
+**tuning, not LR fidelity** — the perceptual intent targets the ACES master.
+Byte-exact identity (`cg.is_identity()` → literal input) keeps both intents
+bit-identical on a no-grade render (ship gate untouched). Axis-1 oracle: an
+independent scalar reimpl (hand-rolled Bradford + ACEScct + offset SOP, **not** the
+production `colour` calls — contract 4) held to atol 1e-5 + wrong-log-base /
+sign-flipped-toe / non-zero-sum-chroma / swapped-zone sensitivity legs + global-lum
+uniform-offset + shadow-lift + highlight-wheel-dominance + no-top-clamp +
+identity-byte-exact. Authority:
+[`research/v09-dualmode-impl-plan.md`](research/v09-dualmode-impl-plan.md) Step 2;
+[`PIPELINE.md`](PIPELINE.md) §Stage 12. **Out of scope (still follow-ups):** step 3
+**OKLCh HSL** (`_apply_hsl_perceptual` still aliases faithful), local-Laplacian,
+Texture/Clarity.
 
 ---
 

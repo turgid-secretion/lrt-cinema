@@ -29,8 +29,12 @@ colour = pytest.importorskip("colour")  # noqa: F841  (output.py needs it; gate 
 
 from lrt_cinema.dcp import DCPProfile, HsvCube, interpolate_color_matrix  # noqa: E402
 from lrt_cinema.develop_ops import (  # noqa: E402
+    _CG_CHROMA_LOG_STRENGTH,
     _CG_CHROMA_STRENGTH,
+    _CG_LUM_LOG_STRENGTH,
     _CG_LUM_STRENGTH,
+    _CG_ZONE_PROXY_ANCHOR,
+    _CG_ZONE_PROXY_WHITE,
     _DR_ANCHOR,
     _DR_BLEND_HALFWIDTH_ANCHOR,
     _DR_BLEND_HALFWIDTH_BREAK,
@@ -41,6 +45,7 @@ from lrt_cinema.develop_ops import (  # noqa: E402
     _HSL_HUE_MAX_HEX,
     _HSL_LUM_SAT_GATE,
     _PROPHOTO_LUMINANCE,
+    _apply_color_grade_perceptual,
     _color_grade_zone_weights,
     _dr_compress_luminance,
     apply_color_grade,
@@ -1357,3 +1362,347 @@ def test_rgc_cross_check_against_ocio_if_available():
     for i in range(ref.shape[0]):
         ref[i] = cpu.applyRGB(list(ref[i]))
     np.testing.assert_allclose(ours, ref, atol=2e-3)
+
+
+# ---------------------------------------------------------------------------
+# PERCEPTUAL ColorGrade — offset-only ASC-CDL in ACEScct log
+# (develop_ops._apply_color_grade_perceptual). v0.9 dual-mode step 2.
+#
+# Axis-1 ground truth is a wholly INDEPENDENT scalar reimplementation of the
+# full chain — hand-rolled ProPhoto<->ACEScg Bradford (7-digit matrices below,
+# guarded against colour-science), hand-rolled ACEScct from the published AMPAS
+# constants, hand-rolled offset SOP — NOT calling `colour.RGB_to_RGB` /
+# `colour.models.log_encoding_ACEScct` (which production uses; using them both
+# sides is the tautology contract 4 forbids). Agreement is a real cross-check.
+#
+# The CDL is OFFSET-ONLY (slope = power = 1): per-channel log offset = a uniform
+# Luminance lift + a zero-sum chroma direction, zone-weighted. Constants
+# (_CG_*_LOG_STRENGTH, _CG_ZONE_PROXY_*) are TUNING; the oracle validates the
+# *defined* math, not LR appearance. Injectable bugs (`flip_toe`,
+# `wrong_log_base`, `per_channel`, `swap_zones`) drive the discriminating legs.
+# ---------------------------------------------------------------------------
+
+# ProPhoto-RGB(D50) linear -> ACEScg(AP1) linear, Bradford D50->~D60. 7-digit,
+# guarded against colour.matrix_RGB_to_RGB(...,"Bradford") by the test below so
+# it cannot silently drift from the matrix output.py / the op converts with.
+_M_PP_LIN_TO_ACESCG = np.array([
+    [1.1690967, -0.0351612, -0.1340422],
+    [-0.0670773, 1.0756683, -0.0085294],
+    [0.0094233, -0.0133536, 1.0036796],
+])
+# ACEScg(AP1) linear -> ProPhoto-RGB(D50) linear (the inverse Bradford).
+_M_ACESCG_TO_PP_LIN = np.array([
+    [0.8562045, 0.0294258, 0.1145489],
+    [0.0532754, 0.9316365, 0.0150474],
+    [-0.0073287, 0.0121186, 0.9954843],
+])
+
+# Published AMPAS ACEScct constants (CONSTANTS_ACES_CCT; cited by colour 0.4.6).
+# The toe is the LINEAR segment A*x+B below X_BRK (A,B > 0 — positive slope; the
+# raw v09 spec sign-flipped this). Above X_BRK it is the log segment.
+_ACESCCT_X_BRK = 0.0078125            # 2**-7
+_ACESCCT_Y_BRK = 0.155251141552511
+_ACESCCT_A = 10.5402377416545
+_ACESCCT_B = 0.0729055341958355
+_ACESCCT_LOG_DENOM = 17.52            # (log2(x) + 9.72) / 17.52
+_ACESCCT_LOG_OFFSET = 9.72
+
+
+def _oracle_acescct_encode(x, wrong_log_base=False):
+    """Hand-rolled ACEScct log encode (scalar). `wrong_log_base` injects a
+    natural-log base instead of log2 in the log segment (the wrong-base bug)."""
+    if x <= _ACESCCT_X_BRK:
+        return _ACESCCT_A * x + _ACESCCT_B
+    if wrong_log_base:
+        return (math.log(x) + _ACESCCT_LOG_OFFSET) / _ACESCCT_LOG_DENOM
+    return (math.log2(x) + _ACESCCT_LOG_OFFSET) / _ACESCCT_LOG_DENOM
+
+
+def _oracle_acescct_decode(y, wrong_log_base=False):
+    """Hand-rolled ACEScct log decode (scalar), the exact inverse of encode."""
+    if y <= _ACESCCT_Y_BRK:
+        return (y - _ACESCCT_B) / _ACESCCT_A
+    if wrong_log_base:
+        return math.exp(y * _ACESCCT_LOG_DENOM - _ACESCCT_LOG_OFFSET)
+    return 2.0 ** (y * _ACESCCT_LOG_DENOM - _ACESCCT_LOG_OFFSET)
+
+
+def _oracle_hue_dir(hue_deg, zero_sum=True):
+    """Saturated RGB for `hue_deg` via the hexcone sector formula (matches
+    `_hsv_to_rgb_dcp` at S=V=1), mean-subtracted to a zero-sum chroma direction.
+    `zero_sum=False` keeps the raw RGB (the non-zero-sum chroma bug)."""
+    h = (hue_deg % 360.0) * (6.0 / 360.0)
+    sector = int(np.floor(h)) % 6
+    f = h - np.floor(h)
+    rgb = np.array([
+        (1.0, f, 0.0), (1.0 - f, 1.0, 0.0), (0.0, 1.0, f),
+        (0.0, 1.0 - f, 1.0), (f, 0.0, 1.0), (1.0, 0.0, 1.0 - f),
+    ][sector], dtype=np.float64)
+    return rgb - rgb.mean() if zero_sum else rgb
+
+
+def _oracle_cdl_perceptual(
+    prophoto, cg,
+    per_channel=False, swap_zones=False, flip_toe=False, wrong_log_base=False,
+):
+    """Independent scalar reimpl of the perceptual offset-only ASC-CDL chain.
+
+    ProPhoto(D50) -> ACEScg [Bradford] -> ACEScct log -> +offset_lum
+    +offset_chroma[c] -> ACEScct decode -> ProPhoto [inverse Bradford], floor 0.
+
+    Bug legs: `flip_toe` (toe slope sign-flipped → discontinuous join),
+    `wrong_log_base` (ln instead of log2), `per_channel` (chroma NOT zero-sum →
+    net lift), `swap_zones` (shadow/highlight masks swapped)."""
+    yw = list(_PROPHOTO_LUMINANCE)
+    half_span = math.log2(_CG_ZONE_PROXY_WHITE / _CG_ZONE_PROXY_ANCHOR)
+    log_anchor = math.log2(_CG_ZONE_PROXY_ANCHOR)
+    gamma_b = 2.0 ** (-cg.balance / 100.0)
+    p = 1.0 + 2.0 * (1.0 - min(max(cg.blending, 0.0), 100.0) / 100.0)
+
+    def toe_encode(x):
+        if flip_toe and x <= _ACESCCT_X_BRK:
+            return -_ACESCCT_A * x + _ACESCCT_B  # sign-flipped toe slope
+        return _oracle_acescct_encode(x, wrong_log_base=wrong_log_base)
+
+    chroma = {
+        name: (_CG_CHROMA_LOG_STRENGTH * (sat / 100.0)
+               * _oracle_hue_dir(hue, zero_sum=not per_channel))
+        for name, (hue, sat) in {
+            "sh": (cg.shadow_hue, cg.shadow_sat),
+            "mid": (cg.midtone_hue, cg.midtone_sat),
+            "hi": (cg.highlight_hue, cg.highlight_sat),
+            "gl": (cg.global_hue, cg.global_sat),
+        }.items()
+    }
+
+    flat = prophoto.reshape(-1, 3).astype(np.float64)
+    out = np.empty_like(flat)
+    for i in range(flat.shape[0]):
+        px = flat[i]
+        acescg = _M_PP_LIN_TO_ACESCG @ px
+        log_in = np.array([toe_encode(float(c)) for c in acescg])
+
+        lum = float(px @ np.array(yw))
+        proxy = min(max(0.5 + (math.log2(max(lum, 0.0) + _DR_EPS) - log_anchor)
+                        / (2.0 * half_span), 0.0), 1.0)
+        tt = proxy ** gamma_b
+        sh = (1.0 - tt) ** p
+        hi = tt ** p
+        mid = 1.0 - sh - hi
+        if swap_zones:
+            sh, hi = hi, sh
+
+        offset_lum = ((sh * cg.shadow_lum / 100.0 + mid * cg.midtone_lum / 100.0
+                       + hi * cg.highlight_lum / 100.0 + cg.global_lum / 100.0)
+                      * _CG_LUM_LOG_STRENGTH)
+        offset_chroma = (sh * chroma["sh"] + mid * chroma["mid"]
+                         + hi * chroma["hi"] + chroma["gl"])
+
+        log_out = log_in + offset_lum + offset_chroma
+        acescg_out = np.array(
+            [_oracle_acescct_decode(float(c), wrong_log_base=wrong_log_base)
+             for c in log_out])
+        pp_out = _M_ACESCG_TO_PP_LIN @ acescg_out
+        out[i] = np.maximum(pp_out, 0.0)
+    return out.reshape(prophoto.shape)
+
+
+def _cdl_edge_pixels():
+    """Pixels spanning the regions the CDL chain must get right: dark/mid/bright
+    neutral, saturated primaries, and OVERRANGE + saturated (a grey wedge is
+    blind to the per-channel-vs-zero-sum chroma error and the overrange path)."""
+    rng = np.random.default_rng(20260531)
+    rand = rng.random((1024, 3)) * 1.4  # some overrange
+    edge = np.array([
+        [0.01, 0.01, 0.01], [0.18, 0.18, 0.18], [0.5, 0.5, 0.5], [0.98, 0.98, 0.98],
+        [0.8, 0.05, 0.02], [0.05, 0.6, 0.1], [0.1, 0.1, 0.7],   # saturated R/G/B
+        [1.4, 0.2, 0.3], [3.0, 0.1, 0.05],                      # overrange + saturated
+    ])
+    return np.concatenate([rand, edge], axis=0).reshape(-1, 1, 3)
+
+
+_CDL_WHEELS = ColorGrade(
+    shadow_hue=220.0, shadow_sat=70.0, shadow_lum=-20.0,
+    midtone_hue=120.0, midtone_sat=40.0, midtone_lum=10.0,
+    highlight_hue=40.0, highlight_sat=60.0, highlight_lum=25.0,
+    global_hue=300.0, global_sat=20.0, global_lum=-5.0,
+    blending=65.0, balance=-30.0,
+)
+
+
+def test_cdl_perceptual_bradford_matrices_match_colour_science():
+    """The hardcoded 7-digit ProPhoto<->ACEScg Bradford matrices the oracle uses
+    must equal colour-science's (the op converts with `colour.RGB_to_RGB`,
+    Bradford), so the oracle can't silently drift from production — while still
+    NOT calling that production conversion itself (contract 4)."""
+    fwd = colour.matrix_RGB_to_RGB(
+        colour.RGB_COLOURSPACES["ProPhoto RGB"], colour.RGB_COLOURSPACES["ACEScg"],
+        chromatic_adaptation_transform="Bradford",
+    )
+    inv = colour.matrix_RGB_to_RGB(
+        colour.RGB_COLOURSPACES["ACEScg"], colour.RGB_COLOURSPACES["ProPhoto RGB"],
+        chromatic_adaptation_transform="Bradford",
+    )
+    np.testing.assert_allclose(_M_PP_LIN_TO_ACESCG, fwd, atol=1e-6)
+    np.testing.assert_allclose(_M_ACESCG_TO_PP_LIN, inv, atol=1e-6)
+
+
+def test_acescct_roundtrip_matches_library_constants():
+    """The hand-rolled ACEScct (correct X_BRK / A / B / log2) must agree with
+    colour.models.log_encoding_ACEScct at black / mid-grey(0.18 -> 0.413588) /
+    white / primaries, and round-trip to <1e-6 — pinning the published anchors
+    the oracle's toe relies on."""
+    from colour.models import log_decoding_ACEScct, log_encoding_ACEScct
+
+    for x in [0.0, 1e-4, _ACESCCT_X_BRK, 0.18, 0.5, 1.0, 4.0]:
+        assert abs(_oracle_acescct_encode(x) - float(log_encoding_ACEScct(x))) < 1e-6
+    assert abs(_oracle_acescct_encode(0.18) - 0.413588) < 1e-5  # published anchor
+    for y in np.linspace(-0.4, 1.0, 50):
+        assert abs(_oracle_acescct_decode(float(y))
+                   - float(log_decoding_ACEScct(y))) < 1e-6
+    for x in [-0.05, 0.0, 0.001, 0.18, 0.7, 2.0]:  # incl. negatives (linear toe)
+        assert abs(_oracle_acescct_decode(_oracle_acescct_encode(x)) - x) < 1e-6
+
+
+def test_cdl_perceptual_matches_independent_oracle():
+    """_apply_color_grade_perceptual must equal the independent scalar oracle to
+    ~0 over random + saturated + overrange pixels, with all four wheels +
+    non-default blending & balance engaged."""
+    rgb = _cdl_edge_pixels()
+    got = _apply_color_grade_perceptual(rgb.astype(np.float32), _CDL_WHEELS)
+    want = _oracle_cdl_perceptual(rgb, _CDL_WHEELS)
+    np.testing.assert_allclose(got, want, atol=1e-5)
+
+
+def test_cdl_perceptual_oracle_detects_wrong_log_base():
+    """Sensitivity: the ACEScct log segment is log2. A natural-log base shifts
+    every above-toe code value; the real op matches the log2 oracle and NOT the
+    ln one."""
+    rgb = _cdl_edge_pixels()
+    correct = _oracle_cdl_perceptual(rgb, _CDL_WHEELS)
+    wrong = _oracle_cdl_perceptual(rgb, _CDL_WHEELS, wrong_log_base=True)
+    assert np.max(np.abs(correct - wrong)) > 1e-2
+    np.testing.assert_allclose(
+        _apply_color_grade_perceptual(rgb.astype(np.float32), _CDL_WHEELS),
+        correct, atol=1e-5,
+    )
+
+
+def test_cdl_perceptual_oracle_detects_sign_flipped_toe():
+    """Sensitivity: the ACEScct toe slope A is POSITIVE (the v09 spec sign-flipped
+    it). A flipped toe diverges on the near-black / saturated channels that fall
+    in the linear-toe region; the real op matches the +A oracle."""
+    rgb = _cdl_edge_pixels()
+    correct = _oracle_cdl_perceptual(rgb, _CDL_WHEELS)
+    flipped = _oracle_cdl_perceptual(rgb, _CDL_WHEELS, flip_toe=True)
+    assert np.max(np.abs(correct - flipped)) > 1e-2
+    np.testing.assert_allclose(
+        _apply_color_grade_perceptual(rgb.astype(np.float32), _CDL_WHEELS),
+        correct, atol=1e-5,
+    )
+
+
+def test_cdl_perceptual_oracle_detects_non_zero_sum_chroma():
+    """Sensitivity (the §0 hue/lift error): the chroma offset is zero-sum (a pure
+    Hue+Sat carries no net log lift). A buggy oracle using the raw saturated RGB
+    instead injects a brightness shift; the real op matches the zero-sum oracle."""
+    rgb = np.array([[[0.18, 0.18, 0.18]]], dtype=np.float64)  # neutral → chroma is all there is
+    cg = ColorGrade(global_hue=240.0, global_sat=100.0)        # pure blue, no lum
+    correct = _oracle_cdl_perceptual(rgb, cg, per_channel=False)
+    wrong = _oracle_cdl_perceptual(rgb, cg, per_channel=True)
+    assert np.max(np.abs(correct - wrong)) > 1e-2
+    np.testing.assert_allclose(
+        _apply_color_grade_perceptual(rgb.astype(np.float32), cg), correct, atol=1e-5,
+    )
+
+
+def test_cdl_perceptual_oracle_detects_swapped_zones():
+    """Sensitivity: shadow vs highlight masks are distinct. Swapping them sends
+    the shadow tint to the highlights — diverging on a dark pixel where the two
+    wheels carry different colours."""
+    rgb = np.array([[[0.03, 0.03, 0.03]]], dtype=np.float64)  # a deep shadow
+    cg = ColorGrade(
+        shadow_hue=240.0, shadow_sat=100.0, shadow_lum=-40.0,    # blue, dark shadows
+        highlight_hue=40.0, highlight_sat=100.0, highlight_lum=40.0,  # orange, bright highs
+    )
+    correct = _oracle_cdl_perceptual(rgb, cg, swap_zones=False)
+    wrong = _oracle_cdl_perceptual(rgb, cg, swap_zones=True)
+    assert np.max(np.abs(correct - wrong)) > 1e-2
+    np.testing.assert_allclose(
+        _apply_color_grade_perceptual(rgb.astype(np.float32), cg), correct, atol=1e-5,
+    )
+
+
+def test_cdl_perceptual_identity_byte_exact():
+    """A zero grade (no wheel Sat/Lum) returns the input byte-exact — neutral +
+    saturated + overrange + near-black — so PERCEPTUAL stays bit-identical to
+    FAITHFUL on a no-grade render (the ship-gate guarantee). is_identity()
+    short-circuits before the ACEScct + Bradford round-trip (reversible only to
+    float tolerance, so the short-circuit is mandatory)."""
+    rng = np.random.default_rng(7)
+    rgb = (rng.random((64, 3)) * 1.5).astype(np.float32).reshape(-1, 1, 3)
+    edge = np.array([
+        [0.0, 0.0, 0.0], [0.001, 0.001, 0.001], [0.8, 0.05, 0.02], [1.4, 0.2, 0.3],
+    ], dtype=np.float32).reshape(-1, 1, 3)
+    rgb = np.concatenate([rgb, edge], axis=0)
+    out = _apply_color_grade_perceptual(rgb, ColorGrade())  # all-zero → identity
+    assert np.array_equal(out, rgb)
+    assert out is rgb  # the literal input object, not a round-tripped copy
+
+
+def test_cdl_perceptual_global_lum_uniform_log_offset():
+    """+Global Luminance adds the SAME log offset to all three ACEScct channels
+    (a uniform tonal lift, not a per-channel tint). Verified by encoding the
+    op's in/out to ACEScct and checking the per-channel delta is uniform and
+    equals global_lum/100 * K_lum_log."""
+    neutral = np.array([[[0.18, 0.18, 0.18]]], dtype=np.float64)
+    cg = ColorGrade(global_lum=50.0)
+    out = _apply_color_grade_perceptual(neutral.astype(np.float32), cg)
+
+    def to_acescct(pp):
+        acescg = (_M_PP_LIN_TO_ACESCG @ pp.reshape(-1, 3).T).T
+        return np.array([[_oracle_acescct_encode(float(c)) for c in row]
+                         for row in acescg])
+
+    delta = to_acescct(np.asarray(out, dtype=np.float64)) - to_acescct(neutral)
+    expected = 0.5 * _CG_LUM_LOG_STRENGTH  # global_lum/100 * K_lum_log
+    np.testing.assert_allclose(delta.ravel(), expected, atol=1e-4)
+    assert delta.std() < 1e-5  # uniform across channels
+
+
+def test_cdl_perceptual_shadow_lum_lifts_log_shadows():
+    """+Shadow Luminance lifts log shadows measurably while leaving highlights
+    essentially untouched (the zone mask is real, not global). A sensitivity
+    proof: the dark-pixel log lift is > 1e-3 and far exceeds the bright pixel's."""
+    sh = ColorGrade(shadow_lum=80.0)
+    dark = np.array([[[0.02, 0.02, 0.02]]], dtype=np.float32)
+    bright = np.array([[[0.9, 0.9, 0.9]]], dtype=np.float32)
+    out_dark = _apply_color_grade_perceptual(dark, sh)
+    out_bright = _apply_color_grade_perceptual(bright, sh)
+    lift_dark = float(out_dark.ravel()[0]) - float(dark.ravel()[0])
+    lift_bright = abs(float(out_bright.ravel()[0]) - float(bright.ravel()[0]))
+    assert lift_dark > 1e-3                 # shadows lifted measurably
+    assert lift_dark > 20.0 * lift_bright   # highlights ~untouched (zone-gated)
+
+
+def test_cdl_perceptual_highlight_lum_dominated_by_highlight_wheel():
+    """A near-white pixel must be moved DOMINANTLY by the Highlight wheel, not the
+    Midtone wheel — the guard that the log-domain zone proxy is placed correctly
+    (0.18 -> 0.5, white -> 1.0). The mirror of the shadow-lift test; without the
+    explicit proxy normalization a raw ACEScct proxy would read white as ~half
+    midtone and this would fail."""
+    near_white = np.array([[[0.95, 0.95, 0.95]]], dtype=np.float32)
+    only_hi = _apply_color_grade_perceptual(near_white, ColorGrade(highlight_lum=60.0))
+    only_mid = _apply_color_grade_perceptual(near_white, ColorGrade(midtone_lum=60.0))
+    move_hi = abs(float(only_hi.ravel()[0]) - 0.95)
+    move_mid = abs(float(only_mid.ravel()[0]) - 0.95)
+    assert move_hi > 3.0 * move_mid  # highlight wheel dominates the near-white pixel
+
+
+def test_cdl_perceptual_no_top_clamp_preserves_overrange():
+    """An overrange (>1) input highlight survives the CDL chain un-truncated —
+    scene-referred, no display ceiling. Out-of-AP1 is the gated RGC pass's job in
+    output.py, NOT this op (which must not hard-clip)."""
+    over = np.array([[[3.0, 0.1, 0.05]]], dtype=np.float32)
+    out = _apply_color_grade_perceptual(over, ColorGrade(highlight_sat=50.0, highlight_hue=40.0))
+    assert float(out.max()) > 1.0  # overrange preserved

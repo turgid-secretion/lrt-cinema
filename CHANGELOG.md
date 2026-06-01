@@ -8,6 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] — v0.8 prep
 
 ### Added
+- **Perceptual Color Grade → offset-only ASC-CDL (v0.9 dual-mode step 2,
+  DECISIONS §7).** `_apply_color_grade_perceptual` (previously aliasing the
+  faithful split-tone op) now emits an **offset-only ASC-CDL** grade (slope =
+  power = 1) in **ACEScct log** on the **PERCEPTUAL render-intent** (the ACEScg
+  master); the faithful `apply_color_grade` (additive-in-linear-ProPhoto, the
+  sRGB TIFF / LRT round-trip) is **unchanged**. Chain (ProPhoto-in/out per
+  DECISIONS §7 contract 1): ProPhoto→ACEScg (Bradford, the **same params as
+  `output._prophoto_to_linear`** — the op does *not* claim ACEScg in/out, which
+  would double-transform the primaries via `output.py`) → `colour.models.
+  log_encoding_ACEScct` (the library toe, **not** hand-rolled; `0.18 → 0.413588`)
+  → per-channel offset → `log_decoding_ACEScct` → inverse Bradford → ProPhoto,
+  **floor 0, no top clamp** (out-of-AP1 → the shared RGC pass). The offset is a
+  uniform **Luminance lift** (`K_lum_log = 1/17.52`, one stop per slider
+  unit-of-100; global + per-wheel share one scale) plus the **same zero-sum
+  chroma direction** as faithful `_color_grade_wheel_tint`, applied as an additive
+  log delta scaled by sat/100 and zone-weighted by `_color_grade_zone_weights` on
+  a **log-domain** luminance proxy (0.18→0.5, white→1.0; Resolve Log-wheel
+  placement). The invented multiplicative "slope" heuristic and the spurious
+  unified 10th-CDL-saturation number from the raw spec are **dropped** (no IR
+  source; offset-only is *the decision*). Constants (`_CG_*_LOG_STRENGTH`,
+  `_CG_ZONE_PROXY_*`) are documented **tuning, not an LR-fidelity claim** — the
+  perceptual intent targets the ACES master. **Byte-exact identity** is preserved
+  (`cg.is_identity()` → literal input before any conversion), so both intents stay
+  bit-identical on a no-grade render and the gym 0.026 / rose 0.545 ΔE ship gate
+  is untouched. An Axis-1 oracle holds an independent scalar reimpl (hand-rolled
+  Bradford + ACEScct + offset SOP, **not** the production `colour` calls) to atol
+  1e-5 with wrong-log-base / sign-flipped-toe / non-zero-sum-chroma / swapped-zone
+  sensitivity legs, plus global-lum-uniform-offset, shadow-lift,
+  highlight-wheel-dominance, no-top-clamp, and identity-byte-exact tests. Driven
+  entirely by the `crs:ColorGrade*` XMP wheels — **no new CLI control**. Authority:
+  `docs/research/v09-dualmode-impl-plan.md` Step 2; `docs/PIPELINE.md` §Stage 12.
 - **ACES Reference Gamut Compression (RGC) — the single gated AP1 gamut-safety
   pass (v0.9, DECISIONS §7 contract 2).** The perceptual develop ops
   (DR-compression — shipped; OKLCh HSL / ASC-CDL grade — coming) can push pixels
