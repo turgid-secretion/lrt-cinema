@@ -687,9 +687,8 @@ def apply_texture_clarity(
     texture_band = log_l - base_fine
     clarity_band = base_fine - base_coarse
 
-    texture_gain = 1.0 + _TC_TEXTURE_GAIN * (texture / 100.0)
     midtone_w = _tc_midtone_weight(log_l)
-    clarity_gain = 1.0 + _TC_CLARITY_GAIN * (clarity / 100.0) * midtone_w
+    texture_gain, clarity_gain = _tc_band_gains(texture, clarity, midtone_w)
 
     log_l_out = base_coarse + texture_gain * texture_band + clarity_gain * clarity_band
     lum_out = np.maximum(np.exp2(log_l_out) - _DR_EPS, 0.0)
@@ -1273,3 +1272,18 @@ def _tc_midtone_weight(log_l: np.ndarray) -> np.ndarray:
     sigma `_TC_MIDTONE_SIGMA` stops. Scales the Clarity band so its local-contrast
     boost is midtone-weighted (tapers in deep shadow / bright highlight)."""
     return np.exp(-0.5 * ((log_l - _DR_LOG_ANCHOR) / _TC_MIDTONE_SIGMA) ** 2)
+
+
+def _tc_band_gains(texture, clarity, midtone_w):
+    """The per-band detail-boost multipliers, **floored at 0**. Texture scales the
+    fine band uniformly; Clarity scales the mid band weighted by `midtone_w` (1.0 at
+    the anchor). The floor makes a strong NEGATIVE slider SMOOTH (gain→0) rather than
+    phase-INVERT the detail: with `K=1.5` the unfloored gain `1 + K·s/100` crosses 0
+    at `s ≈ −67`, and a negative gain flips a bright speckle to a dark one (LR's
+    negative Texture/Clarity never inverts). Floored, the gain is monotone non-
+    decreasing in the slider and ≥ 0 everywhere; at `s=+100` it is the full
+    `1 + K = 2.5` (the floor is inert on the boost arm). `midtone_w` may be a scalar
+    or an array (Clarity returns the broadcast result)."""
+    texture_gain = max(0.0, 1.0 + _TC_TEXTURE_GAIN * (texture / 100.0))
+    clarity_gain = np.maximum(0.0, 1.0 + _TC_CLARITY_GAIN * (clarity / 100.0) * midtone_w)
+    return texture_gain, clarity_gain
