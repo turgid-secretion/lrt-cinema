@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] — v0.8 prep
 
 ### Added
+- **Apple-Silicon Metal GPU backend (`--backend mlx`, `perf/gpu-render`).** Runs
+  the WHOLE faithful sRGB-TIFF render on the GPU in one upload / one download —
+  stages 2-9, Stage-11, the full **Stage-12 faithful grade**
+  (ToneCurve/Sat/Vibrance/HSL/ColorGrade/Contrast), and the sRGB encode
+  (`lrt_cinema.accel._mlx_kernels.MlxFaithfulRenderer`). It is the only path that
+  accelerates the Stage-12 grade, so it wins biggest on graded frames: measured
+  M1 Max vs the numba CPU path — a heavily-graded full-res frame **14.0 s → 1.54 s
+  (9.1×)**, graded sequence throughput **8.1 → 1.0 s/frame (7.9×, 3–4 workers:
+  the CPU demosaics frames while the GPU serialises colour)**; a flat frame is
+  ~2.1× (demosaic-bound). Colour-identical to numpy at **mean ΔE2000 ~1–3e-5**
+  (max ~1e-3 — the GPU float trade-off, far below the 1.0 gate; numpy/numba stay
+  the bit-exact reference). Optional `[gpu]` extra (mlx; env-marker-gated to
+  Apple Silicon — a no-op elsewhere); faithful sRGB only (falls back to
+  numba/numpy for EXR/perceptual/unsupported profiles). Per-kernel the GPU only
+  *ties* the CPU (the LookTable gather is memory-bandwidth-bound on the M1's
+  shared bus); the win is whole-path offload + fusing Stage-12. A split-frame
+  CPU-pool + GPU-lane scheduler was measured and rejected (counterproductive).
+  See docs/PIPELINE.md §11.
 - **Optional numba compute backend + proxy preview (`perf/gpu-render`).** A thin
   backend abstraction (`lrt_cinema.accel`) JIT-accelerates the per-pixel
   DCP-render hotspots — the HSV cube (Stage 5/8) and the hue-preserving tone

@@ -56,8 +56,18 @@ def _render_array(dng: Path, profile, *, scale: int, backend: str, intent):
     float array the TIFF writer would quantise (so ΔE is measured on the actual
     delivered colours, before integer rounding)."""
     os.environ["LRT_CINEMA_BACKEND"] = backend
-    from lrt_cinema.develop_ops import apply_develop_ops
     from lrt_cinema.ir import DevelopOps
+
+    # mlx runs the WHOLE faithful sRGB render on the GPU (one upload/download),
+    # so exercise that path directly rather than render_frame's per-stage path
+    # (which would resolve 'mlx'→numpy). FAITHFUL sRGB only.
+    if backend == "mlx":
+        from lrt_cinema import accel
+        return accel.mlx_render_frame_to_srgb(
+            dng, profile, develop_ops=DevelopOps(), preview_scale=scale,
+        )
+
+    from lrt_cinema.develop_ops import apply_develop_ops
     from lrt_cinema.output import _prophoto_to_display
     from lrt_cinema.pipeline import render_frame
 
