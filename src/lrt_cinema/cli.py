@@ -187,6 +187,29 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     render.add_argument(
+        "--backend", default="auto", choices=("auto", "numpy", "numba"),
+        help=(
+            "Per-pixel compute backend (default: auto). numpy = the reference "
+            "(no extra dep, the ΔE-gate path); numba = fused multi-core JIT "
+            "kernels for the hot stages (~7x full-res single-frame, colour-"
+            "identical to numpy — max ΔE2000 < 1e-4); auto = numba if installed "
+            "else numpy. With >1 worker, intra-frame threads are capped to "
+            "cores/workers to avoid oversubscription."
+        ),
+    )
+    render.add_argument(
+        "--preview-scale", dest="preview_scale", type=int, default=1,
+        choices=(1, 2, 4, 8),
+        help=(
+            "Render a low-resolution PREVIEW at ~1/N linear resolution for "
+            "rapid grade/sequence iteration (default 1 = full delivery res). "
+            "2/4/8 use a fast 2x2-bin demosaic + area downsample, so frames "
+            "render up to ~30x faster. PREVIEW IS NOT COLOUR-EXACT and is "
+            "exempt from the ΔE gate — for visual iteration, not the LRT "
+            "round-trip / final delivery."
+        ),
+    )
+    render.add_argument(
         "--no-dng-convert", dest="no_dng_convert",
         action="store_true", default=False,
         help=(
@@ -217,6 +240,9 @@ class _RenderJob:
     no_dng_convert: bool
     dng_cache_dir: Path
     intent: RenderIntent = RenderIntent.FAITHFUL
+    backend: str = "numpy"        # resolved concrete backend ("numpy"|"numba")
+    threads_per_worker: int = 1   # numba intra-frame thread cap (oversubscription guard)
+    preview_scale: int = 1        # 1 = full res; 2/4/8 = preview
 
 
 @dataclass
@@ -232,6 +258,13 @@ def _render_one_frame(job: _RenderJob) -> _RenderResult:
     output writer. Heavy imports (rawpy, OpenEXR, colour) deferred to here
     so the parent process — and `--dry-run` — stays slim."""
     try:
+        # Select the compute backend BEFORE importing the pipeline, then cap
+        # numba's thread pool so N workers × T threads don't oversubscribe the
+        # cores (each worker is its own process; threads multiply across them).
+        os.environ["LRT_CINEMA_BACKEND"] = job.backend
+        from lrt_cinema import accel
+        accel.set_threads(job.threads_per_worker)
+
         # Lazy imports — these are only needed inside the worker.
         from lrt_cinema.develop_ops import apply_develop_ops
         from lrt_cinema.dng_convert import resolve_render_input
@@ -259,15 +292,20 @@ def _render_one_frame(job: _RenderJob) -> _RenderResult:
         stop_after_stage = 7 if job.preset in STAGE_7_PRESETS else 9
         result = render_frame(
             dng_path, profile, dcp_path=job.dcp_path, develop_ops=job.ops,
-            stop_after_stage=stop_after_stage,
+            stop_after_stage=stop_after_stage, preview_scale=job.preview_scale,
         )
         with_dev_ops = apply_develop_ops(result.prophoto, job.ops, job.intent)
+        provenance = {
+            "source_frame": job.src_raw.name,
+            "frame_index": job.frame_index,
+        }
+        if job.preview_scale > 1:
+            # Self-describe a preview so a downstream tool can't mistake it for
+            # a colour-exact delivery frame.
+            provenance["preview"] = True
+            provenance["preview_scale"] = job.preview_scale
         write_preset_output(
-            with_dev_ops, job.dst_stem, job.preset,
-            provenance={
-                "source_frame": job.src_raw.name,
-                "frame_index": job.frame_index,
-            },
+            with_dev_ops, job.dst_stem, job.preset, provenance=provenance,
         )
         return _RenderResult(job.frame_index, job.src_raw, ok=True)
     except Exception as exc:
@@ -524,6 +562,27 @@ def _cmd_render(args: argparse.Namespace) -> int:
 
     _warn_dropped_ops(per_frame, intent)
 
+    # Resolve the compute backend once (so all workers agree) and cap each
+    # worker's intra-frame numba threads to cores/workers — N processes each
+    # spinning all cores would thrash. workers==1 (latency/preview) keeps all
+    # cores for the single frame.
+    from lrt_cinema import accel
+    backend = accel.resolve_backend(args.backend)
+    cpu = os.cpu_count() or 2
+    threads_per_worker = (max(1, cpu // max(1, args.workers))
+                          if backend == "numba" else 1)
+    sys.stderr.write(
+        f"info: compute backend = {backend}"
+        + (f" ({threads_per_worker} thread(s)/worker)\n" if backend == "numba"
+           else "\n"),
+    )
+    if args.preview_scale > 1:
+        sys.stderr.write(
+            f"info: PREVIEW mode — rendering at ~1/{args.preview_scale} resolution "
+            f"(fast 2x2-bin demosaic + downsample). NOT colour-exact / not for "
+            f"the LRT round-trip; for visual iteration only.\n",
+        )
+
     jobs = []
     for i in range(args.from_frame, to_frame):
         src_raw = args.input / seq.source_frames[i]
@@ -538,6 +597,9 @@ def _cmd_render(args: argparse.Namespace) -> int:
             no_dng_convert=args.no_dng_convert,
             dng_cache_dir=dng_cache_dir,
             intent=intent,
+            backend=backend,
+            threads_per_worker=threads_per_worker,
+            preview_scale=args.preview_scale,
         ))
 
     if args.dry_run:
@@ -545,6 +607,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
             f"dry-run: would render {len(jobs)} frame(s) "
             f"[{args.from_frame}..{to_frame}) → {args.output} "
             f"(target={args.target}, preset={preset}, intent={intent.value}, "
+            f"backend={backend}, preview_scale={args.preview_scale}, "
             f"workers={args.workers}).\n",
         )
         return 0

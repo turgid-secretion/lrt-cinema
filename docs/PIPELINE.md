@@ -8,7 +8,7 @@ tap in. CLAUDE.md is the index of invariants; this is the engine itself.
 > **Status:** repo-truth as of **2026-05-30**. This is the canonical as-built
 > engine reference; the 2026-05-27 pre-implementation spec it supersedes
 > (`v06-architecture.md`, now-wrong on Stage 9) was archived in the Phase-4 doc
-> reduction — see [§11](#11-document-map--what-supersedes-what).
+> reduction — see [§12](#12-document-map--what-supersedes-what).
 
 ---
 
@@ -347,7 +347,95 @@ History: gym/rose were 0.789/0.844 before the 2026-05-30 hue-preserving-tone fix
 
 ---
 
-## 11. Document map / what supersedes what
+## 11. Compute backends & performance (`accel`, proxy)
+
+The render maths lives behind a thin backend abstraction (`lrt_cinema.accel`)
+so the per-pixel hotspots can run on a faster compute backend **without changing
+the colour science**. Two backends:
+
+- **numpy** (default; `LRT_CINEMA_BACKEND` unset or `numpy`) — the pure-numpy
+  reference. The only hard dependency, the path the **ΔE ship gate measures**,
+  the universal fallback. Stages 5/8/9 call `accel.*`, whose numpy branch is the
+  *literal* former composition (`_rgb_to_hsv_dcp` → `_apply_hsv_cube` →
+  `_hsv_to_rgb_dcp` → `np.where(valid)`; `apply_rgb_tone`) — behaviour-preserving
+  by construction.
+- **numba** (`numba`, or `auto` = numba-if-importable) — fused, multi-core
+  `@njit(parallel=True, cache=True, fastmath=False)` kernels in
+  `accel/_numba_kernels.py`. Optional extra (`pip install lrt-cinema[fast]`);
+  **never a hard dependency**.
+
+**What moved (faithful sRGB-TIFF path, the profiled hotspots):**
+
+| Stage | Kernel | Backend | numpy → numba (24 MP, M1 Max) | Notes |
+|---|---|---|---|---|
+| 5 / 8 | `lut_cube_rgb` | numba | cube **8.86 s → 0.18 s** | fused RGB→HSV→trilinear→HSV→RGB + neg-passthrough, **float32** (matches the ref) |
+| 9 | `rgb_tone_spline` | numba | **3.82 s → 0.09 s** | `RefBaselineRGBTone`, Hermite eval in **float64** (matches `DngSplineSolver`) |
+| 13 | `_prophoto_to_display` | numpy (fast) | **1.76 s → 0.59 s** | cached float32 composed ProPhoto→sRGB matrix + sRGB OETF, replacing per-frame float64 `colour.RGB_to_RGB`; helps **both** backends |
+| 1 | demosaic + ASN | numpy | one `rawpy.imread` (was two) | `_decode_raw` folds the AsShotNeutral read into the demosaic open |
+
+The remaining linear stages (2 WB, 3 cam→XYZ, 4 XYZ→ProPhoto, 7 ExposureRamp)
+stay numpy — at the throughput config (N workers × 1 thread) a single-threaded
+kernel would not beat their already-lean vectorised matmuls; fusing the linear
+matrices (2+3+4 → one matmul, FM path) and JIT-ing the ramp/encode are recorded
+follow-ups the abstraction already supports.
+
+**Measured (D750 Camera Standard, full-res 24 MP, M1 Max 10-core):** full-res
+single frame **16.9 s → 2.5 s (6.6×)**; the cube+tone stages alone **~48×**;
+10-frame pool throughput **6.9 → 0.97 s/frame (7.1×)** at 10 workers × 1 thread
+(frame-level parallelism beats intra-frame threads for throughput). Repeatable
+via `tools/perf/bench_render.py`.
+
+**Load-bearing invariants (do NOT regress):**
+
+1. **numpy is the reference; numba must be colour-identical to it.** Held to
+   **max ΔE2000 < 0.01 vs numpy on a real frame** (measured **6.4e-5**, ~16000×
+   under the 1.0 gate; `bench_render.py verify`) and to numpy-twin equivalence
+   on synthetic random/overrange/negative/tied pixels
+   (`tests/test_accel_kernels.py`, the fixture-free Axis-1 guard — skips when
+   numba is absent). The ΔE ship gate path (Stages 1–9 → `result.prophoto`)
+   includes the cube + tone kernels, so this equivalence is what keeps gym/rose
+   green on either backend.
+2. **Float precision is matched where it is load-bearing:** the cube kernel runs
+   float32 (the numpy ref is float32×float32); the tone kernel evaluates the
+   spline in **float64** (a float32 evaluate drifts the 128-pt curve). The tone
+   sort/scatter uses argmin/argmax + `imid = 3 − imin − imax` instead of a stable
+   argsort — equal channels curve equally, so ties agree (test-verified).
+3. **`fastmath=False`** on every kernel — reassociation would change reduction
+   order and assumes no NaN/Inf (collides with `output.py`'s NaN scrub).
+   **`cache=True`** so each ProcessPool worker loads the compiled object (~0.2 s)
+   instead of recompiling (~0.8 s).
+4. **Thread × worker reconciliation:** N workers each spinning all cores would
+   thrash, so the CLI caps numba threads to `cores // workers` (`accel.set_threads`
+   in the worker); `--workers 1` keeps all cores for single-frame latency/preview.
+5. **Backend default is opt-in numpy** (env unset → numpy) so tests and the gate
+   stay on the reference unless a caller asks; the **CLI** defaults `--backend auto`
+   so the product is fast when numba is present.
+
+**Why numba, not PyTorch MPS / Apple MLX (the GPU options evaluated):** the
+ship-gate constraint puts the verification burden on us — numba lets us pin float
+precision op-by-op and match numpy's operation order, so "max ΔE < 0.01 vs the
+reference" is achievable *and* cheap to verify. GPU `pow`/cube-root/FMA rounding
+cannot be pinned the same way (probably under tolerance, but discovered
+empirically under a forbidden-to-ship-unverified constraint), torch is a heavy
+hard-ish dependency, and MLX gather-correctness for the trilinear/argsort
+patterns is a session risk. numba also keeps the win on CPU (no host↔device
+copy) and composes with the existing ProcessPool. The `accel` dispatch is shaped
+so an MLX kernel can drop in later as a third backend (batch-frames-per-dispatch
+is the natural MLX follow-up for sequence throughput).
+
+**Proxy / preview (`render_frame(preview_scale=)`, CLI `--preview-scale`):** a
+low-resolution preview for rapid iteration — `preview_scale ∈ {1,2,4,8}`, 1 =
+full delivery res. Values > 1 demosaic in fast 2×2-bin mode (`half_size`, which
+also cuts the ~0.8 s demosaic floor) then area-downsample the **linear** camera
+RGB by `scale // 2`, so the colour stages see ~scale² fewer pixels (~24–30× at
+scale 4–8). The colour maths is unchanged, but the binned demosaic + downsample
+make it **NOT colour-exact** — preview is **exempt from the ΔE gate**, marked
+`preview: true` in the TIFF provenance, and is for visual iteration only, never
+the LRT round-trip / final delivery. The colorimetric taps (Stage 3/4) ignore it.
+
+---
+
+## 12. Document map / what supersedes what
 
 - **This file (`docs/PIPELINE.md`)** — canonical as-built engine reference.
 - **`docs/VALIDATION.md`** — canonical *validation* reference (the three axes,

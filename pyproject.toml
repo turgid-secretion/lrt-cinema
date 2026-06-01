@@ -41,6 +41,14 @@ dev = [
     "pytest-cov>=4",
     "ruff>=0.4",
 ]
+# Optional acceleration backend: fused multi-core numba JIT kernels for the
+# per-pixel render hotspots (lrt_cinema.accel). NOT required — the renderer
+# falls back to the pure-numpy reference when numba is absent. ~7x full-res
+# single-frame, colour-identical to numpy (max ΔE2000 < 1e-4). See
+# docs/PIPELINE.md §"Compute backends & performance".
+fast = [
+    "numba>=0.59",
+]
 # Optional extra for the auto-detect ColorChecker path (used only by the
 # real-fixture leg of tests/test_colorimetric.py). Heavier — pulls OpenCV —
 # so kept out of the base `dev` extra to keep `pip install -e .[dev]` light.

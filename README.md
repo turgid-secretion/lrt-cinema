@@ -113,6 +113,37 @@ lrt-cinema render \
 
 See `lrt-cinema render --help` for the full flag surface.
 
+### Speed: `--backend` and `--preview-scale`
+
+The per-pixel colour maths is pure-numpy by default (the colour-exact reference
+the ΔE gate measures). Install the optional `numba` extra for **fused multi-core
+JIT kernels** on the hot stages (LookTable / HueSatMap cube + tone curve), which
+are colour-identical to numpy (max ΔE2000 < 1e-4, far below the 1.0 ship gate):
+
+```bash
+pip install "lrt-cinema[fast]"      # or: pip install numba
+
+lrt-cinema render --input ... --output ... \
+  --backend numba                   # default 'auto' = numba if installed, else numpy
+```
+
+Measured on an Apple M1 Max (10 cores, D750 Camera Standard, full-res 24 MP):
+
+| Path | numpy | numba | speed-up |
+|---|---|---|---|
+| Single frame, full res (10 threads) | 16.9 s | 2.5 s | **6.6×** |
+| The cube + tone stages alone | 12.7 s | 0.27 s | **~48×** |
+| Throughput, 10-frame pool | 6.9 s/frame | **0.97 s/frame** | **7.1×** |
+
+For rapid grade/sequence iteration, add `--preview-scale {2,4,8}` to render a
+low-resolution **preview** (fast 2×2-bin demosaic + downsample) — up to ~30×
+faster per frame. **Preview output is not colour-exact** (it is exempt from the
+ΔE gate) and is for visual iteration, not the LRT round-trip or final delivery:
+
+```bash
+lrt-cinema render --input ... --output ... --preview-scale 4   # ~1/4 res, ~24× faster
+```
+
 ## Scope and non-goals
 
 **In scope:**
