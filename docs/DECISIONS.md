@@ -508,6 +508,23 @@ are documented **tuning, not an LR-fidelity claim**. Authority:
 [`PIPELINE.md`](PIPELINE.md) §Stage 12. **Out of scope (still follow-ups):**
 local-Laplacian, Texture/Clarity (the remaining v0.9 step 4 op).
 
+**Amendment (2026-06-01) — perceptual review-fix pass (two decisions changed).**
+A `/caveman-review` of the shipped perceptual master surfaced two ordering/contract
+errors (the other two findings — a CDL matrix cache and the `_DR_EPS`→`_LOG_EPS`
+rename — are pure impl, see CHANGELOG):
+1. **Perceptual Contrast must be hue-preserving.** The PERCEPTUAL branch was falling
+   through to the faithful **per-channel** `apply_contrast_2012`, which rotates
+   hue/saturation on saturated colour — directly contradicting §0 on a path whose
+   thesis is hue stability. Decision: PERCEPTUAL gets its own `_apply_contrast_perceptual`
+   (scale **luminance** about the 0.18 pivot, reapply as an out/in **ratio**; floor 0,
+   no top clamp), the same §0 discipline as the other perceptual ops. Faithful keeps
+   `apply_contrast_2012` (per-channel is part of the Lightroom look it matches).
+2. **DR-compression sequences FIRST** on the perceptual branch (was after ColorGrade):
+   `DR-compression → HSL → ColorGrade → Texture/Clarity → Contrast`. Tone sets the
+   dynamic range, *then* colour/detail work the tamed result — consistent with the §5
+   amendment (Lightroom applies Basic tone before Color Grading). Both ops remain
+   byte-exact no-ops at zero sliders, so the ship gate is still untouched.
+
 ---
 
 ## Also settled — do not re-explore (pointers, not re-derivations)
