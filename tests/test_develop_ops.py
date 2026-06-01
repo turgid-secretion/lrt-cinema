@@ -14,6 +14,7 @@ import pytest
 from lrt_cinema.develop_ops import (
     _DR_GUIDED_RADIUS,
     _PROPHOTO_LUMINANCE,
+    _apply_contrast_perceptual,
     _box_sum,
     _dr_compress_luminance,
     _dr_slopes,
@@ -321,6 +322,50 @@ def test_contrast_2012_positive_expands_around_pivot():
 def test_contrast_2012_pivot_unchanged():
     pivot = np.full((1, 1, 3), 0.18, dtype=np.float32)
     np.testing.assert_allclose(apply_contrast_2012(pivot, 50.0), pivot, rtol=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# Stage 12 — perceptual Contrast (hue-preserving, PERCEPTUAL path)
+# ---------------------------------------------------------------------------
+
+
+def test_contrast_perceptual_zero_is_byte_exact_no_op():
+    x = np.random.rand(8, 8, 3).astype(np.float32)
+    np.testing.assert_array_equal(_apply_contrast_perceptual(x, 0.0), x)
+
+
+def test_contrast_perceptual_is_hue_preserving_unlike_faithful():
+    """The whole point of the perceptual variant: it scales LUMINANCE and reapplies
+    by ratio → channel ratios (hue/chroma) preserved on a saturated pixel; the
+    faithful per-channel `apply_contrast_2012` shifts them (the §0 reason)."""
+    px = np.array([[[0.6, 0.3, 0.1]]], dtype=np.float64)  # saturated
+
+    def ratios(a):
+        a = a.reshape(3)
+        return a / a.sum()
+
+    perceptual = _apply_contrast_perceptual(px, 80.0)
+    faithful = apply_contrast_2012(px, 80.0)
+    np.testing.assert_allclose(ratios(perceptual), ratios(px), atol=1e-6)  # hue kept
+    assert np.max(np.abs(ratios(faithful) - ratios(px))) > 1e-3            # faithful shifts
+
+
+def test_contrast_perceptual_no_top_clamp_preserves_overrange():
+    x = np.array([[[3.0, 3.0, 3.0]]], dtype=np.float32)  # neutral overrange
+    assert _apply_contrast_perceptual(x, 100.0).max() > 1.0
+
+
+def test_contrast_perceptual_matches_closed_form():
+    """Independent closed form: luminance pivot-0.18 gain + out/in ratio reapply,
+    incl. overrange inputs."""
+    rng = np.random.default_rng(7)
+    x = (rng.random((64, 3)) * 2.0).reshape(-1, 1, 3)  # includes >1
+    got = _apply_contrast_perceptual(x, 60.0)
+    lum = x.reshape(-1, 3) @ _PROPHOTO_LUMINANCE
+    lum_out = np.maximum(0.18 + (lum - 0.18) * 1.6, 0.0)
+    ratio = lum_out / np.maximum(lum, 1e-6)
+    want = np.maximum(x.reshape(-1, 3) * ratio[:, None], 0.0).reshape(x.shape)
+    np.testing.assert_allclose(got, want, atol=1e-6)
 
 
 # ---------------------------------------------------------------------------
@@ -673,23 +718,31 @@ def test_dr_compression_perceptual_identity_still_byte_exact():
     )
 
 
-def test_dr_compression_runs_after_color_grade_before_contrast(monkeypatch):
-    """Order check: under PERCEPTUAL the DR op runs after the color-grade applicator
-    and before Contrast2012 (the §5-amendment slot, inside the perceptual branch)."""
+def test_perceptual_branch_runs_ops_in_documented_order(monkeypatch):
+    """Order lock — PERCEPTUAL branch: DR-compression (tone) → HSL → ColorGrade →
+    Texture/Clarity → perceptual Contrast (DECISIONS §7: tone first, then colour,
+    then local detail, then the hue-preserving contrast)."""
     import lrt_cinema.develop_ops as do
 
     calls: list[str] = []
-    monkeypatch.setattr(do, "_apply_color_grade_perceptual",
-                        lambda pp, cg: (calls.append("color_grade"), pp)[1])
     monkeypatch.setattr(do, "apply_dr_compression",
                         lambda pp, hi, sh, wh: (calls.append("dr"), pp)[1])
-    monkeypatch.setattr(do, "apply_contrast_2012",
+    monkeypatch.setattr(do, "_apply_hsl_perceptual",
+                        lambda pp, hsl: (calls.append("hsl"), pp)[1])
+    monkeypatch.setattr(do, "_apply_color_grade_perceptual",
+                        lambda pp, cg: (calls.append("color_grade"), pp)[1])
+    monkeypatch.setattr(do, "apply_texture_clarity",
+                        lambda pp, t, c: (calls.append("texture"), pp)[1])
+    monkeypatch.setattr(do, "_apply_contrast_perceptual",
                         lambda pp, c: (calls.append("contrast"), pp)[1])
 
     x = np.zeros((2, 2, 3), dtype=np.float32)
-    ops = DevelopOps(highlights=10.0, color_grade=ColorGrade(shadow_sat=10.0), contrast=5.0)
+    ops = DevelopOps(
+        highlights=10.0, hsl=HslBands(saturation=(10.0, 0, 0, 0, 0, 0, 0, 0)),
+        color_grade=ColorGrade(shadow_sat=10.0), texture=10.0, contrast=5.0,
+    )
     do.apply_stage_12_perceptual(x, ops, RenderIntent.PERCEPTUAL)
-    assert calls == ["color_grade", "dr", "contrast"]
+    assert calls == ["dr", "hsl", "color_grade", "texture", "contrast"]
 
 
 # ---------------------------------------------------------------------------
@@ -858,7 +911,7 @@ def test_texture_clarity_naive_usm_would_halo():
     # Naive USM: same two-band boost recombination, but Gaussian low-pass bases
     # (NOT the guided edge-preserving base). This is the bug the edge-aware op avoids.
     def usm(prophoto, texture, clarity):
-        eps = do._DR_EPS
+        eps = do._LOG_EPS
         L = prophoto @ do._PROPHOTO_LUMINANCE
         log_l = np.log2(np.maximum(L, 0.0) + eps)
         b_fine = gaussian_filter(log_l, sigma=do._TC_RADIUS_FINE, mode="nearest")
@@ -959,7 +1012,7 @@ def test_texture_clarity_perceptual_identity_still_byte_exact():
 
 def test_texture_clarity_runs_after_dr_before_contrast(monkeypatch):
     """Order check: under PERCEPTUAL Texture/Clarity runs AFTER DR-compression (set
-    the tonal range, then add local contrast) and BEFORE Contrast2012."""
+    the tonal range, then add local contrast) and BEFORE the perceptual Contrast."""
     import lrt_cinema.develop_ops as do
 
     calls: list[str] = []
@@ -967,7 +1020,7 @@ def test_texture_clarity_runs_after_dr_before_contrast(monkeypatch):
                         lambda pp, hi, sh, wh: (calls.append("dr"), pp)[1])
     monkeypatch.setattr(do, "apply_texture_clarity",
                         lambda pp, tx, cl: (calls.append("texture_clarity"), pp)[1])
-    monkeypatch.setattr(do, "apply_contrast_2012",
+    monkeypatch.setattr(do, "_apply_contrast_perceptual",
                         lambda pp, c: (calls.append("contrast"), pp)[1])
 
     x = np.zeros((2, 2, 3), dtype=np.float32)
