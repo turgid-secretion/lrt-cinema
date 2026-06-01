@@ -21,7 +21,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the release history.
 | Adobe DNG 1.7.1 render pipeline (stages 1–9) | shipped | `pipeline.py`, ΔE < 1 vs `dng_validate` |
 | Per-camera DCP profile loading + ColorMatrix interpolation | shipped | `dcp.py`; auto-detect from `$LRT_CINEMA_PROFILES` / `~/.config/lrt-cinema/profiles` (open `.npz`); clean-room `.dcp` reader for `--dcp` |
 | LR Exposure2012, Blacks2012, ToneCurvePV2012, Saturation, Vibrance, Contrast2012 | shipped | `develop_ops.py` (greenfield from public LR formulas) |
-| LR HSL panel (8 hue bands × Hue/Saturation/Luminance) | shipped | `develop_ops.apply_hsl`; smooth partition-of-unity band weights, neutral-safe luminance. Band centres / magnitudes are a documented public approximation (LR's exact math is closed) |
+| LR HSL panel (8 hue bands × Hue/Saturation/Luminance) | shipped (dual-mode) | **Faithful** (sRGB TIFF): `develop_ops.apply_hsl`; Adobe-hexcone HSV, smooth partition-of-unity band weights, saturation-gated neutral-safe luminance. **Perceptual** (ACEScg master, v0.9 step 3): `develop_ops._apply_hsl_perceptual`; the **same 8-band partition-of-unity** in **OKLCh proper** (gamut-agnostic; Okhsl/Okhsv are sRGB-bound) — band centres in OKLCh hue degrees, chroma-gated luminance, **no top clamp** (overrange survives; out-of-AP1 → the shared ACES RGC pass). Measurable win: hue constancy under a Luminance sweep (no Abney drift). Band centres / magnitudes / chroma gate are documented tuning (perceptual makes no LR-fidelity claim; LR's exact math is closed) |
 | LR Color Grading wheels (Shadows/Midtones/Highlights/Global + Blending/Balance) | shipped (dual-mode) | **Faithful** (sRGB TIFF): `develop_ops.apply_color_grade`; luminance-masked zero-sum chroma tint added in linear ProPhoto, partition-of-unity zone masks. **Perceptual** (ACEScg master, v0.9 step 2): `develop_ops._apply_color_grade_perceptual`; **offset-only ASC-CDL** (slope=power=1) in ACEScct log — a uniform Luminance lift + the same zero-sum chroma direction as an additive log delta, log-domain zone proxy. Parses `crs:ColorGrade*` + legacy `crs:SplitToning*` aliases. Tint strengths / mask shape / CDL constants are documented tuning (perceptual makes no LR-fidelity claim) |
 | LR Highlights/Shadows/Whites → scene-referred local DR-compression (**PERCEPTUAL only**) | **shipped (v0.9)** | `develop_ops.apply_dr_compression`; homomorphic log-domain compression toward the 0.18 anchor (3-slope, C1-blended) + local guided-filter base/detail (He 2013). Driven by the existing XMP knobs — **no new control**. Faithful path drops them (render-time warn). Constants are documented tuning; **no LR-fidelity claim** (incl. Whites compressing the top). DECISIONS §5 amendment |
 | NEF→DNG preprocessing | shipped | `dng_convert.py` wraps **dnglab** (open-source, LGPL-2.1; Adobe-free); mtime+size cache |
@@ -113,8 +113,8 @@ lrt-cinema render
                              a creative control — values come from the XMP knobs.
                              Default per target: sRGB TIFF → faithful (Adobe look);
                              ACEScg EXR → perceptual (our math). Flag overrides.
-                             perceptual: Color Grade → ASC-CDL + DR-compression
-                             shipped; HSL → OKLCh (step 3) still aliases faithful
+                             perceptual: Color Grade → ASC-CDL, HSL → OKLCh,
+                             DR-compression — all shipped (v0.9 steps 2-3)
   --from-frame N             default 0
   --to-frame N               default = end of sequence
   --dry-run                  print what would render; no I/O

@@ -8,6 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] — v0.8 prep
 
 ### Added
+- **Perceptual HSL → hue-stable OKLCh (v0.9 dual-mode step 3, DECISIONS §7).**
+  `_apply_hsl_perceptual` (previously aliasing the faithful Adobe-hexcone op) now
+  grades 8-band HSL in **OKLCh proper** — the perceptually-uniform, gamut-agnostic
+  space (Okhsl/Okhsv are sRGB-bound, wrong for wide-gamut ACEScg) — on the
+  **PERCEPTUAL render-intent** (the ACEScg master); the faithful `apply_hsl`
+  (HSV-hexcone, the sRGB TIFF / LRT round-trip) is **unchanged**. Chain
+  (ProPhoto-in/out per contract 1): ProPhoto(D50) lin → XYZ(D50) → XYZ(D65)
+  [Bradford, pinned `_M_BRADFORD_*` module consts cross-checked vs colour-science
+  — Ottosson's Oklab is D65-defined] → OKLab → OKLCh → 8-band partition-of-unity
+  adjust → OKLab → XYZ(D65) → XYZ(D50) [Bradford] → ProPhoto, **floor L/C/ProPhoto
+  at 0, no top clamp** (scene-referred — overrange >1 survives; out-of-AP1 → the
+  shared `output._aces_rgc_compress_ap1` pass, **not** inline). Band centres at
+  OKLCh hue **degrees** `[0,30,60,120,180,240,270,300]` (`_oklch_band_weights`);
+  per band `h_out=(h+w@(hue/100·30°)) mod 360`, `c_out=max(c·w@(1+sat/100),0)`,
+  `l_out=max(l·(1+c_gate·(w@(1+lum/100)−1)),0)` with `c_gate=clip(c/0.04,0,1)`
+  protecting neutrals (the faithful `s_gate` analogue, on OKLCh chroma). Production
+  uses `colour.XYZ_to_Oklab`/`Oklab_to_Oklch`; the Axis-1 oracle hand-rolls
+  Ottosson's M1/M2 + cube-root + a hand-rolled Bradford (contract 4 — **not** the
+  production `colour` calls), agreeing to ~4e-3 on saturated/neutral/overrange
+  ProPhoto patches, with inverted-Bradford (>5e-2), wrong-band-layout, and
+  doubled-hue sensitivity legs, plus identity-byte-exact, no-top-clamp, a
+  **hue-constancy-under-Luminance-sweep** test (output hue span <0.01° — the
+  measurable Abney/Bezold–Brücke win the hexcone cannot give), neutral-gate, and a
+  Bradford-constant cross-check. Constants (`_OKLCH_BAND_CENTERS_DEG`,
+  `_OKLCH_HUE_MAX_DEG=30`, `_OKLCH_LUM_CHROMA_GATE=0.04`) are documented **tuning,
+  not an LR-fidelity claim**. **Byte-exact identity** preserved (`hsl.is_identity()`
+  → literal input before any conversion) so both intents stay bit-identical on a
+  no-grade render and the gym 0.026 / rose 0.545 ΔE ship gate is untouched. Driven
+  entirely by the `crs:*Hue/Saturation/Luminance*` XMP bands — **no new CLI
+  control**. Authority: `docs/research/v09-dualmode-impl-plan.md` Step 3;
+  `docs/PIPELINE.md` §Stage 12.
 - **Perceptual Color Grade → offset-only ASC-CDL (v0.9 dual-mode step 2,
   DECISIONS §7).** `_apply_color_grade_perceptual` (previously aliasing the
   faithful split-tone op) now emits an **offset-only ASC-CDL** grade (slope =
@@ -41,7 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/research/v09-dualmode-impl-plan.md` Step 2; `docs/PIPELINE.md` §Stage 12.
 - **ACES Reference Gamut Compression (RGC) — the single gated AP1 gamut-safety
   pass (v0.9, DECISIONS §7 contract 2).** The perceptual develop ops
-  (DR-compression — shipped; OKLCh HSL / ASC-CDL grade — coming) can push pixels
+  (DR-compression + ASC-CDL grade + OKLCh HSL — all shipped) can push pixels
   outside AP1, which after the ProPhoto→AP1 Bradford present as **negative AP1
   channels**; without compression they hard-clip (posterised, hue-shifted
   speculars) at the EXR encode. A new `output._aces_rgc_compress_ap1`, wired into
