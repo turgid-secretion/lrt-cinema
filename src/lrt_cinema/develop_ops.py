@@ -598,6 +598,107 @@ def apply_dr_compression(
     return out.astype(prophoto.dtype)
 
 
+def apply_texture_clarity(
+    prophoto: np.ndarray, texture: float, clarity: float,
+) -> np.ndarray:
+    """PERCEPTUAL local-contrast boost — the **boost-detail** mode of the shared
+    edge-aware base/detail engine (DECISIONS.md §7 step 4; the inverse of
+    `apply_dr_compression`, which *attenuates* the base). Makes the LR
+    `Texture`/`Clarity` knobs — dropped + warn-only on the faithful path — *do
+    something measurable* on the perceptual ACEScg master: add local/perceived
+    contrast WITHOUT injecting halos. **Driven entirely by the two existing XMP
+    sliders — no new control.**
+
+    **The engine (one two-band guided decomposition, both ops consume it).** On a
+    single log2-luminance channel `L = log2(rgb @ _PROPHOTO_LUMINANCE + eps)` two
+    edge-preserving guided self-filters (He–Sun–Tang 2013, the SAME
+    `_guided_base_log`/`_box_sum` the DR op uses, including the defining
+    ``mean_a``/``mean_b`` step) extract a fine and a coarse base at radii
+    ``_TC_RADIUS_FINE < _TC_RADIUS_COARSE``::
+
+        texture_band = L − B_fine            # finest detail (small radius)
+        clarity_band = B_fine − B_coarse     # mid-scale local contrast (larger radius)
+        L_out = B_coarse
+              + (1 + Kt·texture/100)·texture_band
+              + (1 + Kc·(clarity/100)·midtone_w)·clarity_band
+
+    **Texture** boosts (or, negative, smooths) the **finest** band uniformly;
+    **Clarity** boosts the **larger-radius mid-scale** band, **midtone-weighted**
+    (`midtone_w`, a C∞ Gaussian bump on log-luminance around the 0.18 anchor —
+    `_TC_MIDTONE_SIGMA` stops) so it lands on midtones and tapers in deep
+    shadow/bright highlight (Lightroom's Clarity is a midtone-contrast control).
+    `Kt`/`Kc` are pinned per-slider gains. The split is **edge-aware**: the guided
+    filter's local-linear `a→1` at strong edges zeroes the detail bands across an
+    edge, so boosting them does **not** ring (the measured step-edge halo stays
+    sub-1% of the plateau range at full sliders, vs a naive single-Gaussian
+    high-pass which overshoots catastrophically — the op-family's defining
+    failure). NB: like the DR guided base, this is the lightweight first cut and is
+    **not** *provably* halo-free (Local Laplacian is) — it is measured-clean for
+    this small-radius boost role, where v10c found the guided filter beats LLF.
+
+    **Reduces to a no-op on flat input.** For a spatially flat region (or a
+    sub-window / 1-wide array, where both adaptive box radii collapse to 0) both
+    bases equal `L`, both bands are 0, and `L_out = L` — so the op is the identity
+    on featureless content regardless of slider (only *local contrast* is touched,
+    never global tone). This is the limit the Axis-1 oracle's flat legs check.
+
+    **§0 hue/gamut (never per-channel).** The boosted luminance is reapplied by the
+    out/in **ratio** ``rgb · L_out/max(L_in, eps)`` — a per-pixel positive scalar
+    that preserves hue and chroma ratios exactly (the `apply_hsl` / DR-compression
+    luminance pattern). Output is floored at 0 with **NO top clamp**: a >1 specular
+    survives (out-of-AP1 excursions are the downstream ACES RGC pass's job in
+    `output.py`, never an in-op clamp). Validate on **saturated + overrange**
+    pixels; a grey wedge is blind to the per-channel-vs-ratio error.
+
+    **Byte-exact identity.** ``texture == 0 and clarity == 0`` → ``return prophoto``
+    (the literal input) before any pyramid/filter math. The guided box-filter
+    round-trip is not bit-exact at float32 (slope-1 bands do not telescope to L
+    bit-for-bit through log2/exp2), so the short-circuit is mandatory — it keeps the
+    gym 0.026 / rose 0.545 ΔE ship gate untouched (perceptual-only; the gate renders
+    the faithful stages 1–9).
+
+    **Constants are best-effort TUNING, not Lightroom fidelity** (the module
+    ``_TC_*`` constants). The Axis-1 oracle validates the *defined* two-band
+    guided-boost math + the ratio reapply — not LR appearance — matching the honesty
+    discipline of `apply_hsl` / `apply_color_grade` / `apply_dr_compression`.
+    """
+    if texture == 0.0 and clarity == 0.0:
+        return prophoto  # byte-exact identity — short-circuit before any filter math
+
+    # Luminance in float64 (the matmul against float64 _PROPHOTO_LUMINANCE promotes
+    # a float32 frame); the ratio reapply runs on the original array so we never hold
+    # a float64 copy of the whole RGB frame (mirrors apply_dr_compression).
+    lum = prophoto @ _PROPHOTO_LUMINANCE
+    log_l = np.log2(np.maximum(lum, 0.0) + _DR_EPS)
+
+    # Adaptive box radii: clamp so each (2r+1) window fits the smaller spatial axis.
+    # A 1-wide / sub-window array (the oracle's per-pixel layout) collapses both to
+    # r=0, where each guided base == log_l, both bands are 0, and the op is the
+    # identity — one code path, no magic size threshold.
+    if log_l.ndim == 2:
+        half = (min(log_l.shape) - 1) // 2
+        r_fine = min(_TC_RADIUS_FINE, half)
+        r_coarse = min(_TC_RADIUS_COARSE, half)
+    else:
+        r_fine = r_coarse = 0
+
+    base_fine = _guided_base_log(log_l, r_fine, _TC_GUIDED_EPS)
+    base_coarse = _guided_base_log(log_l, r_coarse, _TC_GUIDED_EPS)
+    texture_band = log_l - base_fine
+    clarity_band = base_fine - base_coarse
+
+    texture_gain = 1.0 + _TC_TEXTURE_GAIN * (texture / 100.0)
+    midtone_w = _tc_midtone_weight(log_l)
+    clarity_gain = 1.0 + _TC_CLARITY_GAIN * (clarity / 100.0) * midtone_w
+
+    log_l_out = base_coarse + texture_gain * texture_band + clarity_gain * clarity_band
+    lum_out = np.maximum(np.exp2(log_l_out) - _DR_EPS, 0.0)
+
+    ratio = lum_out / np.maximum(lum, _DR_EPS)
+    out = np.maximum(prophoto * ratio[..., None], 0.0)  # floor 0; NO top clamp (overrange survives)
+    return out.astype(prophoto.dtype)
+
+
 def apply_contrast_2012(prophoto: np.ndarray, contrast: float) -> np.ndarray:
     """LR Contrast2012: -100..+100 S-curve around midtone pivot (0.18 linear,
     matching scene-linear midgray). Mapping: pivot-anchored gain
@@ -640,8 +741,8 @@ def apply_stage_12_perceptual(
     intent: RenderIntent = RenderIntent.FAITHFUL,
 ) -> np.ndarray:
     """Apply all stage-12 perceptual-domain ops in order:
-    ToneCurve → Saturation → Vibrance → HSL → ColorGrade → [DR-compression] →
-    Contrast → Sharpness.
+    ToneCurve → Saturation → Vibrance → HSL → ColorGrade →
+    [DR-compression → Texture/Clarity] → Contrast → Sharpness.
 
     HSL then Color Grading are placed after the global Saturation/Vibrance and
     before Contrast, matching Lightroom's panel order (HSL precedes Color
@@ -651,10 +752,12 @@ def apply_stage_12_perceptual(
     pipeline (the ΔE ship gate is unaffected).
 
     **DR-compression** (`apply_dr_compression`, driven by the Highlights/Shadows/
-    Whites knobs) runs **only under PERCEPTUAL**, inside that branch after Color
-    Grading and before Contrast. On the faithful path those knobs stay dropped +
-    warn-only (`cli._warn_dropped_ops`); with all three at 0 the op is a byte-exact
-    no-op, so both intents stay bit-identical when no DR intent is authored.
+    Whites knobs) then **Texture/Clarity** (`apply_texture_clarity`, the boost-detail
+    mode of the same guided base/detail engine) run **only under PERCEPTUAL**, inside
+    that branch after Color Grading and before Contrast (DR first — set the tonal
+    range, then add local contrast on the result). On the faithful path those knobs
+    stay dropped + warn-only (`cli._warn_dropped_ops`); with all sliders at 0 each op
+    is a byte-exact no-op, so both intents stay bit-identical when none is authored.
 
     `intent` selects the HSL + Color-Grade applicator (DECISIONS.md §7):
     **FAITHFUL** (default) uses the Adobe-hexcone ops — the sRGB TIFF / LRT
@@ -679,6 +782,12 @@ def apply_stage_12_perceptual(
         # Byte-exact identity when all three are 0, so the ΔE ship gate is
         # untouched.
         out = apply_dr_compression(out, ops.highlights, ops.shadows, ops.whites)
+        # Local-contrast boost driven by the Texture/Clarity XMP knobs (DECISIONS.md
+        # §7 step 4 — the boost-detail mode of the same guided base/detail engine).
+        # Runs AFTER DR-compression: set the tonal range first, then add local
+        # contrast on the result. PERCEPTUAL-only; dropped + warn-only on faithful.
+        # Byte-exact identity when both are 0, so the ΔE ship gate is untouched.
+        out = apply_texture_clarity(out, ops.texture, ops.clarity)
     else:
         out = apply_hsl(out, ops.hsl)
         out = apply_color_grade(out, ops.color_grade)
@@ -1117,3 +1226,50 @@ def _guided_base_log(log_l: np.ndarray, r: int, eps_gf: float) -> np.ndarray:
     mean_a = _box_sum(a, r) / n        # the defining mean_a / mean_b step
     mean_b = _box_sum(b, r) / n
     return mean_a * log_l + mean_b
+
+
+# ---------------------------------------------------------------------------
+# Internal — Texture / Clarity (boost-detail mode of the shared guided engine)
+# ---------------------------------------------------------------------------
+#
+# `apply_texture_clarity` reuses the DR op's guided base/detail split (He–Sun–Tang
+# 2013, `_guided_base_log`/`_box_sum`) at TWO radii to form a fine + a mid-scale
+# band, then BOOSTS them (the inverse of the DR op, which attenuates the base).
+# Every constant below is a best-effort TUNING value pinned at implementation time
+# (research/v10-local-tone-mapping-dr-compression.md §2.3/§3.2) — the Axis-1 oracle
+# validates the *defined* math, NOT Lightroom appearance. They are NOT open theory
+# and NOT "auto from image". The guided filter was chosen over the local-Laplacian
+# proto on a measured step-edge halo comparison (guided sub-1% vs naive USM ~580%;
+# LLF comparable but fragile + non-byte-exact pyramid) — see the docstring +
+# docs/research/v10c-local-laplacian-base-deferred.md (the α<1 detail-boost note).
+
+# Guided-filter radii (px) for the two bands, log-luminance domain. Texture = the
+# FINE band (small radius → finest detail); Clarity = the larger mid-scale band
+# (B_fine − B_coarse). eps ~0.01 (log2² stops), the same conservative value the DR
+# base uses (favours edge preservation → the measured-clean halo).
+_TC_RADIUS_FINE = 2
+_TC_RADIUS_COARSE = 16
+_TC_GUIDED_EPS = 0.01
+
+# Per-slider boost gains: band_out = (1 + K·slider/100)·band. K=1.5 ⇒ slider=+100
+# multiplies that band's log amplitude by 2.5 (a strong-but-bounded boost), −100
+# multiplies by −0.5 (smooths + slight inversion floor). Both stay finite for any
+# slider in [−100, 100]; the step-edge halo is sub-1% of the plateau range even at
+# the +100 extreme (measured). Tuning, not LR fidelity.
+_TC_TEXTURE_GAIN = 1.5
+_TC_CLARITY_GAIN = 1.5
+
+# Clarity midtone weight: a C∞ Gaussian bump on log2-luminance centred at the 0.18
+# anchor (`_DR_LOG_ANCHOR`), sigma in log2 stops. Clarity's mid-scale boost is
+# scaled by this so it lands on midtones and tapers toward deep shadow / bright
+# highlight (Lightroom's Clarity is a midtone-contrast control). Texture is NOT
+# midtone-weighted (it is a uniform fine-detail boost). 3 stops ≈ a broad midtone
+# band (FWHM ~7 stops). Tuning, not LR fidelity.
+_TC_MIDTONE_SIGMA = 3.0
+
+
+def _tc_midtone_weight(log_l: np.ndarray) -> np.ndarray:
+    """C∞ Gaussian midtone bump on log2-luminance, peak 1.0 at the 0.18 anchor,
+    sigma `_TC_MIDTONE_SIGMA` stops. Scales the Clarity band so its local-contrast
+    boost is midtone-weighted (tapers in deep shadow / bright highlight)."""
+    return np.exp(-0.5 * ((log_l - _DR_LOG_ANCHOR) / _TC_MIDTONE_SIGMA) ** 2)
