@@ -251,10 +251,112 @@ def apply_color_grade(prophoto: np.ndarray, cg: ColorGrade) -> np.ndarray:
 
 
 def _apply_hsl_perceptual(prophoto: np.ndarray, hsl: HslBands) -> np.ndarray:
-    """PERCEPTUAL HSL — OKLCh (DECISIONS.md §7 step 3). **Not yet implemented**:
-    aliases the faithful Adobe-hexcone `apply_hsl` so the dual-mode switch is
-    byte-identical until the OKLCh applicator (+ ACES RGC gamut pass) lands."""
-    return apply_hsl(prophoto, hsl)
+    """PERCEPTUAL HSL — hue-stable 8-band HSL in **OKLCh** (DECISIONS.md §7 step 3).
+    The faithful Adobe-hexcone `apply_hsl` (HSV) is unchanged; this is the
+    ACEScg-master path, where OKLCh's perceptual uniformity buys hue constancy
+    under a Luminance sweep (no Abney / Bezold–Brücke drift — the measurable §7
+    win) that the hexcone HSV cannot give.
+
+    **Working space (contract 1 — ProPhoto(D50)-in / ProPhoto(D50)-out).** Stage 12
+    operates on linear ProPhoto(D50); `output.py` does the ProPhoto→ACEScg Bradford
+    at Stage 13. So this op converts to OKLCh **internally** and inverts back to
+    ProPhoto before return:
+
+        ProPhoto(D50) lin → XYZ(D50) → XYZ(D65) [Bradford] → OKLab → OKLCh
+            → adjust → OKLab → XYZ(D65) → XYZ(D50) [Bradford] → ProPhoto(D50) lin
+
+    Ottosson's Oklab is defined on **D65** XYZ, so the D50→D65 Bradford is
+    mandatory (`_M_BRADFORD_*` module constants, cross-checked vs colour-science);
+    skipping it is the wrong-whitepoint bug the oracle's inverted-Bradford
+    sensitivity leg catches. Production uses `colour.XYZ_to_Oklab`/`Oklab_to_Oklch`
+    (+ inverses); the Axis-1 oracle hand-rolls Ottosson's M1/M2 + cube-root
+    (contract 4).
+
+    **The grade — 8 hue bands × {Hue, Saturation, Luminance}, triangular
+    partition-of-unity over the OKLCh hue wheel** (`_oklch_band_weights`, the same
+    structure as the faithful `_hsl_band_weights` but in hue *degrees* over
+    `_OKLCH_BAND_CENTERS_DEG`). Because the weights sum to 1, all-equal bands
+    collapse to a global adjustment and the all-zero default is the identity.
+    Per band, with `weights` the per-pixel `(...,8)` unit-sum vector::
+
+        h_out = (h + weights @ (hue/100 · _OKLCH_HUE_MAX_DEG)) mod 360
+        c_out = max(c · (weights @ (1 + sat/100)), 0)
+        l_out = max(l · (1 + c_gate·(weights @ (1 + lum/100) − 1)), 0)
+
+    **Chroma-gated Luminance** (`c_gate = clip(c / _OKLCH_LUM_CHROMA_GATE, 0, 1)`)
+    protects neutrals: a near-grey pixel — whose OKLCh hue is ill-defined and
+    falls into whatever band the float noise picks — is left untouched even when a
+    colour band's Luminance slider is set (a grey wedge must stay grey; CLAUDE.md
+    §0). This is the OKLCh analogue of the faithful path's `s_gate`
+    (`_HSL_LUM_SAT_GATE` on HSV saturation).
+
+    **No top clamp (verifier BLOCKER 1).** The PERCEPTUAL path feeds the
+    scene-referred ACEScg master, which MUST carry values >1 (PIPELINE.md Stage 7
+    "overrange preserved"; `apply_exposure_2012` runs before this with no clamp).
+    Faithful `apply_hsl` floors at 0 but never clamps the top — match that: floor
+    L and C at 0, **no display ceiling**; floor the final ProPhoto at 0 only.
+
+    **Gamut (verifier BLOCKER 2).** A chroma boost / hue rotation can push pixels
+    outside AP1 → handled by the single gated `output._aces_rgc_compress_ap1` pass
+    (after the ProPhoto→AP1 Bradford, where out-of-AP1 presents as negative AP1
+    channels). This op does **no** inline gamut compression.
+
+    **Byte-exact identity (verifier BLOCKER 3).** `hsl.is_identity()` → ``return
+    prophoto`` (the literal input) before any conversion. The OKLab + Bradford
+    round-trip is reversible only to float tolerance, so the short-circuit is
+    mandatory — it (plus the gated downstream RGC) keeps a zero-HSL render
+    byte-exact even on overrange data, so the gym 0.026 / rose 0.545 ΔE ship gate
+    (perceptual-only) is untouched.
+
+    **Constants are best-effort TUNING, not LR fidelity** (`_OKLCH_BAND_CENTERS_DEG`,
+    `_OKLCH_HUE_MAX_DEG`, `_OKLCH_LUM_CHROMA_GATE`). The Axis-1 oracle validates the
+    *defined* OKLCh band math + the Bradford, not appearance — matching the honesty
+    discipline of `apply_hsl` / `apply_color_grade` / `apply_dr_compression`.
+    """
+    if hsl.is_identity():
+        return prophoto  # byte-exact identity — short-circuit before any conversion
+
+    import colour
+
+    m_pp_to_xyz, m_xyz_to_pp = _prophoto_xyz_matrices()
+
+    shape = prophoto.shape
+    flat = prophoto.reshape(-1, 3).astype(np.float64)
+
+    # ProPhoto(D50) lin → XYZ(D50) → XYZ(D65) [Bradford] → OKLab → OKLCh.
+    xyz_d65 = (flat @ m_pp_to_xyz.T) @ _M_BRADFORD_D50_TO_D65.T
+    oklch = colour.Oklab_to_Oklch(colour.XYZ_to_Oklab(xyz_d65))
+    el = oklch[:, 0]
+    c = oklch[:, 1]
+    h = oklch[:, 2]  # hue in degrees, [0, 360)
+
+    weights = _oklch_band_weights(h)  # (N, 8) partition of unity
+
+    hue_shift_per_band = np.asarray(hsl.hue, dtype=np.float64) / 100.0 * _OKLCH_HUE_MAX_DEG
+    sat_factor_per_band = 1.0 + np.asarray(hsl.saturation, dtype=np.float64) / 100.0
+    lum_factor_per_band = 1.0 + np.asarray(hsl.luminance, dtype=np.float64) / 100.0
+
+    hue_shift = weights @ hue_shift_per_band
+    sat_mult = weights @ sat_factor_per_band
+    lum_mult = weights @ lum_factor_per_band
+
+    h_out = np.mod(h + hue_shift, 360.0)
+    c_out = np.maximum(c * sat_mult, 0.0)  # floor 0; NO top clamp (overrange survives)
+
+    # Gate Luminance by chroma so near-neutral pixels (ill-defined hue) are not
+    # pushed by a colour band's Luminance slider. Above _OKLCH_LUM_CHROMA_GATE the
+    # band gets full luminance authority.
+    c_gate = np.clip(c / _OKLCH_LUM_CHROMA_GATE, 0.0, 1.0)
+    eff_lum_mult = 1.0 + c_gate * (lum_mult - 1.0)
+    l_out = np.maximum(el * eff_lum_mult, 0.0)  # floor 0; NO top clamp
+
+    oklch_out = np.stack([l_out, c_out, h_out], axis=-1)
+
+    # OKLCh → OKLab → XYZ(D65) → XYZ(D50) [Bradford] → ProPhoto(D50) lin.
+    xyz_d65_out = colour.Oklab_to_XYZ(colour.Oklch_to_Oklab(oklch_out))
+    pp_out = (xyz_d65_out @ _M_BRADFORD_D65_TO_D50.T) @ m_xyz_to_pp.T
+    out = np.maximum(pp_out.reshape(shape), 0.0)  # floor 0; NO top clamp
+    return out.astype(prophoto.dtype)
 
 
 def _apply_color_grade_perceptual(prophoto: np.ndarray, cg: ColorGrade) -> np.ndarray:
@@ -641,6 +743,30 @@ def _hsl_band_weights(h: np.ndarray) -> np.ndarray:
     return weights
 
 
+def _oklch_band_weights(h: np.ndarray) -> np.ndarray:
+    """Triangular partition-of-unity weights over the eight OKLCh band centres.
+
+    `h`: OKLCh hue array in **degrees**, `[0, 360)`. Returns `(..., 8)` weights
+    that sum to exactly 1 per pixel — the degrees analogue of `_hsl_band_weights`
+    over `_OKLCH_BAND_CENTERS_DEG`. Each hue lies in exactly one segment between
+    two adjacent centres and splits its weight linearly between them; the final
+    segment wraps Magenta(300°) → Red(0°≡360°). The unit-sum property is what
+    makes all-equal bands behave as a single global adjustment and the all-zero
+    default an exact identity (so the perceptual HSL no-ops byte-for-byte on the
+    short-circuit, and an all-equal-band grade is a clean global rotation/scale)."""
+    weights = np.zeros(h.shape + (8,), dtype=np.float64)
+    centers = _OKLCH_BAND_CENTERS_DEG
+    for j in range(8):
+        lo = centers[j]
+        hi = centers[j + 1] if j < 7 else 360.0  # wrap: Magenta → Red
+        nxt = (j + 1) % 8
+        in_seg = (h >= lo) & (h < hi)
+        frac = np.where(in_seg, (h - lo) / (hi - lo), 0.0)
+        weights[..., j] += np.where(in_seg, 1.0 - frac, 0.0)
+        weights[..., nxt] += frac
+    return weights
+
+
 # ---------------------------------------------------------------------------
 # Internal — Color Grading (tonal-zone-weighted colour overlay)
 # ---------------------------------------------------------------------------
@@ -656,6 +782,82 @@ _PROPHOTO_LUMINANCE = np.array([0.2880402, 0.7118741, 0.0000857], dtype=np.float
 # magnitudes are closed-source; these give a strong-but-bounded grade.
 _CG_CHROMA_STRENGTH = 0.30  # per unit Saturation/100 along the (zero-sum) hue dir
 _CG_LUM_STRENGTH = 0.10     # per unit Luminance/100, uniform across channels
+
+# ---------------------------------------------------------------------------
+# Perceptual HSL (OKLCh) — colour-space constants + tuning
+# ---------------------------------------------------------------------------
+#
+# The PERCEPTUAL path's HSL (`_apply_hsl_perceptual`) grades in OKLCh proper —
+# the perceptually-uniform, gamut-AGNOSTIC space (Okhsl/Okhsv are sRGB-gamut-
+# bound by construction — wrong for wide-gamut ACEScg; DECISIONS.md §7, v09
+# frontier §2.1). The transform chain is ProPhoto(D50)-in / ProPhoto(D50)-out
+# (contract 1; `output.py` does the ProPhoto→ACEScg Bradford at Stage 13):
+#
+#   ProPhoto(D50) lin → XYZ(D50) → XYZ(D65) [Bradford] → OKLab → OKLCh
+#       → adjust → OKLab → XYZ(D65) → XYZ(D50) [Bradford] → ProPhoto(D50) lin
+#
+# Ottosson's Oklab is defined on **D65-adapted** XYZ (verified: `colour`'s
+# `XYZ_to_Oklab` docstring requires D65 input), so the D50→D65 Bradford is
+# mandatory — feeding D50 XYZ straight in is the wrong-whitepoint bug the oracle's
+# inverted-Bradford sensitivity leg catches. Production MAY call
+# `colour.XYZ_to_Oklab`/`Oklab_to_Oklch` (and inverses); the Axis-1 oracle hand-
+# rolls Ottosson's M1/M2 + cube-root instead (contract 4 — using the production
+# function on both sides is a tautology that passes a transcription bug).
+
+# Bradford chromatic-adaptation matrices D50↔D65, pinned as float64 module
+# constants per the spec, cross-checked against colour-science (the same
+# `matrix_chromatic_adaptation_VonKries(..., transform="Bradford")` the rest of
+# the pipeline adapts with) by
+# test_color_oracle.py::test_oklch_bradford_constants_match_colour_science so they
+# cannot silently drift from the CAT `output.py`'s ProPhoto→ACEScg actually uses.
+_M_BRADFORD_D50_TO_D65 = np.array([
+    [0.9554734, -0.0230985, 0.0632592],
+    [-0.0283697, 1.0099954, 0.0210414],
+    [0.0123140, -0.0205076, 1.3303659],
+], dtype=np.float64)
+_M_BRADFORD_D65_TO_D50 = np.array([
+    [1.0479298, 0.0229469, -0.0501923],
+    [0.0296278, 0.9904344, -0.0170738],
+    [-0.0092430, 0.0150552, 0.7518743],
+], dtype=np.float64)
+
+
+def _prophoto_xyz_matrices() -> tuple[np.ndarray, np.ndarray]:
+    """ProPhoto(D50)-linear ↔ XYZ(D50) matrices, pulled from colour-science at
+    call time so they are EXACTLY the ROMM RGB matrix `output._prophoto_to_linear`
+    converts with (no hand-typed transcription to drift). Returns
+    `(RGB→XYZ, XYZ→RGB)`."""
+    import colour
+
+    cs = colour.RGB_COLOURSPACES["ProPhoto RGB"]
+    return (
+        np.asarray(cs.matrix_RGB_to_XYZ, dtype=np.float64),
+        np.asarray(cs.matrix_XYZ_to_RGB, dtype=np.float64),
+    )
+
+
+# OKLCh band centres, in **hue degrees** on the OKLCh wheel (the named-colour
+# layout: Red 0°, Orange 30°, Yellow 60°, Green 120°, Aqua 180°, Blue 240°,
+# Purple 270°, Magenta 300°). Same eight named bands as the faithful hexcone
+# `_HSL_BAND_CENTERS_HEX`, expressed in OKLCh hue degrees rather than the [0,6)
+# hexcone hue. Adobe's exact centres are closed-source; this is the conventional
+# reverse-engineered layout (the Axis-1 oracle validates this *defined* math, not
+# Lightroom fidelity — VALIDATION.md).
+_OKLCH_BAND_CENTERS_DEG = np.array(
+    [0.0, 30.0, 60.0, 120.0, 180.0, 240.0, 270.0, 300.0], dtype=np.float64,
+)
+
+# Hue-slider magnitude: ±100 → ±30° of OKLCh hue rotation (the conventional
+# value, matching the faithful path's ±30° via `_HSL_HUE_MAX_HEX`).
+_OKLCH_HUE_MAX_DEG = 30.0
+
+# Below this OKLCh chroma the per-band Luminance effect ramps to zero, so
+# near-neutral pixels (ill-defined hue) are protected from a colour band's
+# Luminance slider — the OKLCh analogue of the faithful path's `_HSL_LUM_SAT_GATE`
+# (an HSV-saturation gate). OKLCh chroma is an absolute (not [0,1]) scale, so this
+# is a small chroma threshold, NOT a saturation fraction. Best-effort TUNING (the
+# faithful gate is likewise empirical); re-derivable against a ColorChecker later.
+_OKLCH_LUM_CHROMA_GATE = 0.04
 
 # ---------------------------------------------------------------------------
 # Perceptual ColorGrade (ASC-CDL idiom, offset-only) — tuning constants

@@ -397,15 +397,25 @@ def test_render_intent_routes_to_perceptual_applicators(monkeypatch):
     assert calls == ["hsl_perceptual", "cg_perceptual"]  # perceptual: routed, in order
 
 
-def test_perceptual_hsl_still_aliases_faithful_until_oklch_lands():
-    """Step-3 not yet landed: `_apply_hsl_perceptual` still aliases the faithful
-    Adobe-hexcone `apply_hsl`, so with ONLY an HSL band engaged the two intents
-    stay byte-identical. (Step 3 / OKLCh will flip this — update when it lands.)"""
+def test_perceptual_hsl_diverges_from_faithful():
+    """Step 3 (OKLCh) LANDED: with an HSL band engaged the PERCEPTUAL applicator
+    (hue-stable OKLCh) is intentionally DIFFERENT from the faithful Adobe-hexcone
+    HSV — the dual-mode seam now produces two distinct HSL grades. A *zero* HSL
+    must still match byte-exact (the identity short-circuit) so the ship gate
+    stays green. (This replaces the prior alias assertion, which step 3 flips.)"""
     x = np.random.rand(8, 8, 3).astype(np.float32)
-    ops = DevelopOps(hsl=HslBands(saturation=(50.0, 0, 0, 0, 0, 0, 0, 0)))
+
+    # Engaged band → the two intents diverge measurably.
+    graded = DevelopOps(hsl=HslBands(saturation=(50.0, 0, 0, 0, 0, 0, 0, 0)))
+    faithful = apply_develop_ops(x, graded, RenderIntent.FAITHFUL)
+    perceptual = apply_develop_ops(x, graded, RenderIntent.PERCEPTUAL)
+    assert np.max(np.abs(faithful - perceptual)) > 1e-3
+
+    # Zero HSL → byte-identical under both intents (no-grade ship gate).
+    zero = DevelopOps(hsl=HslBands())
     np.testing.assert_array_equal(
-        apply_develop_ops(x, ops, RenderIntent.FAITHFUL),
-        apply_develop_ops(x, ops, RenderIntent.PERCEPTUAL),
+        apply_develop_ops(x, zero, RenderIntent.FAITHFUL),
+        apply_develop_ops(x, zero, RenderIntent.PERCEPTUAL),
     )
 
 
@@ -645,16 +655,17 @@ def test_dr_compression_perceptual_identity_still_byte_exact():
     """With H/S/W all 0, PERCEPTUAL stays byte-identical to FAITHFUL even though the
     DR op is wired into the perceptual branch (short-circuit holds the ship gate).
 
-    Decorated only with intent-INDEPENDENT / still-aliased ops (global Saturation,
-    HSL band): a Color-Grade wheel can no longer be used here because step 2 (CDL)
-    makes `_apply_color_grade_perceptual` diverge from faithful by design — that
-    divergence is covered by `test_perceptual_color_grade_diverges_from_faithful`.
-    This test isolates the DR op's H/S/W=0 no-op."""
+    Decorated only with INTENT-INDEPENDENT ops (global Saturation): an HSL band and
+    a Color-Grade wheel can no longer be used here because steps 2-3 (CDL, OKLCh
+    HSL) make `_apply_color_grade_perceptual` / `_apply_hsl_perceptual` diverge from
+    faithful by design — those divergences are covered by
+    `test_perceptual_color_grade_diverges_from_faithful` /
+    `test_perceptual_hsl_diverges_from_faithful`. This test isolates the DR op's
+    H/S/W=0 no-op."""
     x = np.random.rand(8, 8, 3).astype(np.float32)
     ops = DevelopOps(
         saturation=20.0,
-        hsl=HslBands(saturation=(30.0, 0, 0, 0, 0, 0, 0, 0)),
-    )  # other ops set, but highlights/shadows/whites are 0 (and no Color-Grade wheel)
+    )  # an intent-independent op set, but highlights/shadows/whites are 0 (no HSL/Color-Grade)
     np.testing.assert_array_equal(
         apply_develop_ops(x, ops, RenderIntent.FAITHFUL),
         apply_develop_ops(x, ops, RenderIntent.PERCEPTUAL),
