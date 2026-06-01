@@ -27,6 +27,7 @@ import pytest
 
 colour = pytest.importorskip("colour")  # noqa: F841  (output.py needs it; gate import)
 
+import lrt_cinema.develop_ops as _develop_ops  # noqa: E402  (module attrs for the OKLCh Bradford guard)
 from lrt_cinema.dcp import DCPProfile, HsvCube, interpolate_color_matrix  # noqa: E402
 from lrt_cinema.develop_ops import (  # noqa: E402
     _CG_CHROMA_LOG_STRENGTH,
@@ -44,8 +45,12 @@ from lrt_cinema.develop_ops import (  # noqa: E402
     _HSL_BAND_CENTERS_HEX,
     _HSL_HUE_MAX_HEX,
     _HSL_LUM_SAT_GATE,
+    _OKLCH_BAND_CENTERS_DEG,
+    _OKLCH_HUE_MAX_DEG,
+    _OKLCH_LUM_CHROMA_GATE,
     _PROPHOTO_LUMINANCE,
     _apply_color_grade_perceptual,
+    _apply_hsl_perceptual,
     _color_grade_zone_weights,
     _dr_compress_luminance,
     apply_color_grade,
@@ -711,6 +716,300 @@ def test_hsl_identity_is_byte_exact_no_op():
     np.testing.assert_array_equal(
         apply_hsl(rgb, HslBands(hue=(0.0,) * 8, saturation=(0.0,) * 8, luminance=(0.0,) * 8)),
         rgb,
+    )
+
+
+# ---------------------------------------------------------------------------
+# PERCEPTUAL HSL (develop_ops._apply_hsl_perceptual) — hue-stable 8-band HSL in
+# OKLCh on the ACEScg-master path (DECISIONS.md §7 step 3).
+#
+# Axis-1 ground truth is an INDEPENDENT scalar reimplementation of the defined
+# math. Per contract 4 (test charter, lines 1-19) it HAND-ROLLS Ottosson's
+# M1/M2 matrices + the signed cube-root and a hand-rolled D50↔D65 Bradford — it
+# MUST NOT call `colour.XYZ_to_Oklab`/`Oklab_to_Oklch`, which is exactly what the
+# production op uses (validating it against itself is a tautology that passes a
+# transcription bug straight through). The oracle's Bradford uses the file's own
+# 7-digit `_M_BRADFORD_D50_TO_D65` (a slightly different whitepoint precision than
+# the production module constant) and `np.linalg.inv` for every inverse, so
+# agreement with production is a real cross-check across two independent matrix
+# sets, not a rubber stamp. `centers` / `hue_max` / `invert_bradford` are
+# injectable so the sensitivity legs prove the check discriminates the
+# load-bearing bugs (wrong band layout, doubled hue magnitude, inverted CAT).
+# (LR's exact centres / slider magnitudes / the gate are closed-source; this
+# validates our defined OKLCh spec, NOT Lightroom fidelity — see VALIDATION.md.)
+# ---------------------------------------------------------------------------
+
+# Ottosson's Oklab matrices (cite: Ottosson 2020). M1: XYZ(D65) → LMS; M2:
+# nonlinear l'm's' → Lab. Hand-typed from the published values — the oracle does
+# NOT import colour's MATRIX_1/MATRIX_2, so a transcription error in colour (or
+# in production's use of it) cannot hide here.
+_OKLAB_M1_XYZ_TO_LMS = np.array([
+    [0.8189330101, 0.3618667424, -0.1288597137],
+    [0.0329845436, 0.9293118715, 0.0361456387],
+    [0.0482003018, 0.2643662691, 0.6338517070],
+])
+_OKLAB_M2_LMS_TO_LAB = np.array([
+    [0.2104542553, 0.7936177850, -0.0040720468],
+    [1.9779984951, -2.4285922050, 0.4505937099],
+    [0.0259040371, 0.7827717662, -0.8086757660],
+])
+
+
+def _oracle_oklch_band_adjust(
+    rgb, hsl, centers=None, hue_max=None, invert_bradford=False,
+):
+    """Independent scalar reimpl of `_apply_hsl_perceptual` (hand-rolled
+    Ottosson + Bradford; NEVER colour's Oklab functions — contract 4)."""
+    centers = list(_OKLCH_BAND_CENTERS_DEG) if centers is None else list(centers)
+    hue_max = _OKLCH_HUE_MAX_DEG if hue_max is None else hue_max
+    gate = _OKLCH_LUM_CHROMA_GATE
+    hue_adj = [x / 100.0 * hue_max for x in hsl.hue]
+    sat_fac = [1.0 + x / 100.0 for x in hsl.saturation]
+    lum_fac = [1.0 + x / 100.0 for x in hsl.luminance]
+
+    m_xyz50_to_pp = np.linalg.inv(_M_PP_LIN_TO_XYZ_D50)
+    m_bradford_65_to_50 = np.linalg.inv(_M_BRADFORD_D50_TO_D65)
+    m1_inv = np.linalg.inv(_OKLAB_M1_XYZ_TO_LMS)
+    m2_inv = np.linalg.inv(_OKLAB_M2_LMS_TO_LAB)
+    # invert_bradford swaps the CAT direction on BOTH legs (the wrong-whitepoint
+    # bug: feeding D50 XYZ to Oklab as if D65, then "un-adapting" the wrong way).
+    m_fwd = m_bradford_65_to_50 if invert_bradford else _M_BRADFORD_D50_TO_D65
+    m_back = _M_BRADFORD_D50_TO_D65 if invert_bradford else m_bradford_65_to_50
+
+    def cbrt(x):
+        return math.copysign(abs(x) ** (1.0 / 3.0), x)
+
+    flat = rgb.reshape(-1, 3).astype(np.float64)
+    out = np.empty_like(flat)
+    for i in range(flat.shape[0]):
+        xyz50 = _M_PP_LIN_TO_XYZ_D50 @ flat[i]
+        xyz65 = m_fwd @ xyz50
+        lms = _OKLAB_M1_XYZ_TO_LMS @ xyz65
+        lms_p = np.array([cbrt(v) for v in lms])
+        lab = _OKLAB_M2_LMS_TO_LAB @ lms_p
+        el, a, b = float(lab[0]), float(lab[1]), float(lab[2])
+        c = math.hypot(a, b)
+        h = math.degrees(math.atan2(b, a)) % 360.0
+
+        w = [0.0] * 8
+        for j in range(8):
+            lo = centers[j]
+            hi = centers[j + 1] if j < 7 else 360.0
+            if lo <= h < hi:
+                frac = (h - lo) / (hi - lo)
+                w[j] += 1.0 - frac
+                w[(j + 1) % 8] += frac
+
+        hue_shift = sum(w[k] * hue_adj[k] for k in range(8))
+        sat_mult = sum(w[k] * sat_fac[k] for k in range(8))
+        lum_mult = sum(w[k] * lum_fac[k] for k in range(8))
+
+        h2 = (h + hue_shift) % 360.0
+        c2 = max(c * sat_mult, 0.0)
+        c_gate = min(max(c / gate, 0.0), 1.0)
+        l2 = max(el * (1.0 + c_gate * (lum_mult - 1.0)), 0.0)
+
+        a2 = c2 * math.cos(math.radians(h2))
+        b2 = c2 * math.sin(math.radians(h2))
+        lms_p2 = m2_inv @ np.array([l2, a2, b2])
+        lms2 = lms_p2 ** 3
+        xyz65b = m1_inv @ lms2
+        xyz50b = m_back @ xyz65b
+        ppb = m_xyz50_to_pp @ xyz50b
+        out[i] = np.maximum(ppb, 0.0)
+    return out.reshape(rgb.shape)
+
+
+# Saturated ProPhoto patches spanning the bands + neutrals + overrange — a grey
+# wedge is blind to the camera-matrix chromatic rotation and the hue-gate (§0).
+def _oklch_edge_patches():
+    return np.array([
+        [1.0, 0.0, 0.0],    # primary red (gamut edge)
+        [0.0, 1.0, 0.0],    # primary green
+        [0.0, 0.0, 1.0],    # primary blue
+        [0.05, 0.4, 0.95],  # saturated blue
+        [0.95, 0.92, 0.05],  # saturated yellow
+        [0.6, 0.45, 0.4],   # pale skin (low chroma, a real colour)
+        [0.4, 0.4, 0.4],    # neutral (hue undefined)
+        [0.18, 0.18, 0.18],  # mid-grey neutral
+        [1.2, 0.1, 0.3],    # overrange + saturated (past the [0,1] box)
+    ], dtype=np.float64).reshape(-1, 1, 3)
+
+
+def test_oklch_hsl_matches_oracle():
+    """`_apply_hsl_perceptual` must equal the independent hand-rolled OKLCh oracle
+    to ~1e-2 over random + saturated/neutral/overrange patches, with a non-trivial
+    mix of Hue/Sat/Lum sliders across several bands. The floor is the two
+    independent matrix sets (file 7-digit Bradford + np.linalg.inv vs production's
+    colour-science path), NOT a bug."""
+    rng = np.random.default_rng(20260531)
+    rgb = (rng.random((2048, 3)) * 1.2).astype(np.float64).reshape(-1, 1, 3)
+    rgb = np.concatenate([rgb, _oklch_edge_patches()], axis=0)
+    hsl = HslBands(
+        hue=(20.0, -10.0, 0.0, 15.0, 0.0, -25.0, 0.0, 5.0),
+        saturation=(40.0, 0.0, -30.0, 60.0, 0.0, 50.0, 0.0, -20.0),
+        luminance=(-35.0, 0.0, 25.0, 0.0, 0.0, -40.0, 0.0, 30.0),
+    )
+    got = _apply_hsl_perceptual(rgb, hsl)
+    want = _oracle_oklch_band_adjust(rgb, hsl)
+    np.testing.assert_allclose(got, want, atol=1e-2)
+
+
+def test_oklch_oracle_detects_wrong_bradford_direction():
+    """Sensitivity: the D50↔D65 Bradford direction is load-bearing (Ottosson's
+    Oklab is D65-defined). Inverting the CAT diverges >5e-2 from the correct
+    oracle — so production's match to the correct direction is discriminating, not
+    a rubber stamp on a transposed/mis-directed matrix."""
+    rgb = _oklch_edge_patches()
+    hsl = HslBands(
+        hue=(20.0, 0.0, 0.0, 15.0, 0.0, -25.0, 0.0, 0.0),
+        saturation=(40.0, 0.0, -30.0, 60.0, 0.0, 50.0, 0.0, 0.0),
+    )
+    correct = _oracle_oklch_band_adjust(rgb, hsl)
+    wrong = _oracle_oklch_band_adjust(rgb, hsl, invert_bradford=True)
+    assert np.max(np.abs(correct - wrong)) > 5e-2
+    np.testing.assert_allclose(_apply_hsl_perceptual(rgb, hsl), correct, atol=1e-2)
+
+
+def test_oklch_oracle_detects_wrong_band_centers():
+    """Sensitivity: the OKLCh band centres are load-bearing. A buggy oracle using
+    evenly-spaced (45°) centres instead of the named-colour layout assigns a
+    different band weight, diverging on a band-targeted Luminance adjustment
+    (chosen over Saturation so a chroma floor cannot mask the gap)."""
+    rgb = np.array([[[0.05, 0.4, 0.95]]], dtype=np.float64)  # saturated blue (~209° OKLCh)
+    hsl = HslBands(luminance=(0.0, 0.0, 0.0, 0.0, 0.0, -50.0, 0.0, 0.0))  # Blue Lum −50
+    correct = _oracle_oklch_band_adjust(rgb, hsl)
+    even = np.linspace(0.0, 360.0, 8, endpoint=False)  # 0,45,90,… — wrong layout
+    wrong = _oracle_oklch_band_adjust(rgb, hsl, centers=even)
+    assert np.max(np.abs(correct - wrong)) > 1e-2
+    np.testing.assert_allclose(_apply_hsl_perceptual(rgb, hsl), correct, atol=1e-2)
+
+
+def test_oklch_oracle_detects_wrong_hue_magnitude():
+    """Sensitivity: a doubled Hue-slider magnitude (a plausible unit-scale bug)
+    rotates a band's hue twice as far — the real op matches the defined ±30°
+    magnitude and not the doubled one."""
+    rgb = np.array([[[0.9, 0.2, 0.2]]], dtype=np.float64)  # a red pixel
+    hsl = HslBands(hue=(100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))  # Red hue +100
+    correct = _oracle_oklch_band_adjust(rgb, hsl)
+    wrong = _oracle_oklch_band_adjust(rgb, hsl, hue_max=2.0 * _OKLCH_HUE_MAX_DEG)
+    assert np.max(np.abs(correct - wrong)) > 1e-2
+    np.testing.assert_allclose(_apply_hsl_perceptual(rgb, hsl), correct, atol=1e-2)
+
+
+def test_oklch_hsl_identity_byte_exact():
+    """The all-zero HslBands default must be a BYTE-exact no-op under the
+    perceptual applicator (the `is_identity()` short-circuit returns the input
+    before any lossy OKLab round-trip). With the gated downstream RGC pass this is
+    what keeps a zero-HSL perceptual render byte-exact — the ΔE ship-gate
+    guarantee (BLOCKER 3)."""
+    rgb = np.random.default_rng(1).random((16, 16, 3)).astype(np.float32)
+    np.testing.assert_array_equal(_apply_hsl_perceptual(rgb, HslBands()), rgb)
+    np.testing.assert_array_equal(
+        _apply_hsl_perceptual(
+            rgb, HslBands(hue=(0.0,) * 8, saturation=(0.0,) * 8, luminance=(0.0,) * 8),
+        ),
+        rgb,
+    )
+
+
+def test_oklch_no_top_clamp_preserves_overrange():
+    """BLOCKER 1: the perceptual path feeds the scene-referred ACEScg master, so a
+    >1 highlight MUST survive `_apply_hsl_perceptual` un-truncated. Faithful
+    `apply_hsl` floors at 0 but never clamps the top; match that. A bright
+    saturated specular stays >1 even with a Saturation+Luminance boost on its
+    band."""
+    spec = np.array([[[6.0, 3.0, 2.0]], [[4.0, 0.2, 0.1]]], dtype=np.float64)
+    hsl = HslBands(
+        saturation=(60.0, 0, 0, 0, 0, 0, 0, 0),
+        luminance=(40.0, 0, 0, 0, 0, 0, 0, 0),
+    )
+    out = _apply_hsl_perceptual(spec, hsl)
+    assert out.max() > 1.0, "overrange highlight was clamped — RGC must be downstream, not in-op"
+
+
+def test_oklch_hue_constancy_under_lum_sweep():
+    """A Luminance grade must act on OKLCh L alone and NOT drift hue (the structural
+    basis of the §7 Abney/Bezold–Brücke advantage). A fixed-(hue, chroma) input
+    swept across L, with band Luminance engaged, comes out at a near-constant OKLCh
+    hue (span < ~1°). This guards that the Luminance op stays in OKLCh L — a wrong
+    space / per-channel lift would rotate hue here — not that the band math itself
+    is correct (the oracle + sensitivity legs carry that); with the Hue sliders 0,
+    `h_out = h` by construction, so this isolates the L-only / hue-preservation
+    property."""
+    pp = colour.RGB_COLOURSPACES["ProPhoto RGB"]
+    m_rgb_to_xyz = np.asarray(pp.matrix_RGB_to_XYZ)
+    m_xyz_to_rgb = np.asarray(pp.matrix_XYZ_to_RGB)
+    m_b65to50 = np.linalg.inv(_develop_ops._M_BRADFORD_D50_TO_D65)
+
+    def oklch_to_pp(el, c, h_deg):
+        a = c * math.cos(math.radians(h_deg))
+        b = c * math.sin(math.radians(h_deg))
+        xyz65 = colour.Oklab_to_XYZ(np.array([el, a, b]))
+        return (xyz65 @ m_b65to50.T) @ m_xyz_to_rgb.T
+
+    def out_hue(rgb):
+        xyz65 = (rgb.reshape(-1, 3) @ m_rgb_to_xyz.T) @ _develop_ops._M_BRADFORD_D50_TO_D65.T
+        return colour.Oklab_to_Oklch(colour.XYZ_to_Oklab(xyz65))[:, 2]
+
+    h0, c0 = 40.0, 0.12  # a fixed orange-ish hue/chroma (lands in Orange/Yellow bands)
+    levels = np.linspace(0.2, 0.9, 15)
+    inp = np.array([oklch_to_pp(el, c0, h0) for el in levels]).reshape(-1, 1, 3)
+    hsl = HslBands(luminance=(0.0, 80.0, 80.0, 0.0, 0.0, 0.0, 0.0, 0.0))  # Orange+Yellow Lum +80
+    out_hues = out_hue(_apply_hsl_perceptual(inp, hsl))
+    assert out_hues.max() - out_hues.min() < 1.0, (
+        f"hue drifted {out_hues.max() - out_hues.min():.3f}° under a Luminance sweep"
+    )
+
+
+def test_oklch_neutrals_unaffected_by_lum_gate():
+    """§0 / the chroma gate: a near-grey pixel (ill-defined hue) must NOT be pushed
+    by a Luminance slider, while a saturated pixel under the SAME sliders IS lifted.
+    That contrast is the gate's whole purpose (the OKLCh analogue of the faithful
+    `s_gate`).
+
+    **Luminance is engaged on ALL eight bands** (`lum_mult = 1.6` independent of
+    hue), so the chroma gate `c_gate = clip(c/0.04, 0, 1)` is the ONLY thing that
+    can hold neutrals: a broken gate (`c_gate ≡ 1`) would lift greys by ~2.2 in
+    ProPhoto, which this test would catch. (A single-band slider would NOT exercise
+    the gate — pure greys land at OKLCh hue ≈228°, so a Red-band slider has ~zero
+    weight on them and they would be unchanged whether or not the gate works.)"""
+    grey = np.array([
+        [[0.05, 0.05, 0.05]], [[0.4, 0.4, 0.4]], [[0.7, 0.7, 0.7]], [[0.95, 0.95, 0.95]],
+    ], dtype=np.float64)
+    hsl = HslBands(luminance=(60.0,) * 8)  # lum_mult = 1.6 for ANY hue
+    grey_out = _apply_hsl_perceptual(grey, hsl)
+    # Pure greys have c≈1e-4 → c_gate≈0.0025 → a ~0.15% residual lift (the gate
+    # ramp, not a real lift); ~4.5e-3 in ProPhoto, three orders below a broken
+    # gate's ~2.2. The bound is the ramp, NOT the OKLab float floor.
+    np.testing.assert_allclose(grey_out, grey, atol=1e-2)
+
+    # Discriminator: a SATURATED pixel under the SAME all-band sliders IS lifted
+    # (c_gate=1 → full L×1.6). Neutral barely moves, saturated moves a lot — proof
+    # the gate gates on chroma rather than zeroing the Luminance op outright.
+    sat = np.array([[[0.05, 0.4, 0.95]]], dtype=np.float64)  # c≈0.37 → c_gate=1
+    sat_out = _apply_hsl_perceptual(sat, hsl)
+    assert np.max(np.abs(sat_out - sat)) > 0.1
+
+
+def test_oklch_bradford_constants_match_colour_science():
+    """The pinned module Bradford D50↔D65 matrices must equal colour-science's
+    Bradford CAT (the same `matrix_chromatic_adaptation_VonKries` the rest of the
+    pipeline adapts with), so the perceptual HSL working transform cannot silently
+    drift from the CAT `output.py`'s ProPhoto→ACEScg uses. Mirrors the
+    `_PROPHOTO_LUMINANCE` guard."""
+    from colour.adaptation import matrix_chromatic_adaptation_VonKries
+    xyz_d50 = colour.xy_to_XYZ(colour.RGB_COLOURSPACES["ProPhoto RGB"].whitepoint)
+    xyz_d65 = colour.xy_to_XYZ(
+        colour.CCS_ILLUMINANTS["CIE 1931 2 Degree Standard Observer"]["D65"],
+    )
+    m_50_to_65 = matrix_chromatic_adaptation_VonKries(xyz_d50, xyz_d65, transform="Bradford")
+    m_65_to_50 = matrix_chromatic_adaptation_VonKries(xyz_d65, xyz_d50, transform="Bradford")
+    np.testing.assert_allclose(_develop_ops._M_BRADFORD_D50_TO_D65, m_50_to_65, atol=1e-6)
+    np.testing.assert_allclose(_develop_ops._M_BRADFORD_D65_TO_D50, m_65_to_50, atol=1e-6)
+    # And the two pinned matrices are mutual inverses (round-trip is clean).
+    np.testing.assert_allclose(
+        _develop_ops._M_BRADFORD_D50_TO_D65 @ _develop_ops._M_BRADFORD_D65_TO_D50, np.eye(3), atol=1e-5,
     )
 
 
