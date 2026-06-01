@@ -130,6 +130,106 @@ def _exr_chromaticities(colorspace: str) -> tuple[float, ...]:
     )
 
 
+# --- ACES Reference Gamut Compression (RGC) — AP1 gamut safety -------------
+#
+# The single, gated gamut-safety pass for the scene-linear ACEScg (AP1) EXR
+# path (DECISIONS.md §7 contract 2; v10 research §3.5). The perceptual develop
+# ops (DR-compression — shipped; OKLCh HSL / ASC-CDL grade — coming) can push
+# pixels OUTSIDE AP1; after the ProPhoto(D50)→AP1 Bradford in
+# `_prophoto_to_linear` an out-of-AP1 colour presents as one or more **negative
+# AP1 channels**. Without compression those hard-clip at the float→half encode
+# (posterised, hue-shifted speculars). RGC rolls them smoothly back toward the
+# achromatic axis BEFORE the encode.
+#
+# This is the canonical Academy 1.3 transform (`urn:ampas:aces:transformId:
+# v1.5:LMT.Academy.GamutCompress.a1.3.0`), hand-coded from the spec
+# (https://docs.acescentral.com/rgc/specification/, Equations 2–4) and the
+# aces-dev reference DCTL `LMT.Academy.ReferenceGamutCompress` — `colour` 0.4.x
+# has NO general gamut compression. The reference constants are exact (NOT
+# tuning): they are the published Academy defaults, verified against both the
+# spec and the DCTL this session.
+#
+# Per-channel maximum distances (the AP1↔AP0 boundary distances, in the order
+# the achromatic-distance channels are indexed: R-distance↔Cyan, G↔Magenta,
+# B↔Yellow). At `distance == limit` the channel reconstructs to exactly the
+# gamut boundary (0); beyond the limit it stays compressed-but-negative by
+# design (the asymptote is `threshold + scale ≈ 1.14 / 1.09 / 1.03`, never 1.0)
+# — RGC is gamut *compression*, not a hard clamp, so we deliberately do NOT
+# clip residual negatives afterwards.
+_RGC_LIMIT = np.array([1.147, 1.264, 1.312], dtype=np.float64)   # Cyan/Mag/Yel
+_RGC_THRESHOLD = np.array([0.815, 0.803, 0.880], dtype=np.float64)
+_RGC_POWER = 1.2
+
+
+def _rgc_scale(threshold: np.ndarray, limit: np.ndarray, power: float) -> np.ndarray:
+    """Per-channel scale `s` that makes the compression curve pass through
+    `(distance=limit) → 1.0` (the spec's defining property — Eq. 4):
+
+        s = (l − t) / ( ((1 − t)/(l − t))**(−p) − 1 )**(1/p)
+    """
+    return (limit - threshold) / (
+        ((1.0 - threshold) / (limit - threshold)) ** (-power) - 1.0
+    ) ** (1.0 / power)
+
+
+def _rgc_compress_distance(dist: np.ndarray) -> np.ndarray:
+    """The ACES RGC forward compression curve applied per achromatic-distance
+    channel (spec Eq. 4 / DCTL `compress`):
+
+        d_c = d                                          if d < t   (identity)
+        d_c = t + s · nd / (1 + nd**p)**(1/p)            otherwise
+
+    with `nd = (d − t)/s`. `dist` is (..., 3); thresholds/limits broadcast over
+    the last axis. The identity branch is preserved exactly by `np.where`; the
+    `max(d − t, 0)` floor keeps `nd**p` finite (a raw negative base would NaN
+    and trip the writer's NaN scrub)."""
+    dist = np.asarray(dist, dtype=np.float64)
+    scl = _rgc_scale(_RGC_THRESHOLD, _RGC_LIMIT, _RGC_POWER)
+    nd = np.maximum(dist - _RGC_THRESHOLD, 0.0) / scl
+    rolled = _RGC_THRESHOLD + scl * nd / (1.0 + nd ** _RGC_POWER) ** (1.0 / _RGC_POWER)
+    return np.where(dist < _RGC_THRESHOLD, dist, rolled)
+
+
+def _aces_rgc_compress_ap1(ap1: np.ndarray) -> np.ndarray:
+    """Apply the gated ACES Reference Gamut Compression to AP1-linear pixels.
+
+    `ap1` is (H, W, 3) ACEScg (AP1) linear. Returns AP1 with out-of-AP1
+    excursions (the negative channels of colours outside AP1) compressed toward
+    the achromatic axis.
+
+    **Gated:** if NO channel of any pixel reaches its compression threshold the
+    function returns the **input array unchanged** (the literal object — no copy
+    or cast), so an in-gamut / low-saturation render is **byte-exact identity**
+    and the gym/rose ΔE ship gate path (which never goes out of AP1) is
+    untouched. NB the threshold (~0.8) sits *inside* the gamut boundary, so
+    deeply-saturated but still-in-gamut colours in `[threshold, 1]` are also
+    compressed — that is correct RGC, not a defect.
+
+    Algorithm (spec Eq. 2–4):
+      ach  = max(R, G, B)                       (the achromatic component)
+      d    = (ach − rgb) / |ach|                (per-channel distance; 0 if ach==0)
+      d'   = compress(d)                        (identity below threshold)
+      rgb' = ach − d' · |ach|                   (reconstruct)
+
+    The MAX channel always has d=0 → identity, so RGC never darkens the
+    achromatic/luminance peak; it only pulls the trailing (low/negative)
+    channels in. Achromatic (grey) pixels have d=0 on all channels → exact
+    identity per pixel."""
+    ach = np.max(ap1, axis=-1, keepdims=True)
+    abs_ach = np.abs(ach)
+    # Distance is undefined where ach == 0 (pure black); the spec sets d=0 there
+    # (→ identity), so guard the division and force those pixels to passthrough.
+    safe = abs_ach > 0.0
+    dist = np.where(safe, (ach - ap1) / np.where(safe, abs_ach, 1.0), 0.0)
+
+    # Gate: nothing reaches threshold → byte-exact no-op (return the input).
+    if not np.any(dist >= _RGC_THRESHOLD):
+        return ap1
+
+    dist_c = _rgc_compress_distance(dist)
+    return (ach - dist_c * abs_ach).astype(ap1.dtype, copy=False)
+
+
 # --- Display-referred TIFF writer (LRTimelapse round-trip) -----------------
 
 
@@ -330,6 +430,15 @@ def write_exr_scene_linear(
             stacklevel=2,
         )
         pixels = np.nan_to_num(pixels, nan=0.0, posinf=65504.0, neginf=0.0)
+    # ACES Reference Gamut Compression — the single, gated AP1 gamut-safety pass
+    # (DECISIONS.md §7 contract 2). Perceptual develop ops can push pixels out of
+    # AP1, presenting as negative AP1 channels here; RGC rolls them smoothly back
+    # toward the achromatic axis instead of letting them hard-clip at the encode.
+    # ACEScg (AP1) ONLY — the reference limits are AP1-specific; AP0 (aces2065)
+    # is wider and is not compressed. Gated: a no-op (byte-exact) when nothing is
+    # near/out of gamut, so the in-gamut ship-gate path is untouched.
+    if colorspace == "acescg":
+        pixels = _aces_rgc_compress_ap1(pixels)
     if bit_depth == "half":
         pixels = pixels.astype(np.float16)
     dst = Path(dst)

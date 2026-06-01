@@ -53,7 +53,14 @@ from lrt_cinema.lut3d_baker import (  # noqa: E402
     _hsv_to_rgb_dcp,
     _rgb_to_hsv_dcp,
 )
-from lrt_cinema.output import _prophoto_to_display, write_tiff_display  # noqa: E402
+from lrt_cinema.output import (  # noqa: E402
+    _RGC_LIMIT,
+    _RGC_POWER,
+    _RGC_THRESHOLD,
+    _aces_rgc_compress_ap1,
+    _prophoto_to_display,
+    write_tiff_display,
+)
 from lrt_cinema.pipeline import (  # noqa: E402
     DngSplineSolver,
     apply_rgb_tone,
@@ -1075,3 +1082,278 @@ def test_dr_compression_invertible_three_slope_numerically():
     fwd_s = _dr_compress_luminance(sample, c_lo, c_hi, c_top)
     recovered = np.interp(fwd_s, fwd, lum)  # invert through the monotone curve
     np.testing.assert_allclose(recovered, sample, rtol=2e-3)
+
+
+# ---------------------------------------------------------------------------
+# ACES Reference Gamut Compression (output._aces_rgc_compress_ap1) — the single
+# gated AP1 gamut-safety pass before the ACEScg EXR encode.
+#
+# Axis-1 ground truth is an INDEPENDENT, per-pixel scalar reimplementation of
+# the canonical Academy 1.3 RGC (spec Eq. 2–4 / aces-dev reference DCTL): the
+# achromatic max, the per-channel achromatic distance, the threshold/power/limit
+# compression curve, and the reconstruct — looped per pixel and per channel, a
+# wholly different code path from the production vectorised np.where form, so
+# agreement is a real cross-check (not a tautology — production does NOT call
+# any colour-science gamut function; `colour` 0.4.x has none).
+#
+# Constants (threshold/limit/power) are the EXACT published Academy reference
+# defaults, NOT tuning — verified against the spec + DCTL. `disable` /
+# `wrong_threshold` / `skip_ach_norm` are injectable so the sensitivity legs
+# prove the check discriminates the three load-bearing bugs the task names:
+# (1) compression disabled, (2) wrong threshold, (3) missing /ach normalization.
+# A consistent channel↔limit (Cyan/Magenta/Yellow) swap would live in BOTH the
+# oracle and production (same spec read) → it is closed independently by the
+# OCIO cross-check below (skipif OCIO absent).
+# ---------------------------------------------------------------------------
+
+
+def _oracle_rgc(rgb, disable=False, wrong_threshold=False, skip_ach_norm=False):
+    """Independent scalar ACES RGC. `rgb` is (..., 3) AP1-linear; returns the
+    same shape. Per pixel: ach = max; d = (ach − c)/|ach| (or /1 to inject the
+    missing-normalization bug); compress d above threshold; rebuild c = ach −
+    d'·|ach|."""
+    thr = list(_RGC_THRESHOLD)
+    lim = list(_RGC_LIMIT)
+    pwr = _RGC_POWER
+    if wrong_threshold:
+        thr = [0.5, 0.5, 0.5]  # a clearly different (lower) threshold
+    scl = [
+        (lim[i] - thr[i])
+        / (((1.0 - thr[i]) / (lim[i] - thr[i])) ** (-pwr) - 1.0) ** (1.0 / pwr)
+        for i in range(3)
+    ]
+
+    def compress(d, i):
+        if disable or d < thr[i]:
+            return d
+        nd = (d - thr[i]) / scl[i]
+        return thr[i] + scl[i] * nd / (1.0 + nd ** pwr) ** (1.0 / pwr)
+
+    flat = rgb.reshape(-1, 3).astype(np.float64)
+    out = np.empty_like(flat)
+    for p in range(flat.shape[0]):
+        c = [float(v) for v in flat[p]]
+        ach = max(c)
+        aa = abs(ach)
+        for i in range(3):
+            if aa == 0.0:
+                d = 0.0
+            elif skip_ach_norm:
+                d = ach - c[i]               # the missing /|ach| bug
+            else:
+                d = (ach - c[i]) / aa
+            out[p, i] = ach - compress(d, i) * aa
+    return out.reshape(rgb.shape)
+
+
+# A fixed pixel set spanning the regions RGC must get right: in-gamut neutral &
+# saturated, in-gamut-but-past-threshold, mild out-of-AP1 (one negative channel,
+# distance ≤ limit), and EXTREME out-of-AP1 (distance ≫ limit, stays negative by
+# design). Out-of-AP1 == one or more NEGATIVE AP1 channels (CLAUDE.md §0: a grey
+# wedge cannot exercise this op at all — its distances are 0).
+def _rgc_edge_pixels():
+    rng = np.random.default_rng(20260531)
+    # Random AP1 with deliberate negatives (standard_normal → ~half negative).
+    rand = rng.standard_normal((1500, 3)) * 0.8 + 0.3
+    edge = np.array([
+        [0.18, 0.18, 0.18],      # neutral mid — d=0, must be identity
+        [0.0, 0.0, 0.0],         # black — ach=0, d=0 guard
+        [0.8, 0.2, 0.1],         # in-gamut saturated, trailing chans past thr
+        [1.0, 0.05, 0.2],        # mild out-of-AP1-ish (small trailing channel)
+        [1.0, -0.05, 0.2],       # mild out-of-AP1 (one negative, d ≤ limit)
+        [0.6, -0.02, 0.3],       # mild negative, lower achromatic
+        [1.0, -2.0, -1.0],       # EXTREME out-of-AP1 (d ≫ limit)
+        [2.0, -0.5, -0.3],       # bright saturated out-of-AP1
+        [-0.3, 1.0, -0.1],       # negative on R and B, green-dominant
+    ])
+    return np.concatenate([rand, edge], axis=0).reshape(-1, 1, 3)
+
+
+def test_rgc_matches_independent_oracle():
+    """_aces_rgc_compress_ap1 must equal the independent per-pixel scalar oracle
+    to ~0 over random + saturated + out-of-AP1 (negative-channel) pixels. The
+    gate is forced on by the out-of-AP1 content."""
+    rgb = _rgc_edge_pixels()
+    got = _aces_rgc_compress_ap1(rgb.astype(np.float32))
+    want = _oracle_rgc(rgb)
+    np.testing.assert_allclose(got, want, atol=1e-6)
+
+
+def test_rgc_oracle_detects_disabled_compression():
+    """Sensitivity leg 1 — compression OFF. With the curve disabled an
+    out-of-AP1 (negative) channel keeps its full distance; the real op compresses
+    it. The two diverge on an out-of-AP1 pixel, so the agreement test is
+    discriminating."""
+    rgb = np.array([[[1.0, -0.05, 0.2]], [[2.0, -0.5, -0.3]]])  # out-of-AP1
+    correct = _oracle_rgc(rgb)
+    disabled = _oracle_rgc(rgb, disable=True)
+    assert np.max(np.abs(correct - disabled)) > 1e-2
+    np.testing.assert_allclose(
+        _aces_rgc_compress_ap1(rgb.astype(np.float32)), correct, atol=1e-6,
+    )
+
+
+def test_rgc_oracle_detects_wrong_threshold():
+    """Sensitivity leg 2 — the threshold is load-bearing (it sets where the
+    rolloff begins). A wrong (lower) threshold compresses values the correct
+    curve leaves alone; the real op matches the reference threshold and not the
+    wrong one."""
+    rgb = _rgc_edge_pixels()
+    correct = _oracle_rgc(rgb)
+    wrong = _oracle_rgc(rgb, wrong_threshold=True)
+    assert np.max(np.abs(correct - wrong)) > 1e-2
+    np.testing.assert_allclose(
+        _aces_rgc_compress_ap1(rgb.astype(np.float32)), correct, atol=1e-6,
+    )
+
+
+def test_rgc_oracle_detects_missing_ach_normalization():
+    """Sensitivity leg 3 — the distance MUST be normalized by |ach| (spec Eq. 3).
+    Dropping the /|ach| makes the distance scale with absolute brightness, so a
+    bright out-of-AP1 pixel is compressed by a totally different amount; the real
+    op matches the normalized oracle."""
+    rgb = np.array([[[2.0, -0.5, -0.3]], [[1.0, -0.05, 0.2]]])
+    correct = _oracle_rgc(rgb)
+    no_norm = _oracle_rgc(rgb, skip_ach_norm=True)
+    assert np.max(np.abs(correct - no_norm)) > 1e-2
+    np.testing.assert_allclose(
+        _aces_rgc_compress_ap1(rgb.astype(np.float32)), correct, atol=1e-6,
+    )
+
+
+def test_rgc_gated_in_gamut_is_byte_exact_no_op():
+    """GATED: an image whose every channel-distance is below threshold (in-gamut,
+    low-to-moderate saturation) returns the INPUT array unchanged (literal
+    object) — byte-exact identity. This is the structural guarantee that the
+    ACEScg EXR path of an in-gamut render is bit-identical to the pre-RGC build,
+    so the gym/rose ΔE ship gate is untouched."""
+    rng = np.random.default_rng(7)
+    # All-positive, modest saturation → max channel-distance stays < ~0.8.
+    rgb = (rng.random((16, 16, 3)).astype(np.float32) * 0.5 + 0.25)
+    out = _aces_rgc_compress_ap1(rgb)
+    assert out is rgb, "gate must return the literal input (no copy/cast)"
+    np.testing.assert_array_equal(out, rgb)
+
+
+def test_rgc_grey_stays_grey_even_when_gate_fires():
+    """A grey (achromatic) pixel has distance 0 on every channel → exact
+    identity, even inside an image where other pixels ARE out of AP1 (so the gate
+    fires). Stronger than an all-grey no-op: it proves the per-pixel achromatic
+    axis is fixed. (CLAUDE.md §0 — validate the achromatic invariant alongside
+    saturated content, not a grey wedge alone.)"""
+    img = np.random.default_rng(1).random((4, 4, 3)).astype(np.float32)
+    img[0, 0] = [2.0, -0.5, -0.3]   # out-of-AP1 → forces the gate ON
+    greys = [(1, 1, 0.4), (2, 2, 0.05), (3, 3, 0.9)]
+    for y, x, v in greys:
+        img[y, x] = [v, v, v]
+    out = _aces_rgc_compress_ap1(img)
+    assert out is not img, "gate should have fired (out-of-AP1 pixel present)"
+    for y, x, _v in greys:
+        np.testing.assert_array_equal(out[y, x], img[y, x])
+
+
+def test_rgc_pulls_out_of_ap1_back_toward_gamut():
+    """A mildly out-of-AP1 pixel (one negative channel, distance ≤ its limit) is
+    pulled back to in-gamut: NO negative channel remains, the achromatic (max)
+    channel is preserved exactly, and the negative channel increased toward 0.
+    Validated on SATURATED / out-of-gamut content (the only content this op
+    touches)."""
+    px = np.array([[[1.0, -0.05, 0.2]]], dtype=np.float32)
+    out = _aces_rgc_compress_ap1(px)[0, 0]
+    assert np.all(out >= -1e-7), f"negative channel survived (d≤limit): {out}"
+    np.testing.assert_allclose(out[0], 1.0, atol=1e-6)   # max channel preserved
+    assert out[1] > px[0, 0, 1]                           # negative pulled up
+
+
+def test_rgc_extreme_out_of_ap1_reduced_not_eliminated():
+    """Correct (NOT a violation): a pixel whose AP1 distance EXCEEDS the limit
+    stays compressed-but-negative — the RGC asymptote is `threshold + scale ≈
+    1.03–1.14`, never 1.0, so reconstruction can land below 0. We deliberately do
+    NOT clip it (that would reintroduce the hard clip RGC replaces). Assert the
+    magnitude is reduced + finite, not eliminated."""
+    px = np.array([[[1.0, -2.0, -1.0]]], dtype=np.float32)
+    out = _aces_rgc_compress_ap1(px)[0, 0]
+    assert np.all(np.isfinite(out))
+    assert abs(out[1]) < abs(px[0, 0, 1])    # |neg| reduced
+    assert abs(out[2]) < abs(px[0, 0, 2])
+    np.testing.assert_allclose(out[0], 1.0, atol=1e-6)  # max still preserved
+
+
+def test_rgc_max_channel_and_dtype_preserved_no_nan():
+    """The achromatic (max) channel is invariant under RGC (its distance is 0),
+    the output dtype matches the input, and no NaN/Inf is produced even on a
+    heavily-negative batch (the np.where identity branch must not leak a NaN from
+    nd**power on a negative base — guarded by the max(d−t,0) floor)."""
+    rng = np.random.default_rng(2)
+    big = (rng.standard_normal((64, 64, 3)) * 1.5).astype(np.float32)
+    out = _aces_rgc_compress_ap1(big)
+    assert out.dtype == big.dtype
+    assert np.all(np.isfinite(out)), "RGC produced a non-finite value"
+    # Max channel per pixel is unchanged (d=0 → identity on the achromatic peak).
+    np.testing.assert_allclose(
+        np.max(out, axis=-1), np.max(big, axis=-1), atol=1e-6,
+    )
+
+
+def test_rgc_compress_curve_hits_boundary_at_limit():
+    """The defining property (spec Eq. 4): a channel at exactly its limit
+    distance reconstructs to the gamut boundary (channel value 0), i.e.
+    compress(limit) == 1.0 per channel. Below threshold the curve is the
+    identity. This pins the curve's anchor independently of the per-pixel
+    machinery."""
+    for i in range(3):
+        # A pixel where channel i sits exactly at its limit distance from ach=1.
+        rgb = np.ones((1, 1, 3))
+        rgb[0, 0, i] = 1.0 - _RGC_LIMIT[i]      # d_i = (1 − (1−lim))/1 = lim
+        out = _aces_rgc_compress_ap1(rgb.astype(np.float64))[0, 0]
+        np.testing.assert_allclose(out[i], 0.0, atol=1e-6)  # → boundary
+    # Below threshold → identity (a mildly-saturated in-gamut pixel).
+    mild = np.array([[[1.0, 0.9, 0.95]]])  # all distances < 0.8
+    np.testing.assert_array_equal(
+        _aces_rgc_compress_ap1(mild.astype(np.float64)), mild,
+    )
+
+
+def test_rgc_monotone_in_distance_no_inversion():
+    """Sweeping a single trailing channel from very negative (far out of AP1) up
+    to the achromatic value yields a monotone-non-decreasing reconstructed
+    channel — no gradient inversion across the threshold knee (the rolloff is C0
+    and monotone)."""
+    ach = 1.0
+    trailing = np.linspace(-3.0, ach, 4000)
+    rgb = np.stack(
+        [np.full_like(trailing, ach), trailing, np.full_like(trailing, ach)],
+        axis=-1,
+    ).reshape(-1, 1, 3)
+    out = _aces_rgc_compress_ap1(rgb)[:, 0, 1]
+    assert np.all(np.diff(out) >= -1e-7), "RGC reconstruction is non-monotone"
+
+
+def test_rgc_cross_check_against_ocio_if_available():
+    """Independent cross-check against OCIO's built-in 'ACES 1.3 Reference Gamut
+    Compression' — closes the one blind spot the hand-rolled oracle shares with
+    production (a consistent Cyan/Magenta/Yellow channel↔limit mapping would be
+    in BOTH, from the same spec read). Skipped when OCIO is not installed (it is
+    NOT a runtime dependency — production stays hand-coded for controllable
+    gating)."""
+    ocio = pytest.importorskip("PyOpenColorIO")
+    try:
+        cfg = ocio.Config.CreateFromBuiltinConfig(
+            "cg-config-v1.0.0_aces-v1.3_ocio-v2.1",
+        )
+        # The built-in ACES CG config exposes RGC as a named colour space whose
+        # to_reference is the gamut compression (working space = ACEScg).
+        proc = cfg.getProcessor("ACEScg", "ACEScg - Reference Gamut Compression")
+    except Exception:  # noqa: BLE001 — config/name availability varies across OCIO builds
+        pytest.skip("OCIO build lacks the ACES-1.3 RGC named transform")
+    cpu = proc.getDefaultCPUProcessor()
+
+    rgb = np.array([
+        [1.0, -0.05, 0.2], [2.0, -0.5, -0.3], [0.8, 0.2, 0.1],
+        [0.18, 0.18, 0.18], [-0.3, 1.0, -0.1],
+    ], dtype=np.float32)
+    ours = _aces_rgc_compress_ap1(rgb.reshape(-1, 1, 3))[:, 0, :]
+    ref = rgb.copy()
+    for i in range(ref.shape[0]):
+        ref[i] = cpu.applyRGB(list(ref[i]))
+    np.testing.assert_allclose(ours, ref, atol=2e-3)

@@ -8,6 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] — v0.8 prep
 
 ### Added
+- **ACES Reference Gamut Compression (RGC) — the single gated AP1 gamut-safety
+  pass (v0.9, DECISIONS §7 contract 2).** The perceptual develop ops
+  (DR-compression — shipped; OKLCh HSL / ASC-CDL grade — coming) can push pixels
+  outside AP1, which after the ProPhoto→AP1 Bradford present as **negative AP1
+  channels**; without compression they hard-clip (posterised, hue-shifted
+  speculars) at the EXR encode. A new `output._aces_rgc_compress_ap1`, wired into
+  `write_exr_scene_linear` on the **ACEScg (AP1) EXR path only** (after the
+  Bradford + NaN scrub, before the float→half encode), rolls them smoothly back
+  toward the achromatic axis. It is the canonical **Academy 1.3** transform
+  (`LMT.Academy.GamutCompress`), hand-coded from the spec
+  (`docs.acescentral.com/rgc/specification/`, Eq. 2–4) and the aces-dev reference
+  DCTL — `colour` 0.4.x has **no** general gamut compression — with the **exact
+  published reference constants** (per-channel threshold `[0.815, 0.803, 0.880]`,
+  limit `[1.147, 1.264, 1.312]`, power `1.2`; these are Academy defaults, **not**
+  tuning). **Always-on for ACEScg** (general gamut safety, not intent-gated) but
+  **gated on actual out-of-AP1 content** → a **byte-exact no-op** (returns the
+  literal input) when no channel-distance reaches threshold, so an in-gamut EXR is
+  bit-identical to the pre-RGC build and the gym 0.026 / rose 0.545 ΔE ship gate
+  (stages 1–9 → sRGB) is untouched (an EXR-path change). The max (achromatic)
+  channel is invariant (distance 0 → grey→grey, luminance peak never darkens); an
+  excursion **beyond** the per-channel limit stays compressed-but-negative by
+  design (asymptote `threshold+scale ≈ 1.03–1.14`, never 1.0 — RGC is
+  *compression*, not a clamp, so residual negatives are **not** re-clipped). The
+  **sRGB/TIFF path is untouched** (it has its own `[0,1]` clip), and **`aces2065`
+  (AP0) is not compressed** (AP0 is wider; the limits are AP1-specific). An Axis-1
+  oracle holds an independent per-pixel reimpl to ~0 with three injected-bug
+  sensitivity legs (compression disabled, wrong threshold, missing `/ach`
+  normalization) + an OCIO cross-check (skipif absent) closing the channel↔limit
+  blind spot. Method/params authority:
+  `docs/research/v10-local-tone-mapping-dr-compression.md` §3.5; `docs/PIPELINE.md`
+  §7.
 - **Perceptual scene-referred DR-compression — Highlights/Shadows/Whites now
   *do* something (v0.9, DECISIONS §5 amendment).** The LR `Highlights`/`Shadows`/
   `Whites` knobs — previously parsed-and-dropped — drive a new
