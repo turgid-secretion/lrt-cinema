@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — v0.8 prep
 
+### Changed
+- **Perceptual-path review-fix pass (v0.9, `/caveman-review` follow-ups).** Four
+  corrections to the just-shipped PERCEPTUAL render intent, none of which touch the
+  faithful path or the ΔE ship gate (every op stays a byte-exact no-op at zero
+  sliders):
+  - **Perceptual Contrast is now hue-preserving.** The PERCEPTUAL branch was falling
+    through to the faithful **per-channel** `apply_contrast_2012`, which rotates
+    hue/saturation on saturated colour — a §0 violation on a path whose whole point is
+    hue stability. New `_apply_contrast_perceptual` scales **luminance** about the 0.18
+    pivot and reapplies it as an out/in **ratio** (never per-channel; floor 0, no top
+    clamp), matching the §0 discipline of the other perceptual ops. Faithful Contrast
+    is unchanged (`apply_contrast_2012`).
+  - **DR-compression runs FIRST** in the perceptual branch (was after ColorGrade):
+    `DR-compression → HSL → ColorGrade → Texture/Clarity → Contrast`. Set the dynamic
+    range from Highlights/Shadows/Whites, *then* grade/detail the tamed result —
+    Lightroom likewise applies Basic tone before Color Grading (DECISIONS §5
+    amendment).
+  - **CDL matrix cache.** `_apply_color_grade_perceptual` was calling
+    `colour.RGB_to_RGB` (which rebuilds the ProPhoto↔ACEScg matrices) twice per frame;
+    now a lazily-cached `_cg_acescg_matrices()` pair is applied as plain matmuls —
+    **numerically equivalent** (same matrices; matmul vs `colour`'s internal
+    `einsum` differ by ≤1 ULP, ~4e-16, orders below any ΔE floor). The zero-slider
+    **byte-exact identity is unaffected** — it short-circuits *before* the matmul.
+    Per-frame matrix rebuild removed.
+  - **`_DR_EPS` → `_LOG_EPS`** rename: the `log(0)` floor is shared by DR-compression,
+    the CDL log-zone proxy, and Texture/Clarity, so the name now reflects the shared
+    role (no behaviour change).
+
 ### Added
 - **Texture/Clarity → edge-aware local-contrast boost (v0.9 dual-mode step 4 — the
   LAST dual-mode op, DECISIONS §7).** New `apply_texture_clarity` on the **PERCEPTUAL

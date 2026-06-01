@@ -363,6 +363,30 @@ def _apply_hsl_perceptual(prophoto: np.ndarray, hsl: HslBands) -> np.ndarray:
     return out.astype(prophoto.dtype)
 
 
+_CG_ACESCG_MATRICES: tuple[np.ndarray, np.ndarray] | None = None
+
+
+def _cg_acescg_matrices() -> tuple[np.ndarray, np.ndarray]:
+    """ProPhoto(D50)↔ACEScg(AP1) 3×3 matrices (Bradford CAT), computed once via
+    colour-science and process-cached. Identical to
+    `colour.RGB_to_RGB(..., apply_cctf_*=False)` (which is matrix-only) but without
+    re-deriving the CAT+matrix product per frame — the CDL grade then converts with
+    a matmul. Lazy import keeps `--dry-run` colour-free. Returns
+    `(ProPhoto→ACEScg, ACEScg→ProPhoto)`."""
+    global _CG_ACESCG_MATRICES
+    if _CG_ACESCG_MATRICES is None:
+        import colour
+        _CG_ACESCG_MATRICES = (
+            colour.matrix_RGB_to_RGB(
+                "ProPhoto RGB", "ACEScg", chromatic_adaptation_transform="Bradford",
+            ),
+            colour.matrix_RGB_to_RGB(
+                "ACEScg", "ProPhoto RGB", chromatic_adaptation_transform="Bradford",
+            ),
+        )
+    return _CG_ACESCG_MATRICES
+
+
 def _apply_color_grade_perceptual(prophoto: np.ndarray, cg: ColorGrade) -> np.ndarray:
     """PERCEPTUAL Color Grade — ASC-CDL idiom, **offset-only**, in ACEScct log
     (DECISIONS.md §7 step 2). The faithful split-tone `apply_color_grade`
@@ -433,17 +457,12 @@ def _apply_color_grade_perceptual(prophoto: np.ndarray, cg: ColorGrade) -> np.nd
 
     import colour
 
-    # ProPhoto(D50) → ACEScg(AP1): same Bradford as output._prophoto_to_linear.
+    # ProPhoto(D50) → ACEScg(AP1): same Bradford as output._prophoto_to_linear,
+    # via the cached matrix (matmul, not a per-frame colour.RGB_to_RGB re-derive).
+    to_acescg, to_prophoto = _cg_acescg_matrices()
     shape = prophoto.shape
     flat = prophoto.reshape(-1, 3).astype(np.float64)
-    acescg = colour.RGB_to_RGB(
-        flat,
-        input_colourspace="ProPhoto RGB",
-        output_colourspace="ACEScg",
-        chromatic_adaptation_transform="Bradford",
-        apply_cctf_decoding=False,
-        apply_cctf_encoding=False,
-    )
+    acescg = flat @ to_acescg.T
 
     # ACEScg → ACEScct log (library toe; NOT floored — the linear toe is
     # invertible for the small negatives an out-of-AP1 colour produces).
@@ -487,16 +506,10 @@ def _apply_color_grade_perceptual(prophoto: np.ndarray, cg: ColorGrade) -> np.nd
 
     log_out = log_in + offset_lum + offset_chroma
 
-    # ACEScct → ACEScg → ProPhoto(D50) (inverse Bradford). No top clamp; floor 0.
+    # ACEScct → ACEScg → ProPhoto(D50) (inverse Bradford, cached matmul). No top
+    # clamp; floor 0.
     acescg_out = colour.models.log_decoding_ACEScct(log_out)
-    pp_out = colour.RGB_to_RGB(
-        acescg_out,
-        input_colourspace="ACEScg",
-        output_colourspace="ProPhoto RGB",
-        chromatic_adaptation_transform="Bradford",
-        apply_cctf_decoding=False,
-        apply_cctf_encoding=False,
-    )
+    pp_out = acescg_out @ to_prophoto.T
     out = np.maximum(pp_out.reshape(shape), 0.0)
     return out.astype(prophoto.dtype)
 
@@ -579,7 +592,7 @@ def apply_dr_compression(
     # ratio reapply runs on the original array (the multiply promotes per-line and
     # is recast back). Avoids a ~2× full-frame allocation per worker.
     lum = prophoto @ _PROPHOTO_LUMINANCE
-    log_l = np.log2(np.maximum(lum, 0.0) + _DR_EPS)
+    log_l = np.log2(np.maximum(lum, 0.0) + _LOG_EPS)
 
     # Adaptive box radius: clamp so the (2r+1) window fits the smaller spatial
     # axis. A 1-wide / sub-window array (the oracle's per-pixel layout, a tiny
@@ -591,9 +604,9 @@ def apply_dr_compression(
     detail_log = log_l - base_log
     base_comp = _DR_LOG_ANCHOR + _dr_remap_log(base_log - _DR_LOG_ANCHOR, c_lo, c_hi, c_top)
     log_l_out = base_comp + detail_log
-    lum_out = np.maximum(np.exp2(log_l_out) - _DR_EPS, 0.0)
+    lum_out = np.maximum(np.exp2(log_l_out) - _LOG_EPS, 0.0)
 
-    ratio = lum_out / np.maximum(lum, _DR_EPS)
+    ratio = lum_out / np.maximum(lum, _LOG_EPS)
     out = np.maximum(prophoto * ratio[..., None], 0.0)  # floor 0; NO top clamp (overrange survives)
     return out.astype(prophoto.dtype)
 
@@ -669,7 +682,7 @@ def apply_texture_clarity(
     # a float32 frame); the ratio reapply runs on the original array so we never hold
     # a float64 copy of the whole RGB frame (mirrors apply_dr_compression).
     lum = prophoto @ _PROPHOTO_LUMINANCE
-    log_l = np.log2(np.maximum(lum, 0.0) + _DR_EPS)
+    log_l = np.log2(np.maximum(lum, 0.0) + _LOG_EPS)
 
     # Adaptive box radii: clamp so each (2r+1) window fits the smaller spatial axis.
     # A 1-wide / sub-window array (the oracle's per-pixel layout) collapses both to
@@ -691,9 +704,9 @@ def apply_texture_clarity(
     texture_gain, clarity_gain = _tc_band_gains(texture, clarity, midtone_w)
 
     log_l_out = base_coarse + texture_gain * texture_band + clarity_gain * clarity_band
-    lum_out = np.maximum(np.exp2(log_l_out) - _DR_EPS, 0.0)
+    lum_out = np.maximum(np.exp2(log_l_out) - _LOG_EPS, 0.0)
 
-    ratio = lum_out / np.maximum(lum, _DR_EPS)
+    ratio = lum_out / np.maximum(lum, _LOG_EPS)
     out = np.maximum(prophoto * ratio[..., None], 0.0)  # floor 0; NO top clamp (overrange survives)
     return out.astype(prophoto.dtype)
 
@@ -730,6 +743,31 @@ def apply_sharpness(prophoto: np.ndarray, sharpness: float) -> np.ndarray:
     return prophoto
 
 
+def _apply_contrast_perceptual(prophoto: np.ndarray, contrast: float) -> np.ndarray:
+    """PERCEPTUAL Contrast — the Contrast2012 pivot-0.18 gain applied to
+    **luminance** with §0 out/in-ratio reapply, so it is **hue-preserving**.
+
+    The faithful `apply_contrast_2012` scales each channel independently around
+    0.18 — which on saturated colour changes the channel *ratios* and so rotates
+    hue/saturation. That matches Lightroom on the round-trip TIFF, but on the
+    perceptual master it would undo the §0 hue-stability every other perceptual op
+    (OKLCh HSL, ratio-reapply DR-compression/Texture, zero-sum CDL) maintains. So
+    here the same gain law `lum_out = 0.18 + (lum − 0.18)·gain` (`gain =
+    1 + contrast/100`) runs on the luminance channel only, reapplied by the
+    `lum_out/lum` ratio (the `apply_dr_compression` / `apply_hsl` pattern):
+    a per-pixel positive scalar that preserves hue and chroma ratios exactly.
+    Floored at 0, **no top clamp** (overrange survives → downstream RGC). Byte-exact
+    identity at `contrast == 0`. Pivot/gain are the faithful op's; no LR claim."""
+    if contrast == 0.0:
+        return prophoto
+    gain = 1.0 + contrast / 100.0
+    lum = prophoto @ _PROPHOTO_LUMINANCE
+    lum_out = np.maximum(0.18 + (lum - 0.18) * gain, 0.0)
+    ratio = lum_out / np.maximum(lum, _LOG_EPS)
+    out = np.maximum(prophoto * ratio[..., None], 0.0)  # floor 0; NO top clamp
+    return out.astype(prophoto.dtype)
+
+
 # ---------------------------------------------------------------------------
 # Top-level dispatchers
 # ---------------------------------------------------------------------------
@@ -739,58 +777,57 @@ def apply_stage_12_perceptual(
     prophoto: np.ndarray, ops: DevelopOps,
     intent: RenderIntent = RenderIntent.FAITHFUL,
 ) -> np.ndarray:
-    """Apply all stage-12 perceptual-domain ops in order:
-    ToneCurve → Saturation → Vibrance → HSL → ColorGrade →
-    [DR-compression → Texture/Clarity] → Contrast → Sharpness.
+    """Apply all stage-12 perceptual-domain ops; `intent` selects the applicators
+    (DECISIONS.md §7).
 
-    HSL then Color Grading are placed after the global Saturation/Vibrance and
-    before Contrast, matching Lightroom's panel order (HSL precedes Color
-    Grading; both are colour-treatment ops after Basic presence and before the
-    final tone shaping). Identity ops short-circuit to a byte-exact no-op, so a
-    render with no HSL / Color-Grade intent is bit-identical to the prior
-    pipeline (the ΔE ship gate is unaffected).
+    **FAITHFUL** (default — the sRGB TIFF / LRT round-trip, the Lightroom look):
+    ToneCurve → Saturation → Vibrance → HSL → ColorGrade → Contrast → Sharpness,
+    using the Adobe-hexcone `apply_hsl`, additive split-tone `apply_color_grade`,
+    and per-channel `apply_contrast_2012`.
 
-    **DR-compression** (`apply_dr_compression`, driven by the Highlights/Shadows/
-    Whites knobs) then **Texture/Clarity** (`apply_texture_clarity`, the boost-detail
-    mode of the same guided base/detail engine) run **only under PERCEPTUAL**, inside
-    that branch after Color Grading and before Contrast (DR first — set the tonal
-    range, then add local contrast on the result). On the faithful path those knobs
-    stay dropped + warn-only (`cli._warn_dropped_ops`); with all sliders at 0 each op
-    is a byte-exact no-op, so both intents stay bit-identical when none is authored.
+    **PERCEPTUAL** (the ACEScg master): ToneCurve → Sat → Vibrance →
+    **DR-compression → HSL → ColorGrade → Texture/Clarity → Contrast** → Sharpness.
+    Tone first — `apply_dr_compression` sets the dynamic range from the
+    Highlights/Shadows/Whites knobs (Lightroom likewise applies Basic tone before
+    Color Grading; DECISIONS §5 amendment) — then colour (OKLCh `_apply_hsl_perceptual`,
+    offset-only ASC-CDL `_apply_color_grade_perceptual`), then local detail
+    (`apply_texture_clarity`), then a **hue-preserving** luminance-domain
+    `_apply_contrast_perceptual` (the faithful per-channel Contrast2012 would rotate
+    hue on saturated colour). Every perceptual op is §0 hue-stable and
+    overrange-preserving (out-of-AP1 → the downstream `output._aces_rgc_compress_ap1`
+    pass). DR-compression + Texture/Clarity are PERCEPTUAL-only; on the faithful
+    path their knobs (H/S/W + Texture/Clarity) stay dropped + warn-only
+    (`cli._warn_dropped_ops`).
 
-    `intent` selects the HSL + Color-Grade applicator (DECISIONS.md §7):
-    **FAITHFUL** (default) uses the Adobe-hexcone ops — the sRGB TIFF / LRT
-    round-trip path; **PERCEPTUAL** uses the modern primitives for the ACEScg
-    master. Both diverge under PERCEPTUAL: **ColorGrade** is offset-only ASC-CDL in
-    ACEScct log (v0.9 step 2 — `_apply_color_grade_perceptual`); **HSL** is
-    hue-stable 8-band HSL in OKLCh (v0.9 step 3 — `_apply_hsl_perceptual`). Each
-    perceptual applicator short-circuits to a byte-exact no-op when its IR
-    `is_identity()`, so a render with no grade intent stays bit-identical across
-    intents (the ΔE ship gate, stages 1–9, is untouched). Only the HSL/ColorGrade
-    applicators + DR-compression branch on intent; ToneCurve/Sat/Vib/Contrast/
-    Sharpness are intent-independent."""
+    **Identity / ship gate.** Every op short-circuits to a byte-exact no-op when
+    its slider(s) are zero, so a render with no perceptual intent is bit-identical
+    across intents and the gym 0.026 / rose 0.545 ΔE ship gate (faithful stages
+    1-9 → sRGB) is untouched. ToneCurve/Sat/Vibrance/Sharpness are intent-
+    independent; HSL, ColorGrade, Contrast, DR-compression, Texture/Clarity branch
+    on intent."""
     out = apply_tone_curve_pv2012(prophoto, ops.tone_curve)
     out = apply_saturation(out, ops.saturation)
     out = apply_vibrance(out, ops.vibrance)
     if intent is RenderIntent.PERCEPTUAL:
+        # Tone → colour → local detail → contrast, every step hue-preserving (§0).
+        # DR-compression (Highlights/Shadows/Whites, DECISIONS §5 amendment) runs
+        # FIRST: set the dynamic range, then grade/detail the tamed result —
+        # Lightroom likewise applies Basic tone before Color Grading. PERCEPTUAL-
+        # only; the faithful path drops H/S/W + Texture/Clarity (warn-only,
+        # cli._warn_dropped_ops). Each op is a byte-exact no-op at zero sliders,
+        # so the ΔE ship gate (faithful stages 1-9) is untouched.
+        out = apply_dr_compression(out, ops.highlights, ops.shadows, ops.whites)
         out = _apply_hsl_perceptual(out, ops.hsl)
         out = _apply_color_grade_perceptual(out, ops.color_grade)
-        # Scene-referred local DR-compression driven by the Highlights/Shadows/
-        # Whites XMP knobs (DECISIONS.md §5 amendment). PERCEPTUAL-only — on the
-        # faithful path these stay dropped + warn-only (cli._warn_dropped_ops).
-        # Byte-exact identity when all three are 0, so the ΔE ship gate is
-        # untouched.
-        out = apply_dr_compression(out, ops.highlights, ops.shadows, ops.whites)
-        # Local-contrast boost driven by the Texture/Clarity XMP knobs (DECISIONS.md
-        # §7 step 4 — the boost-detail mode of the same guided base/detail engine).
-        # Runs AFTER DR-compression: set the tonal range first, then add local
-        # contrast on the result. PERCEPTUAL-only; dropped + warn-only on faithful.
-        # Byte-exact identity when both are 0, so the ΔE ship gate is untouched.
         out = apply_texture_clarity(out, ops.texture, ops.clarity)
+        # Hue-preserving (luminance-domain, ratio-reapply) contrast — keeps the
+        # perceptual path's §0 hue-stability; the faithful per-channel
+        # Contrast2012 (below) would rotate hue/saturation on saturated colour.
+        out = _apply_contrast_perceptual(out, ops.contrast)
     else:
         out = apply_hsl(out, ops.hsl)
         out = apply_color_grade(out, ops.color_grade)
-    out = apply_contrast_2012(out, ops.contrast)
+        out = apply_contrast_2012(out, ops.contrast)
     out = apply_sharpness(out, ops.sharpness)
     return out
 
@@ -1070,7 +1107,7 @@ def _cg_zone_proxy_log(luminance: np.ndarray) -> np.ndarray:
     so the Highlight wheel reaches diffuse highlights (Resolve Log-wheel placement;
     see `_CG_ZONE_PROXY_*`). Overrange clips to 1.0 → fully a highlight."""
     half_span = math.log2(_CG_ZONE_PROXY_WHITE / _CG_ZONE_PROXY_ANCHOR)
-    log_l = np.log2(np.maximum(luminance, 0.0) + _DR_EPS)
+    log_l = np.log2(np.maximum(luminance, 0.0) + _LOG_EPS)
     proxy = 0.5 + (log_l - math.log2(_CG_ZONE_PROXY_ANCHOR)) / (2.0 * half_span)
     return np.clip(proxy, 0.0, 1.0)
 
@@ -1104,7 +1141,8 @@ def _scale_hsv_saturation(prophoto: np.ndarray, s_map) -> np.ndarray:
 # validates the *defined* math, not Lightroom appearance. They are NOT open
 # theory and NOT "auto from image".
 
-_DR_EPS = 1e-6           # log(0) floor; survives scene-linear true zeros. Why
+_LOG_EPS = 1e-6          # shared log(0) floor (DR-compression, CDL zone proxy,
+                         # Texture/Clarity); survives scene-linear true zeros. Why
                          # slope=1 is not bit-exact identity (→ short-circuit).
 _DR_ANCHOR = 0.18        # scene-linear mid-grey fixed point — the SAME pivot
                          # apply_contrast_2012 uses (repo-grounded, not assumed).
@@ -1182,9 +1220,9 @@ def _dr_compress_luminance(
     floored at 0, where `u = log2(L+eps) − log2(0.18)`. This is the limit the
     local op reduces to when base == luminance (flat region / r=0)."""
     lum = np.asarray(lum, dtype=np.float64)
-    u = np.log2(np.maximum(lum, 0.0) + _DR_EPS) - _DR_LOG_ANCHOR
+    u = np.log2(np.maximum(lum, 0.0) + _LOG_EPS) - _DR_LOG_ANCHOR
     g = _dr_remap_log(u, c_lo, c_hi, c_top)
-    return np.maximum(_DR_ANCHOR * np.exp2(g) - _DR_EPS, 0.0)
+    return np.maximum(_DR_ANCHOR * np.exp2(g) - _LOG_EPS, 0.0)
 
 
 def _box_sum(img: np.ndarray, r: int) -> np.ndarray:
