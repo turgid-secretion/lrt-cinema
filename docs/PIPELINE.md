@@ -379,11 +379,30 @@ kernel would not beat their already-lean vectorised matmuls; fusing the linear
 matrices (2+3+4 → one matmul, FM path) and JIT-ing the ramp/encode are recorded
 follow-ups the abstraction already supports.
 
-**Measured (D750 Camera Standard, full-res 24 MP, M1 Max 10-core):** full-res
-single frame **16.9 s → 2.5 s (6.6×)**; the cube+tone stages alone **~48×**;
-10-frame pool throughput **6.9 → 0.97 s/frame (7.1×)** at 10 workers × 1 thread
-(frame-level parallelism beats intra-frame threads for throughput). Repeatable
-via `tools/perf/bench_render.py`.
+**Scope (and the load-bearing caveat for honest numbers):** this covers
+**Stages 1–9 (the DCP render) + the encode**. The **Stage-12 FAITHFUL grade ops
+— `apply_saturation` / `apply_vibrance` / `apply_hsl` / `apply_color_grade` — are
+NOT yet accelerated** (each ~1.5–4.6 s at 24 MP, all per-pixel numpy in the same
+hexcone-HSV / luminance-mask domain). They cost the same on both backends, so a
+*heavily-graded* full-res frame's speed-up shrinks to **~1.8×** (HSL + Color-Grade
+set: ~26 s → ~14.5 s) even though the DCP-render part is ~6.6×. **This is the #1
+follow-up** for graded product throughput: those four faithful ops are a direct
+re-use of this backend (numpy reference + numba kernel reusing the `accel`
+HSV-scalar helpers + a numpy-twin equivalence test), gated by the same Axis-1
+oracle. The PERCEPTUAL Stage-12 ops (DR-compression / Texture-Clarity / OKLCh
+HSL / ASC-CDL — the EXR path) are likewise unaccelerated and a further follow-up.
+The **proxy path is unaffected by this gap**: it downsamples before Stage 12, so
+preview shrinks the grade cost too (a heavily-graded frame is still ~18–34× at
+scale 4–8).
+
+**Measured (D750 Camera Standard, full-res 24 MP, M1 Max 10-core):** DCP-render,
+no grade — full-res single frame **16.9 s → 2.5 s (6.6×)**, the cube+tone stages
+alone **~48×**, 10-frame pool throughput **6.9 → 0.97 s/frame (7.1×)** at 10
+workers × 1 thread (frame-level parallelism beats intra-frame threads for
+throughput); heavily-graded full-res **~1.8×** (Stage-12 faithful unaccelerated,
+above); heavily-graded **preview** scale 4/8 **~18×/34×**. Repeatable via
+`tools/perf/bench_render.py` (identity grade) and `tools/production_test/run.py`
+(full grade).
 
 **Load-bearing invariants (do NOT regress):**
 
