@@ -397,19 +397,37 @@ def test_render_intent_routes_to_perceptual_applicators(monkeypatch):
     assert calls == ["hsl_perceptual", "cg_perceptual"]  # perceptual: routed, in order
 
 
-def test_perceptual_aliases_faithful_until_primitives_land():
-    """Scaffold-state contract: the perceptual applicators alias the faithful
-    ones today (steps 2-3 not yet implemented), so the two intents are
-    byte-identical even with HSL + Color-Grade engaged. Step 2 (CDL) / step 3
-    (OKLCh) WILL intentionally flip this — update this test when they land."""
+def test_perceptual_hsl_still_aliases_faithful_until_oklch_lands():
+    """Step-3 not yet landed: `_apply_hsl_perceptual` still aliases the faithful
+    Adobe-hexcone `apply_hsl`, so with ONLY an HSL band engaged the two intents
+    stay byte-identical. (Step 3 / OKLCh will flip this — update when it lands.)"""
     x = np.random.rand(8, 8, 3).astype(np.float32)
-    ops = DevelopOps(
-        hsl=HslBands(saturation=(50.0, 0, 0, 0, 0, 0, 0, 0)),
-        color_grade=ColorGrade(global_hue=120.0, global_sat=50.0),
-    )
+    ops = DevelopOps(hsl=HslBands(saturation=(50.0, 0, 0, 0, 0, 0, 0, 0)))
     np.testing.assert_array_equal(
         apply_develop_ops(x, ops, RenderIntent.FAITHFUL),
         apply_develop_ops(x, ops, RenderIntent.PERCEPTUAL),
+    )
+
+
+def test_perceptual_color_grade_diverges_from_faithful():
+    """Step 2 (CDL) LANDED: with a Color-Grade wheel engaged the PERCEPTUAL
+    applicator (offset-only ASC-CDL in ACEScct log) is intentionally DIFFERENT
+    from the faithful split-tone (additive-in-linear-ProPhoto) — the dual-mode
+    seam now produces two distinct grades. A *zero* Color-Grade must still match
+    byte-exact (the identity short-circuit) so the ship gate stays green."""
+    x = np.random.rand(8, 8, 3).astype(np.float32)
+
+    # Engaged wheel → the two intents diverge measurably.
+    graded = DevelopOps(color_grade=ColorGrade(global_hue=120.0, global_sat=50.0))
+    faithful = apply_develop_ops(x, graded, RenderIntent.FAITHFUL)
+    perceptual = apply_develop_ops(x, graded, RenderIntent.PERCEPTUAL)
+    assert np.max(np.abs(faithful - perceptual)) > 1e-3
+
+    # Zero Color-Grade → byte-identical under both intents (no-grade ship gate).
+    zero = DevelopOps(color_grade=ColorGrade())
+    np.testing.assert_array_equal(
+        apply_develop_ops(x, zero, RenderIntent.FAITHFUL),
+        apply_develop_ops(x, zero, RenderIntent.PERCEPTUAL),
     )
 
 
@@ -625,13 +643,18 @@ def test_dr_compression_applies_under_perceptual_only():
 
 def test_dr_compression_perceptual_identity_still_byte_exact():
     """With H/S/W all 0, PERCEPTUAL stays byte-identical to FAITHFUL even though the
-    DR op is wired into the perceptual branch (short-circuit holds the ship gate)."""
+    DR op is wired into the perceptual branch (short-circuit holds the ship gate).
+
+    Decorated only with intent-INDEPENDENT / still-aliased ops (global Saturation,
+    HSL band): a Color-Grade wheel can no longer be used here because step 2 (CDL)
+    makes `_apply_color_grade_perceptual` diverge from faithful by design — that
+    divergence is covered by `test_perceptual_color_grade_diverges_from_faithful`.
+    This test isolates the DR op's H/S/W=0 no-op."""
     x = np.random.rand(8, 8, 3).astype(np.float32)
     ops = DevelopOps(
         saturation=20.0,
         hsl=HslBands(saturation=(30.0, 0, 0, 0, 0, 0, 0, 0)),
-        color_grade=ColorGrade(global_hue=120.0, global_sat=40.0),
-    )  # other ops set, but highlights/shadows/whites are 0
+    )  # other ops set, but highlights/shadows/whites are 0 (and no Color-Grade wheel)
     np.testing.assert_array_equal(
         apply_develop_ops(x, ops, RenderIntent.FAITHFUL),
         apply_develop_ops(x, ops, RenderIntent.PERCEPTUAL),
