@@ -356,8 +356,8 @@ the aces-dev reference DCTL — `colour` 0.4.x has **no** general gamut compress
 with the **exact published reference constants**: per-channel threshold
 `[0.815, 0.803, 0.880]`, limit `[1.147, 1.264, 1.312]`, power `1.2` (these are
 Academy defaults, **not** tuning). It rolls out-of-AP1 excursions (the **negative
-AP1 channels** that the perceptual ops — DR-compression + ASC-CDL ColorGrade
-shipped; OKLCh HSL coming — produce) smoothly back toward the achromatic axis
+AP1 channels** that the perceptual ops — DR-compression + ASC-CDL ColorGrade +
+OKLCh HSL, all shipped — produce) smoothly back toward the achromatic axis
 instead of hard-clipping at the
 encode. **Always-on for ACEScg** (general gamut safety, not intent-gated) but
 **gated on actual out-of-AP1 content** → byte-exact no-op (returns the literal
@@ -411,8 +411,45 @@ uniform-offset + shadow-lift + highlight-wheel-dominance + no-top-clamp +
 identity-byte-exact. Authority:
 [`research/v09-dualmode-impl-plan.md`](research/v09-dualmode-impl-plan.md) Step 2;
 [`PIPELINE.md`](PIPELINE.md) §Stage 12. **Out of scope (still follow-ups):** step 3
-**OKLCh HSL** (`_apply_hsl_perceptual` still aliases faithful), local-Laplacian,
+**OKLCh HSL** (shipped — see the amendment below), local-Laplacian,
 Texture/Clarity.
+
+**Amendment (2026-05-31) — step 3 (HSL → OKLCh) SHIPPED.**
+`_apply_hsl_perceptual` is implemented as hue-stable 8-band HSL in **OKLCh proper**
+(the perceptually-uniform, gamut-agnostic space — **not** Okhsl/Okhsv, which are
+sRGB-gamut-bound by construction and wrong for wide-gamut ACEScg), behind the
+existing PERCEPTUAL branch; the faithful Adobe-hexcone `apply_hsl` (HSV) is
+unchanged. Chain (contract 1, ProPhoto-in/out): ProPhoto(D50) lin → XYZ(D50) →
+XYZ(D65) **[Bradford, pinned `_M_BRADFORD_*` module constants cross-checked vs
+colour-science — Ottosson's Oklab is D65-defined, so the D50→D65 adaptation is
+mandatory]** → OKLab → OKLCh → 8-band partition-of-unity adjust → OKLab →
+XYZ(D65) → XYZ(D50) [Bradford] → ProPhoto, **floor L/C/ProPhoto at 0, no top
+clamp** (out-of-AP1 → the shared RGC pass above). Band centres at OKLCh hue
+**degrees** `[0,30,60,120,180,240,270,300]` (`_oklch_band_weights`, the degrees
+analogue of the faithful `_hsl_band_weights`); per band
+`h_out=(h+w@(hue/100·30°)) mod 360`, `c_out=max(c·w@(1+sat/100),0)`,
+`l_out=max(l·(1+c_gate·(w@(1+lum/100)−1)),0)`, `c_gate=clip(c/0.04,0,1)` protecting
+neutrals (the faithful `s_gate` analogue, on OKLCh chroma). **Three verifier
+BLOCKER corrections folded in (not relayed):** (1) **no top clamp** — the
+scene-referred ACEScg master must carry values >1 (faithful floors at 0 but never
+clamps the top); (2) **gamut is the downstream gated `output._aces_rgc_compress_ap1`
+pass, NOT inline** — the raw spec's inline "ACES RGC" was the wrong algorithm
+(triggered on overrange brightness, never on the negative-AP1 channels real RGC
+compresses); (3) **byte-exact identity via the `hsl.is_identity()` short-circuit**
+(plus the gated downstream RGC) keeps a zero-HSL render byte-exact even on overrange
+data, so both intents stay bit-identical on a no-grade render (ship gate untouched).
+Production uses `colour.XYZ_to_Oklab`/`Oklab_to_Oklch`; the Axis-1 oracle hand-rolls
+Ottosson's M1/M2 + signed cube-root + a hand-rolled Bradford (**not** the production
+`colour` calls — contract 4), held to ~4e-3 on saturated/neutral/overrange ProPhoto
+patches + inverted-Bradford (>5e-2) / wrong-band-layout / doubled-hue sensitivity
+legs + identity-byte-exact + no-top-clamp + **hue-constancy-under-Luminance-sweep**
+(output hue span <0.01° — the measurable Abney/Bezold–Brücke win the hexcone cannot
+give) + neutral-gate + a Bradford-constant cross-check. Constants
+(`_OKLCH_BAND_CENTERS_DEG`, `_OKLCH_HUE_MAX_DEG=30`, `_OKLCH_LUM_CHROMA_GATE=0.04`)
+are documented **tuning, not an LR-fidelity claim**. Authority:
+[`research/v09-dualmode-impl-plan.md`](research/v09-dualmode-impl-plan.md) Step 3;
+[`PIPELINE.md`](PIPELINE.md) §Stage 12. **Out of scope (still follow-ups):**
+local-Laplacian, Texture/Clarity (the remaining v0.9 step 4 op).
 
 ---
 
