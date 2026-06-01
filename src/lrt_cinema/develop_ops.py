@@ -328,7 +328,11 @@ def _apply_hsl_perceptual(prophoto: np.ndarray, hsl: HslBands) -> np.ndarray:
     oklch = colour.Oklab_to_Oklch(colour.XYZ_to_Oklab(xyz_d65))
     el = oklch[:, 0]
     c = oklch[:, 1]
-    h = oklch[:, 2]  # hue in degrees, [0, 360)
+    # Wrap hue into [0, 360) before band-weighting. colour returns [0, 360), but a
+    # boundary 360.0 or a tiny negative would fall into NO band segment → all-zero
+    # weights → c_out = c·0 (a spurious chroma collapse on that pixel). np.mod
+    # closes that edge case at zero cost and matches the oracle's `% 360`.
+    h = np.mod(oklch[:, 2], 360.0)  # hue in degrees, [0, 360)
 
     weights = _oklch_band_weights(h)  # (N, 8) partition of unity
 
