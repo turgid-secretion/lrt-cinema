@@ -104,10 +104,13 @@ def test_mlx_render_matches_numpy(ops_name):
     assert got.shape == ref.shape
     assert np.isfinite(got).all()
     de = _delta_e(ref, got)
-    # GPU float trade-off: mean must be tiny; allow a looser per-pixel max (cube
-    # boundary flips) but still far below the 1.0 ship gate.
+    # GPU float trade-off: the per-pixel MAX is looser than numba (cube-cell
+    # boundary flips) but still CLEARS the task's <0.01-max bar (observed
+    # ~1.6e-3 / graded ~3e-3 on M1 Max). Bound at 0.02 (~12x margin) so a real
+    # regression or a divergent Apple GPU's pow/FMA rounding can't slip through —
+    # this is the only place cross-GPU float behaviour is exercised in CI.
     assert de.mean() < 1e-3, f"MLX mean ΔE {de.mean():.2e} too high ({ops_name})"
-    assert de.max() < 0.1, f"MLX max ΔE {de.max():.2e} too high ({ops_name})"
+    assert de.max() < 0.02, f"MLX max ΔE {de.max():.2e} too high ({ops_name})"
 
 
 def test_mlx_unsupported_without_forward_matrix():

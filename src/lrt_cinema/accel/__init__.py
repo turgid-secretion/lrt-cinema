@@ -183,15 +183,21 @@ def apply_rgb_tone(rgb: np.ndarray, curve: Any, *,
 # --- Whole-frame MLX (Metal GPU) render path -------------------------------
 
 
-def _get_mlx_renderer(profile):
-    """Cache an `MlxFaithfulRenderer` per profile object (per process). Uploads
-    the frame-invariant GPU constants once, so a sequence reuses them. Raises
-    `MlxUnsupported` for a profile outside the fast path."""
+def _get_mlx_renderer(profile, cache_key=None):
+    """Cache an `MlxFaithfulRenderer` per process. Uploads the frame-invariant
+    GPU constants (cube, tone LUT, matrices) once, so a sequence reuses them.
+
+    `cache_key` must be STABLE across frames in a process (e.g. the DCP path) —
+    a pool worker re-parses the profile every frame, so keying on `id(profile)`
+    would rebuild the renderer each time (the cache would never hit). Falls back
+    to `id(profile)` when no key is given. Raises `MlxUnsupported` for a profile
+    outside the fast path."""
     global _mlx_renderer, _mlx_renderer_key
-    if _mlx_renderer_key != id(profile):
+    key = cache_key if cache_key is not None else id(profile)
+    if _mlx_renderer_key != key or _mlx_renderer is None:
         from lrt_cinema.accel._mlx_kernels import MlxFaithfulRenderer
         _mlx_renderer = MlxFaithfulRenderer(profile)
-        _mlx_renderer_key = id(profile)
+        _mlx_renderer_key = key
     return _mlx_renderer
 
 
@@ -210,7 +216,12 @@ def mlx_render_frame_to_srgb(raw_path, profile, develop_ops=None,
     from lrt_cinema import pipeline as P
     from lrt_cinema.ir import DevelopOps
     ops = develop_ops if develop_ops is not None else DevelopOps()
-    renderer = _get_mlx_renderer(profile)  # may raise MlxUnsupported
+    # Key the renderer cache on the DCP path (stable across a worker's frames,
+    # unlike the per-call-re-parsed profile object) so a sequence reuses the
+    # uploaded constants. None → falls back to id(profile) (single-frame use).
+    renderer = _get_mlx_renderer(
+        profile, cache_key=(str(dcp_path) if dcp_path is not None else None),
+    )  # may raise MlxUnsupported
     cam, asn = P._decode_raw(raw_path, half_size=(preview_scale >= 2))
     if preview_scale >= 2:
         cam = P._block_downsample(cam, preview_scale // 2)
