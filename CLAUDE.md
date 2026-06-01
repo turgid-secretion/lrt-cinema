@@ -11,6 +11,24 @@ the canonical LRT round-trip: lrt-cinema → TIFF → back into LRT → video + 
 Blur. Scene-linear ACEScg EXR is the opt-in DaVinci Resolve / ACES path. See
 [docs/LRT_ROUNDTRIP.md](docs/LRT_ROUNDTRIP.md).
 
+## Render intent — dual-mode (`--render-intent {faithful, perceptual}`, v0.9)
+Stage-12 grading ops share IR (`HslBands`, `ColorGrade`, Texture/Clarity, DR
+fields); only the **applicator** branches on intent (DECISIONS.md §7):
+- **faithful** — Adobe-matching math (the Lightroom look). DEFAULT for the sRGB
+  TIFF (LRT round-trip). HSL / Color-Grade in linear ProPhoto; PV5 basic tone
+  (Highlights/Shadows/Whites) + Texture/Clarity stay **dropped + warned** (no
+  public Adobe math to match).
+- **perceptual** — modern primitives. DEFAULT for the ACEScg EXR masters
+  (Resolve/ACES, no Adobe-fidelity obligation): HSL in **OKLCh**, Color-Grade as
+  **offset-only ASC-CDL in ACEScct**, **scene-referred DR-compression**
+  approximating Highlights/Shadows/Whites, edge-aware **Texture/Clarity**.
+Per-target default; `--render-intent` overrides. **Invariants:** every perceptual
+applicator is ProPhoto(D50)-in/out (gamut conversion stays at Stage 13); gamut
+compression is ONE gated **ACES RGC** pass in `output.py` before the AP1 encode
+(no-op in-gamut); both modes are **byte-exact at zero-slider identity** (the ship
+gate is unchanged). Ops: `develop_ops.apply_{hsl,color_grade,dr_compression,
+texture_clarity}` (+ `_*_perceptual`). Fidelity tracked by `tools/grading_sweep/`.
+
 ## Render engine — READ [docs/PIPELINE.md] BEFORE TOUCHING IT
 [docs/PIPELINE.md] is the canonical as-built engine reference: every stage
 (1–13), the file/function that owns it, colour space in→out, the load-bearing
@@ -86,11 +104,15 @@ ProPhoto-passthrough ForwardMatrix (LookTable does the colour) — see
 - `ruff check .` — must pass.
 
 ## Git
-- Active: branch `feat/v0.8-lrt-tiff-default`, PR #24. Keep `main` green; PR per phase.
-- Recovery tag before the v0.8 sweep: `pre-reduction-v0.8`.
+- `main` is the consolidated head (v0.8 sweep + v0.9 dual-mode grading, all merged).
+  Keep `main` green; one PR per feature/op to `main`; CI runs on PRs to `main`.
+- Recovery tags: `pre-reduction-v0.8` (pre-sweep) · `phase4-research-archive` (pre doc-prune).
 - Conventional commits; end with `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
 
 ## Settled — do NOT re-explore
 Standalone GUI app, vkdt-fork, β-XML Resolve sidecar, CDNG-as-default — all ruled out
-with reasons in [docs/DECISIONS.md](docs/DECISIONS.md). PV5 basic tone (Highlights/Shadows/Whites) + Dehaze are
-closed-source → permanently dropped, surfaced as render-time warnings (never hidden).
+with reasons in [docs/DECISIONS.md](docs/DECISIONS.md). Closed-source PV5 basic tone
+(Highlights/Shadows/Whites) + Dehaze have no faithful Adobe math: **faithful** mode
+drops them + warns (never hidden); **perceptual** mode ships a defensible
+scene-referred DR-compression approximation for H/S/W (v0.9 §7) — Dehaze stays
+dropped in both.
