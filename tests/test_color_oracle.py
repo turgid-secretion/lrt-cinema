@@ -41,6 +41,7 @@ from lrt_cinema.develop_ops import (  # noqa: E402
     _DR_BLEND_HALFWIDTH_BREAK,
     _DR_BREAK_STOPS,
     _DR_EPS,
+    _DR_LOG_ANCHOR,
     _DR_SLOPE_GAIN_K,
     _HSL_BAND_CENTERS_HEX,
     _HSL_HUE_MAX_HEX,
@@ -49,6 +50,12 @@ from lrt_cinema.develop_ops import (  # noqa: E402
     _OKLCH_HUE_MAX_DEG,
     _OKLCH_LUM_CHROMA_GATE,
     _PROPHOTO_LUMINANCE,
+    _TC_CLARITY_GAIN,
+    _TC_GUIDED_EPS,
+    _TC_MIDTONE_SIGMA,
+    _TC_RADIUS_COARSE,
+    _TC_RADIUS_FINE,
+    _TC_TEXTURE_GAIN,
     _apply_color_grade_perceptual,
     _apply_hsl_perceptual,
     _color_grade_zone_weights,
@@ -56,6 +63,7 @@ from lrt_cinema.develop_ops import (  # noqa: E402
     apply_color_grade,
     apply_dr_compression,
     apply_hsl,
+    apply_texture_clarity,
 )
 from lrt_cinema.ir import ColorGrade, HslBands  # noqa: E402
 from lrt_cinema.lut3d_baker import (  # noqa: E402
@@ -1386,6 +1394,169 @@ def test_dr_compression_invertible_three_slope_numerically():
     fwd_s = _dr_compress_luminance(sample, c_lo, c_hi, c_top)
     recovered = np.interp(fwd_s, fwd, lum)  # invert through the monotone curve
     np.testing.assert_allclose(recovered, sample, rtol=2e-3)
+
+
+# ---------------------------------------------------------------------------
+# Texture / Clarity (develop_ops.apply_texture_clarity) — PERCEPTUAL local-contrast
+# boost (the boost-detail mode of the shared guided base/detail engine).
+#
+# Axis-1 ground truth is an INDEPENDENT reimplementation of the defined math: the
+# two-band guided base/detail split + the per-band boost (fine = uniform Texture,
+# mid = midtone-weighted Clarity) + the out/in luminance-RATIO reapply. Crucially
+# the guided self-filter is reimplemented with scipy.ndimage.uniform_filter (a
+# moving-average), NOT the production _box_sum/_guided_base_log (cumsum) — a wholly
+# different code path, so agreement is a real cross-check, NOT a tautology (contract
+# 4). uniform_filter(mode="nearest") only equals the production shrinking-window box
+# in the DEEP INTERIOR: the guided filter box-averages TWICE (mean_i/mean_ii then
+# mean_a/mean_b), so output at p depends on log_l across [p−2r, p+2r]; the two agree
+# only where that whole support is interior → compare at >= 2·r_coarse from every
+# border (mirrors test_box_sum_matches_scipy_uniform_filter_interior, interior-only).
+#
+# The op is run on a 2D IMAGE WITH REAL STRUCTURE (a detail boost is identically 0 on
+# the (N,1,3) r=0 layout the DR oracle uses — it would exercise none of the boost
+# math), spanning saturated + overrange pixels (a grey wedge is blind to the
+# per-channel-vs-ratio error). Constants (radii, eps, gains, midtone sigma, anchor)
+# are a documented TUNING choice; this validates the *defined* math, NOT Lightroom
+# fidelity. `per_channel` / `swap_radii` / `drop_midtone` are injectable so the
+# sensitivity legs prove the check discriminates the load-bearing bugs.
+# ---------------------------------------------------------------------------
+
+
+def _oracle_guided_uniform(log_l, r, eps_gf):
+    """Independent guided self-filter via scipy uniform_filter (NOT the production
+    _box_sum cumsum). Matches _guided_base_log only in the >= 2r interior."""
+    if r <= 0:
+        return log_l.copy()
+    from scipy.ndimage import uniform_filter
+    sz = 2 * r + 1
+    mean_i = uniform_filter(log_l, size=sz, mode="nearest")
+    mean_ii = uniform_filter(log_l * log_l, size=sz, mode="nearest")
+    var_i = np.maximum(mean_ii - mean_i * mean_i, 0.0)
+    a = var_i / (var_i + eps_gf)
+    b = mean_i - a * mean_i
+    mean_a = uniform_filter(a, size=sz, mode="nearest")
+    mean_b = uniform_filter(b, size=sz, mode="nearest")
+    return mean_a * log_l + mean_b
+
+
+def _oracle_texture_clarity(
+    rgb, texture, clarity, per_channel=False, swap_radii=False, drop_midtone=False,
+):
+    eps = _DR_EPS
+    yw = np.asarray(_PROPHOTO_LUMINANCE)
+    r_fine, r_coarse = _TC_RADIUS_FINE, _TC_RADIUS_COARSE
+    if swap_radii:  # the band-scale bug — Texture on the coarse band, Clarity on fine
+        r_fine, r_coarse = r_coarse, r_fine
+    lum = rgb @ yw
+    log_l = np.log2(np.maximum(lum, 0.0) + eps)
+    base_fine = _oracle_guided_uniform(log_l, r_fine, _TC_GUIDED_EPS)
+    base_coarse = _oracle_guided_uniform(log_l, r_coarse, _TC_GUIDED_EPS)
+    texture_band = log_l - base_fine
+    clarity_band = base_fine - base_coarse
+    if drop_midtone:  # the midtone-weight bug — Clarity applied globally (mw≡1)
+        midtone_w = np.ones_like(log_l)
+    else:
+        midtone_w = np.exp(-0.5 * ((log_l - _DR_LOG_ANCHOR) / _TC_MIDTONE_SIGMA) ** 2)
+    # Band gains floored at 0 (no detail phase-inversion below slider ≈ −67) — the
+    # same clamp the production op applies; reimplemented here independently.
+    texture_gain = max(0.0, 1.0 + _TC_TEXTURE_GAIN * (texture / 100.0))
+    clarity_gain = np.maximum(0.0, 1.0 + _TC_CLARITY_GAIN * (clarity / 100.0) * midtone_w)
+    log_l_out = base_coarse + texture_gain * texture_band + clarity_gain * clarity_band
+    lum_out = np.maximum(np.exp2(log_l_out) - eps, 0.0)
+    if per_channel:  # the §0 hue-rotation bug — boost re-derived per channel, no ratio
+        out = np.empty_like(rgb, dtype=np.float64)
+        for ch in range(3):
+            log_c = np.log2(np.maximum(rgb[..., ch], 0.0) + eps)
+            bf = _oracle_guided_uniform(log_c, r_fine, _TC_GUIDED_EPS)
+            bc = _oracle_guided_uniform(log_c, r_coarse, _TC_GUIDED_EPS)
+            lo = bc + texture_gain * (log_c - bf) + clarity_gain * (bf - bc)
+            out[..., ch] = np.maximum(np.exp2(lo) - eps, 0.0)
+        return out
+    ratio = lum_out / np.maximum(lum, eps)
+    return np.maximum(rgb * ratio[..., None], 0.0)
+
+
+def _tc_oracle_image():
+    """A 128×128 ProPhoto image with a fine + coarse detail layer AND saturated /
+    overrange hue variation. 128 wide so the >= 2·_TC_RADIUS_COARSE (=32) interior
+    [32:-32] is non-trivial (the only region the independent uniform_filter guided
+    reimpl matches the production shrinking-window box)."""
+    rng = np.random.default_rng(20260531)
+    yy, xx = np.mgrid[0:128, 0:128]
+    fine = 0.12 * np.sin(xx * 2.0) * np.sin(yy * 2.0)
+    coarse = 0.45 * np.sin(xx * 0.3) * np.sin(yy * 0.3)
+    base_stops = -2.0 + 4.0 * (xx / 127.0)  # a tonal ramp spanning shadow→overrange
+    lum = 0.18 * 2.0 ** (base_stops + fine + coarse)
+    # Saturated, spatially-varying hue (NOT a grey wedge) + some overrange.
+    chroma = 0.6 + 0.8 * rng.random((128, 128, 3))
+    return (lum[..., None] * chroma).astype(np.float64)
+
+
+def _tc_interior(arr):
+    r = 2 * _TC_RADIUS_COARSE  # guided box-filters twice → support is +/- 2r
+    return arr[r:-r, r:-r]
+
+
+def test_texture_clarity_matches_independent_oracle():
+    """apply_texture_clarity must equal the independent uniform_filter-based oracle
+    to ~0 in the deep interior, over a structured + saturated + overrange image, with
+    both sliders engaged at a non-trivial asymmetric setting."""
+    img = _tc_oracle_image()
+    tx, cl = 60.0, -40.0
+    got = apply_texture_clarity(img, tx, cl)
+    want = _oracle_texture_clarity(img, tx, cl)
+    np.testing.assert_allclose(_tc_interior(got), _tc_interior(want), atol=1e-9)
+
+
+def test_texture_clarity_oracle_detects_per_channel_bug():
+    """Sensitivity leg 1 — the §0 hue-rotation bug. Re-deriving the boost per channel
+    (instead of the out/in luminance ratio) shifts hue on saturated pixels; the real
+    op matches the ratio oracle and NOT the per-channel one."""
+    img = _tc_oracle_image()
+    tx, cl = 80.0, 60.0
+    correct = _oracle_texture_clarity(img, tx, cl)
+    per_ch = _oracle_texture_clarity(img, tx, cl, per_channel=True)
+    assert np.max(np.abs(_tc_interior(correct) - _tc_interior(per_ch))) > 1e-2
+    np.testing.assert_allclose(
+        _tc_interior(apply_texture_clarity(img, tx, cl)), _tc_interior(correct), atol=1e-9,
+    )
+
+
+def test_texture_clarity_oracle_detects_swapped_radii():
+    """Sensitivity leg 2 — the band-scale bug. Texture must act on the FINE band and
+    Clarity on the larger mid band; swapping the two radii changes which scale each
+    slider touches. The real op matches the correctly-ordered radii."""
+    img = _tc_oracle_image()
+    tx, cl = 80.0, 70.0
+    correct = _oracle_texture_clarity(img, tx, cl)
+    swapped = _oracle_texture_clarity(img, tx, cl, swap_radii=True)
+    assert np.max(np.abs(_tc_interior(correct) - _tc_interior(swapped))) > 1e-2
+    np.testing.assert_allclose(
+        _tc_interior(apply_texture_clarity(img, tx, cl)), _tc_interior(correct), atol=1e-9,
+    )
+
+
+def test_texture_clarity_oracle_detects_dropped_midtone_weight():
+    """Sensitivity leg 3 — Clarity is midtone-weighted (a Gaussian bump on
+    log-luminance). Dropping the weight (applying Clarity globally) over-boosts
+    shadows/highlights; a Clarity-only edit on a wide tonal range diverges. The real
+    op matches the midtone-weighted oracle."""
+    img = _tc_oracle_image()
+    tx, cl = 0.0, 100.0  # Clarity-only, so the midtone weight is the whole difference
+    correct = _oracle_texture_clarity(img, tx, cl)
+    flat_mw = _oracle_texture_clarity(img, tx, cl, drop_midtone=True)
+    assert np.max(np.abs(_tc_interior(correct) - _tc_interior(flat_mw))) > 1e-3
+    np.testing.assert_allclose(
+        _tc_interior(apply_texture_clarity(img, tx, cl)), _tc_interior(correct), atol=1e-9,
+    )
+
+
+def test_texture_clarity_identity_is_byte_exact_no_op():
+    """Both sliders 0 → BYTE-exact passthrough (short-circuit before any filter
+    math). slope-1 bands do NOT telescope to L bit-for-bit through log2/exp2, so this
+    guards the ΔE ship gate on the perceptual path."""
+    img = np.random.default_rng(44).random((16, 16, 3)).astype(np.float32)
+    np.testing.assert_array_equal(apply_texture_clarity(img, 0.0, 0.0), img)
 
 
 # ---------------------------------------------------------------------------

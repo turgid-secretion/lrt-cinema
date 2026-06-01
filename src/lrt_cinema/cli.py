@@ -288,21 +288,35 @@ def _load_dcp_dispatch(path: Path) -> DCPProfile:
 # ---------------------------------------------------------------------------
 
 
-_DROPPED_AT_EMIT_FIELDS = ("highlights", "shadows", "whites")
+# Fields dropped on the FAITHFUL path but honoured on PERCEPTUAL (DECISIONS §5/§7).
+# Two families, each with its own perceptual op + warn wording — the DR-compression
+# story (closed PV5 tone math) does NOT describe Texture/Clarity (edge-aware local
+# contrast), so they must not share the same message.
+_DROPPED_AT_EMIT_FIELDS = ("highlights", "shadows", "whites")  # → apply_dr_compression
+_DROPPED_TEXTURE_CLARITY_FIELDS = ("texture", "clarity")       # → apply_texture_clarity
+_ALL_DROPPED_ON_FAITHFUL = _DROPPED_AT_EMIT_FIELDS + _DROPPED_TEXTURE_CLARITY_FIELDS
+
+# crs:* tag name per IR field (the suffix differs: Texture is PV-version-less, the
+# rest are PV2012). Used for accurate warn/inspect lines.
+_FIELD_TO_CRS_TAG = {
+    "highlights": "Highlights2012", "shadows": "Shadows2012", "whites": "Whites2012",
+    "texture": "Texture", "clarity": "Clarity2012",
+}
 
 
 def _warn_dropped_ops(per_frame: list[DevelopOps], intent: RenderIntent) -> None:
     """Surface, at RENDER time, any develop op that is SET in the XMP but will
     NOT be applied — so a drop is never silent (DECISIONS.md §5/§7).
 
-    The PV5 basic-tone ops (Highlights/Shadows/Whites) are now **applied on the
-    perceptual path** by the scene-referred DR-compression op (DECISIONS §5
-    amendment, `develop_ops.apply_dr_compression`), but remain **dropped on the
-    faithful path** — Adobe's closed PV5 tone math is un-fittable from the
-    flat-patch harness, and a working-domain change there is forbidden by §7. So
-    we warn ONLY under FAITHFUL; under PERCEPTUAL these knobs drive the op and are
-    not dropped. Emits one stderr line per set-but-dropped field, with the frame
-    count, and points at the perceptual path as where it is honoured.
+    Both the PV5 basic-tone ops (Highlights/Shadows/Whites) and Texture/Clarity are
+    now **applied on the perceptual path** — the former by the scene-referred
+    DR-compression op (`develop_ops.apply_dr_compression`), the latter by the
+    edge-aware local-contrast op (`develop_ops.apply_texture_clarity`) — but remain
+    **dropped on the faithful path** (Adobe's closed PV5 / Clarity math is
+    un-fittable from the flat-patch harness, and a working-domain change there is
+    forbidden by §7). So we warn ONLY under FAITHFUL; under PERCEPTUAL these knobs
+    drive the ops and are not dropped. Emits one stderr line per set-but-dropped
+    field, with the frame count and the perceptual op that honours it.
     """
     if intent is not RenderIntent.FAITHFUL:
         return
@@ -311,11 +325,24 @@ def _warn_dropped_ops(per_frame: list[DevelopOps], intent: RenderIntent) -> None
         count = sum(1 for ops in per_frame if getattr(ops, field) != 0.0)
         if count:
             sys.stderr.write(
-                f"warning: crs:{field.capitalize()}2012 set on {count}/{n} frame(s) "
+                f"warning: crs:{_FIELD_TO_CRS_TAG[field]} set on {count}/{n} frame(s) "
                 f"but NOT applied under --render-intent faithful (Adobe's PV5 tone "
                 f"math is closed-source; DECISIONS §5). The perceptual path honours "
                 f"it via the scene-referred DR-compression op — render an ACEScg EXR "
                 f"target or pass --render-intent perceptual (not Lightroom-faithful; "
+                f"no fidelity claim). These frames will not match your Lightroom "
+                f"preview.\n",
+            )
+    for field in _DROPPED_TEXTURE_CLARITY_FIELDS:
+        count = sum(1 for ops in per_frame if getattr(ops, field) != 0.0)
+        if count:
+            sys.stderr.write(
+                f"warning: crs:{_FIELD_TO_CRS_TAG[field]} set on {count}/{n} frame(s) "
+                f"but NOT applied under --render-intent faithful (Adobe's edge-aware "
+                f"{field.capitalize()} is closed-source; DECISIONS §7). The perceptual "
+                f"path honours it via the local-contrast op (apply_texture_clarity, the "
+                f"boost-detail mode of the shared base/detail engine) — render an ACEScg "
+                f"EXR target or pass --render-intent perceptual (not Lightroom-faithful; "
                 f"no fidelity claim). These frames will not match your Lightroom "
                 f"preview.\n",
             )
@@ -365,10 +392,11 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
 
     if seq.keyframes:
         out.write(
-            "\nFields DROPPED on the faithful path (closed-source PV5 math); "
-            "APPLIED on perceptual via DR-compression (DECISIONS §5):\n"
+            "\nFields DROPPED on the faithful path (closed-source Adobe math); "
+            "APPLIED on perceptual (DECISIONS §5/§7 — Highlights/Shadows/Whites via "
+            "DR-compression, Texture/Clarity via the local-contrast op):\n"
         )
-        for name in _DROPPED_AT_EMIT_FIELDS:
+        for name in _ALL_DROPPED_ON_FAITHFUL:
             count = sum(1 for kf in seq.keyframes if getattr(kf.ops, name) != 0.0)
             if count:
                 out.write(f"  - {name}: set on {count} of {kf_count} keyframes\n")

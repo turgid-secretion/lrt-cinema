@@ -184,6 +184,15 @@ class DevelopOps:
     saturation: float = 0.0           # crs:Saturation (-100..100)
     vibrance: float = 0.0             # crs:Vibrance (-100..100)
 
+    # Texture / Clarity — local-contrast (edge-aware detail boost) sliders.
+    # PERCEPTUAL-only (the boost-detail mode of the shared base/detail engine,
+    # `develop_ops.apply_texture_clarity`); dropped + warn-only on the faithful
+    # path (`cli._warn_dropped_ops`), like Highlights/Shadows/Whites. Default 0 =
+    # the identity (byte-exact short-circuit). Texture is a fine-scale detail
+    # boost; Clarity a larger-radius midtone-weighted local-contrast boost.
+    texture: float = 0.0              # crs:Texture2012 (-100..100)
+    clarity: float = 0.0              # crs:Clarity2012 (-100..100)
+
     # Sharpening
     sharpness: float = 0.0            # crs:Sharpness (0..150)
 
@@ -253,6 +262,8 @@ class DevelopOps:
             tint=lerp_opt_int(self.tint, other.tint),
             saturation=lerp_f(self.saturation, other.saturation),
             vibrance=lerp_f(self.vibrance, other.vibrance),
+            texture=lerp_f(self.texture, other.texture),
+            clarity=lerp_f(self.clarity, other.clarity),
             sharpness=lerp_f(self.sharpness, other.sharpness),
             tone_curve=blended_curve,
             hsl=self.hsl.blend(other.hsl, t),
