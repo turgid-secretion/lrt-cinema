@@ -239,6 +239,12 @@ def _parse_description(desc: ET.Element) -> DevelopOps:
         tint=_parse_int(_read_attr_or_child(desc, _q("crs", "Tint"))),
         saturation=_parse_float(_read_attr_or_child(desc, _q("crs", "Saturation"))),
         vibrance=_parse_float(_read_attr_or_child(desc, _q("crs", "Vibrance"))),
+        # Texture ships as crs:Texture in real ACR/LR XMP (PV-version-less, added
+        # LR 8.3); Clarity is the PV2012-suffixed crs:Clarity2012. Read the real
+        # primary tag with the *2012 alias as fallback so both a real LRT-emitted
+        # XMP and a 2012-suffixed synthetic fixture drive the slider.
+        texture=_read_crs_float(desc, "Texture", "Texture2012"),
+        clarity=_read_crs_float(desc, "Clarity2012", "Clarity"),
         sharpness=_parse_float(_read_attr_or_child(desc, _q("crs", "Sharpness"))),
         tone_curve=_parse_tone_curve(desc),
         hsl=_parse_hsl(desc),
@@ -285,6 +291,10 @@ def _merge_ops(base: DevelopOps, override: DevelopOps) -> DevelopOps:
         merged.saturation = override.saturation
     if override.vibrance != 0.0:
         merged.vibrance = override.vibrance
+    if override.texture != 0.0:
+        merged.texture = override.texture
+    if override.clarity != 0.0:
+        merged.clarity = override.clarity
     if override.sharpness != 0.0:
         merged.sharpness = override.sharpness
     if override.tone_curve:
@@ -565,6 +575,8 @@ def _has_meaningful_ops(ops: DevelopOps) -> bool:
         or ops.tint is not None
         or ops.saturation != 0.0
         or ops.vibrance != 0.0
+        or ops.texture != 0.0
+        or ops.clarity != 0.0
         or (bool(ops.tone_curve) and not _is_identity_tone_curve(ops.tone_curve))
         or not ops.hsl.is_identity()
         or not ops.color_grade.is_identity()
