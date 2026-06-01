@@ -8,6 +8,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] — v0.8 prep
 
 ### Added
+- **Texture/Clarity → edge-aware local-contrast boost (v0.9 dual-mode step 4 — the
+  LAST dual-mode op, DECISIONS §7).** New `apply_texture_clarity` on the **PERCEPTUAL
+  render-intent** (the ACEScg master), driven by the existing `crs:Texture` /
+  `crs:Clarity2012` XMP knobs — **no new CLI control**. It is the **boost-detail mode
+  of the SAME guided base/detail engine** as DR-compression (the inverse: a two-band
+  guided split *boosts* detail rather than *attenuating* the base), reusing
+  `_guided_base_log`/`_box_sum` at radii `_TC_RADIUS_FINE=2 < _TC_RADIUS_COARSE=16` on
+  log2-luminance: `texture_band = L−B_fine` (a **uniform fine** boost), `clarity_band =
+  B_fine−B_coarse` (a **midtone-weighted mid-scale** boost via a C∞ Gaussian bump
+  `_tc_midtone_weight` around the 0.18 log-anchor, σ=3 stops); `L_out = B_coarse +
+  (1+Kt·texture/100)·texture_band + (1+Kc·(clarity/100)·midtone_w)·clarity_band`
+  (`Kt=Kc=1.5`). New IR fields `DevelopOps.texture`/`.clarity` are threaded through the
+  4-point playbook (blend lerp / parser `crs:Texture`+`crs:Clarity2012` with *2012/PV-less
+  aliases / `_merge_ops` / `_has_meaningful_ops`). §0-safe: luminance + **out/in-ratio**
+  reapply (never per-channel), floor 0, **no top clamp** (overrange >1 survives →
+  shared `output._aces_rgc_compress_ap1` pass). Reduces to the **identity on flat
+  input**; **byte-exact identity** at `texture==0 and clarity==0` (the guided
+  round-trip is not bit-exact) so both intents stay bit-identical on a no-boost render
+  and the gym 0.026 / rose 0.545 ΔE ship gate is untouched. The faithful `apply_*` ops
+  are **unchanged** — Texture/Clarity stay **dropped + warn-only** there with **their
+  own** intent-aware wording (`_DROPPED_TEXTURE_CLARITY_FIELDS`, pointing at
+  `apply_texture_clarity`, NOT the DR-compression/closed-PV5 story). **Engine choice —
+  guided, not the local-Laplacian proto:** on the step-edge halo protocol the guided
+  two-band boost rings **sub-1% of the plateau range at +100/+100** vs a naive
+  single-Gaussian USM at **~580%** (the op-family's defining failure); the LLF proto is
+  comparable but fragile + costs a non-byte-exact pyramid and its own oracle, so per the
+  task escape hatch the proven guided engine ships and the proto stays unwired (same
+  direction as v10c's base-role defer). Guided is the **measured-clean first cut, NOT
+  provably halo-free**. Axis-1 oracle hand-rolls the two-band guided split + boost +
+  ratio via `scipy.ndimage.uniform_filter` (a different code path from the production
+  cumsum `_box_sum`; compared interior-only, ≥2·r_coarse from borders — the only region
+  the shrinking-window box and `mode="nearest"` agree), matching to ~0 on a 128²
+  structured + saturated + overrange image, with per-channel-vs-ratio / swapped-radii /
+  dropped-midtone-weight sensitivity legs, plus a clean-step halo bound + a naive-USM
+  injected-bug leg, byte-exact identity, hue-preserve on saturated red at Clarity +100,
+  no-top-clamp, flat-image no-op, midtone-weighting, and perceptual-only + order tests.
+  Constants (`_TC_*`) are documented **tuning, not an LR-fidelity claim**. Authority:
+  `docs/research/v10-local-tone-mapping-dr-compression.md` §2.3/§3.2,
+  `docs/research/v10c-local-laplacian-base-deferred.md`; `docs/PIPELINE.md` §Stage 12.
 - **Perceptual HSL → hue-stable OKLCh (v0.9 dual-mode step 3, DECISIONS §7).**
   `_apply_hsl_perceptual` (previously aliasing the faithful Adobe-hexcone op) now
   grades 8-band HSL in **OKLCh proper** — the perceptually-uniform, gamut-agnostic
