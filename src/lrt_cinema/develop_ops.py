@@ -258,10 +258,136 @@ def _apply_hsl_perceptual(prophoto: np.ndarray, hsl: HslBands) -> np.ndarray:
 
 
 def _apply_color_grade_perceptual(prophoto: np.ndarray, cg: ColorGrade) -> np.ndarray:
-    """PERCEPTUAL Color Grade — ASC CDL (SOP+sat) (DECISIONS.md §7 step 2).
-    **Not yet implemented**: aliases the faithful split-tone `apply_color_grade`
-    until the CDL applicator lands."""
-    return apply_color_grade(prophoto, cg)
+    """PERCEPTUAL Color Grade — ASC-CDL idiom, **offset-only**, in ACEScct log
+    (DECISIONS.md §7 step 2). The faithful split-tone `apply_color_grade`
+    (additive-in-linear-ProPhoto) is unchanged; this is the ACEScg-master path.
+
+    **Working space (contract 1 — ProPhoto(D50)-in / ProPhoto(D50)-out).** Stage
+    12 operates on linear ProPhoto(D50); `output.py` does the ProPhoto→ACEScg
+    Bradford at Stage 13. So this op converts ProPhoto→ACEScg **internally**
+    (`colour.RGB_to_RGB`, the SAME params as `output._prophoto_to_linear`:
+    Bradford, `apply_cctf_*=False`), grades in ACEScct log, then inverts back to
+    ProPhoto before return. It must NOT claim "ACEScg in/out" — that would have
+    `output.py` re-convert the result *as if it were ProPhoto*, double-transforming
+    the primaries and corrupting saturated colour (the CLAUDE.md §0 trap). The
+    redundant ProPhoto↔ACEScg round-trip vs the eventual EXR encode is an
+    idempotent Bradford (reversible to float tolerance) — a future optimization,
+    not a seam to relax.
+
+    **The grade — offset-only ASC-CDL (slope = power = 1).** Per channel in
+    ACEScct log: ``out_log[c] = log_in[c] + offset_lum + offset_chroma[c]``.
+      * **Luminance** is a log *lift* — a uniform per-channel offset (NOT a
+        multiplicative gain; ColorGrade has no control mapping to slope). Each
+        wheel's Luminance/100 scaled by `_CG_LUM_LOG_STRENGTH` (one stop per
+        unit-of-100): the S/M/H wheels zone-weighted, Global everywhere::
+
+            offset_lum = (Σ_zone w_zone·lum_zone/100 + global_lum/100)·K_lum_log
+
+      * **Hue+Saturation** per wheel → the **zero-sum chroma direction** (the
+        SAME `_hsv_to_rgb_dcp` hue→RGB construction as faithful
+        `_color_grade_wheel_tint`, mean-subtracted) applied as a per-channel
+        additive **log** delta scaled by sat/100·`_CG_CHROMA_LOG_STRENGTH`,
+        zone-weighted as today. Zero-sum → chroma-only (no net lift).
+
+    Zone weights come from `_color_grade_zone_weights` (so Blending/Balance
+    behave identically to faithful) on a **log-domain** luminance proxy
+    (`_cg_zone_proxy_log`) — "midtones" at perceptual mid, matching Resolve's Log
+    wheels. The unified "10th ASC-CDL saturation number" is intentionally DROPPED:
+    ColorGrade carries four per-wheel Saturations and no global one, so the
+    per-wheel chroma offsets are the whole saturation story (no IR source for a
+    single post-SOP scalar).
+
+    **ACEScct toe via the library.** `colour.models.log_encoding_ACEScct` /
+    `log_decoding_ACEScct` (mid-grey 0.18 → 0.413588). The toe is NOT hand-rolled
+    — the sub-breakpoint branch is the *linear* segment `A·in+B` (A,B > 0,
+    `X_BRK=2^-7`), finite and invertible even for the small NEGATIVE ACEScg
+    channels that an in-ProPhoto-but-out-of-AP1 colour produces. So we do NOT
+    floor ACEScg before the encode (that would hard-clip those colours to the AP1
+    boundary inside this op, pre-empting the gamut pass).
+
+    **Gamut / clamp (§0).** No top clamp — scene-referred, overrange survives.
+    Out-of-AP1 excursions are the job of the single gated ACES RGC pass in
+    `output.py` (`_aces_rgc_compress_ap1`), NOT this op. We floor the final
+    ProPhoto at 0 only (the faithful / DR-compression convention — no negative
+    ProPhoto channel reaches `output.py`'s colour matrix).
+
+    **Byte-exact identity.** `cg.is_identity()` (all wheel Sat+Lum zero) →
+    ``return prophoto`` (the literal input) before any conversion. The ACEScct +
+    Bradford round-trip is reversible only to float tolerance, so the
+    short-circuit is mandatory — it keeps both intents bit-identical on a no-grade
+    render and the gym 0.026 / rose 0.545 ΔE ship gate untouched (perceptual-only).
+
+    **Constants are best-effort TUNING, not LR fidelity** (`_CG_*_LOG_STRENGTH`,
+    `_CG_ZONE_PROXY_*`). The Axis-1 oracle validates the *defined* offset-SOP math
+    + the Bradford + ACEScct, not appearance — matching the honesty discipline of
+    `apply_color_grade` / `apply_dr_compression`.
+    """
+    if cg.is_identity():
+        return prophoto  # byte-exact identity — short-circuit before any conversion
+
+    import colour
+
+    # ProPhoto(D50) → ACEScg(AP1): same Bradford as output._prophoto_to_linear.
+    shape = prophoto.shape
+    flat = prophoto.reshape(-1, 3).astype(np.float64)
+    acescg = colour.RGB_to_RGB(
+        flat,
+        input_colourspace="ProPhoto RGB",
+        output_colourspace="ACEScg",
+        chromatic_adaptation_transform="Bradford",
+        apply_cctf_decoding=False,
+        apply_cctf_encoding=False,
+    )
+
+    # ACEScg → ACEScct log (library toe; NOT floored — the linear toe is
+    # invertible for the small negatives an out-of-AP1 colour produces).
+    log_in = colour.models.log_encoding_ACEScct(acescg)
+
+    # Zone weights on a log-domain luminance proxy (AP1 luminance is the ACEScg
+    # green-dominant Y; reuse the ProPhoto luminance row on the ProPhoto pixels —
+    # identical zone mask as faithful, just log-placed).
+    luminance = flat @ _PROPHOTO_LUMINANCE
+    proxy = _cg_zone_proxy_log(luminance)
+    shadow_w, midtone_w, highlight_w = _color_grade_zone_weights(
+        proxy, cg.blending, cg.balance,
+    )
+
+    # Luminance lift — uniform per-channel log offset (a tonal lift, not a gain).
+    lum_zone = (
+        shadow_w * (cg.shadow_lum / 100.0)
+        + midtone_w * (cg.midtone_lum / 100.0)
+        + highlight_w * (cg.highlight_lum / 100.0)
+        + (cg.global_lum / 100.0)
+    )
+    offset_lum = (lum_zone * _CG_LUM_LOG_STRENGTH)[..., None]  # (..., 1) broadcast
+
+    # Chroma — zero-sum hue direction per wheel, additive in log, zone-weighted.
+    k = _CG_CHROMA_LOG_STRENGTH
+    chroma_sh = k * (cg.shadow_sat / 100.0) * _color_grade_chroma_dir(cg.shadow_hue)
+    chroma_mid = k * (cg.midtone_sat / 100.0) * _color_grade_chroma_dir(cg.midtone_hue)
+    chroma_hi = k * (cg.highlight_sat / 100.0) * _color_grade_chroma_dir(cg.highlight_hue)
+    chroma_gl = k * (cg.global_sat / 100.0) * _color_grade_chroma_dir(cg.global_hue)
+    offset_chroma = (
+        shadow_w[..., None] * chroma_sh
+        + midtone_w[..., None] * chroma_mid
+        + highlight_w[..., None] * chroma_hi
+        + chroma_gl
+    )
+
+    log_out = log_in + offset_lum + offset_chroma
+
+    # ACEScct → ACEScg → ProPhoto(D50) (inverse Bradford). No top clamp; floor 0.
+    acescg_out = colour.models.log_decoding_ACEScct(log_out)
+    pp_out = colour.RGB_to_RGB(
+        acescg_out,
+        input_colourspace="ACEScg",
+        output_colourspace="ProPhoto RGB",
+        chromatic_adaptation_transform="Bradford",
+        apply_cctf_decoding=False,
+        apply_cctf_encoding=False,
+    )
+    out = np.maximum(pp_out.reshape(shape), 0.0)
+    return out.astype(prophoto.dtype)
 
 
 def apply_dr_compression(
@@ -523,6 +649,48 @@ _PROPHOTO_LUMINANCE = np.array([0.2880402, 0.7118741, 0.0000857], dtype=np.float
 _CG_CHROMA_STRENGTH = 0.30  # per unit Saturation/100 along the (zero-sum) hue dir
 _CG_LUM_STRENGTH = 0.10     # per unit Luminance/100, uniform across channels
 
+# ---------------------------------------------------------------------------
+# Perceptual ColorGrade (ASC-CDL idiom, offset-only) — tuning constants
+# ---------------------------------------------------------------------------
+#
+# The PERCEPTUAL path's ColorGrade (`_apply_color_grade_perceptual`) emits an
+# ASC-CDL-idiom grade — a per-channel **offset** in ACEScct log — onto the
+# ACEScg master. CDL is OFFSET-ONLY here (slope = power = 1): ColorGrade carries
+# no control that maps to a multiplicative slope (Luminance is a tonal *lift*,
+# which is natively an offset in log, not a gain). slope=1 is valid ASC-CDL v1.2
+# and round-trips losslessly into a colorist's first Resolve node. The offsets
+# are defined NATIVELY in log (a stop is a fixed log step) — NOT as a difference
+# of two nonlinear encodes (`encode(linear_tint) − log_in`, which is not the
+# log-delta of a tint; see research/v09-dualmode-impl-plan.md Step 2 §4).
+#
+# Like the faithful `_CG_*` strengths these are best-effort TUNING values, NOT a
+# Lightroom-fidelity claim (the perceptual intent targets the ACES master, not
+# the LRT round-trip — DECISIONS.md §7). The Axis-1 oracle validates the
+# *defined* offset-SOP math, not LR appearance.
+
+# Log lift per unit Luminance/100. One full Luminance wheel (±100) = ±1/17.52 in
+# normalized ACEScct = exactly **one stop** (17.52 is the ACEScct log-segment
+# denominator, `(log2(L)+9.72)/17.52`, so 1/17.52 of the code value is a factor
+# of 2 in scene-linear). Global and per-wheel Luminance share this one scale.
+_CG_LUM_LOG_STRENGTH = 1.0 / 17.52  # K_lum_log — a stop per slider unit-of-100
+
+# Log chroma offset per unit Saturation/100 along the (zero-sum) hue direction.
+# Matched to the faithful `_CG_CHROMA_STRENGTH` magnitude so the two intents
+# carry comparable grade authority; applied as a per-channel additive log delta
+# (the direction is mean-subtracted → zero-sum, carries no net lift).
+_CG_CHROMA_LOG_STRENGTH = 0.30
+
+# Black / white anchors (scene-linear) for the log-domain zone proxy fed to
+# `_color_grade_zone_weights`. The proxy is `0.5 + (log2(L) − log2(0.18)) /
+# (2·log2(white/0.18))`, clipped to [0,1]: it places 0.18 mid-grey at proxy 0.5
+# and diffuse white at proxy 1.0, so "midtones" land at perceptual mid and
+# diffuse highlights reach the Highlight wheel (matches Resolve's Log wheels —
+# a documented *placement* choice). NB: feeding the raw ACEScct code value here
+# would skew the proxy (ACEScct over [0,1] only spans ≈[0.07, 0.55], so white
+# would read as ~half midtone); the explicit normalization fixes that.
+_CG_ZONE_PROXY_WHITE = 1.0    # scene-linear luminance mapped to proxy = 1.0
+_CG_ZONE_PROXY_ANCHOR = 0.18  # scene-linear mid-grey mapped to proxy = 0.5
+
 
 def _color_grade_wheel_tint(hue_deg: float, sat: float, lum: float) -> np.ndarray:
     """One wheel's additive tint: a zero-sum chroma direction (the saturated RGB
@@ -554,6 +722,29 @@ def _color_grade_zone_weights(
     highlight_w = t ** p
     midtone_w = 1.0 - shadow_w - highlight_w
     return shadow_w, midtone_w, highlight_w
+
+
+def _color_grade_chroma_dir(hue_deg: float) -> np.ndarray:
+    """Zero-sum chroma direction for `hue_deg`: the fully-saturated RGB for that
+    hue (the SAME `_hsv_to_rgb_dcp` construction as faithful `_color_grade_wheel_tint`)
+    mean-subtracted so it carries no net luminance. Returns float64 `(3,)`."""
+    from lrt_cinema.lut3d_baker import _hsv_to_rgb_dcp
+
+    h_hex = np.array([(hue_deg % 360.0) * (6.0 / 360.0)], dtype=np.float64)
+    rgb = _hsv_to_rgb_dcp(h_hex, np.array([1.0]), np.array([1.0]))[0]  # (3,)
+    return rgb - rgb.mean()
+
+
+def _cg_zone_proxy_log(luminance: np.ndarray) -> np.ndarray:
+    """Log-domain [0,1] zone proxy for `_color_grade_zone_weights` on the
+    perceptual path: `0.5 + (log2(L) − log2(anchor)) / (2·log2(white/anchor))`,
+    clipped to [0,1]. Places 0.18 mid-grey at 0.5 and diffuse white (1.0) at 1.0
+    so the Highlight wheel reaches diffuse highlights (Resolve Log-wheel placement;
+    see `_CG_ZONE_PROXY_*`). Overrange clips to 1.0 → fully a highlight."""
+    half_span = math.log2(_CG_ZONE_PROXY_WHITE / _CG_ZONE_PROXY_ANCHOR)
+    log_l = np.log2(np.maximum(luminance, 0.0) + _DR_EPS)
+    proxy = 0.5 + (log_l - math.log2(_CG_ZONE_PROXY_ANCHOR)) / (2.0 * half_span)
+    return np.clip(proxy, 0.0, 1.0)
 
 
 # ---------------------------------------------------------------------------
