@@ -351,18 +351,35 @@ History: gym/rose were 0.789/0.844 before the 2026-05-30 hue-preserving-tone fix
 
 The render maths lives behind a thin backend abstraction (`lrt_cinema.accel`)
 so the per-pixel hotspots can run on a faster compute backend **without changing
-the colour science**. Two backends:
+the colour science**. Three backends (`--backend` / `LRT_CINEMA_BACKEND`):
 
-- **numpy** (default; `LRT_CINEMA_BACKEND` unset or `numpy`) — the pure-numpy
-  reference. The only hard dependency, the path the **ΔE ship gate measures**,
-  the universal fallback. Stages 5/8/9 call `accel.*`, whose numpy branch is the
-  *literal* former composition (`_rgb_to_hsv_dcp` → `_apply_hsv_cube` →
-  `_hsv_to_rgb_dcp` → `np.where(valid)`; `apply_rgb_tone`) — behaviour-preserving
-  by construction.
-- **numba** (`numba`, or `auto` = numba-if-importable) — fused, multi-core
+- **numpy** (default; unset or `numpy`) — the pure-numpy reference. The only
+  hard dependency, the path the **ΔE ship gate measures**, the universal
+  fallback. Stages 5/8/9 call `accel.*`, whose numpy branch is the *literal*
+  former composition (`_rgb_to_hsv_dcp` → `_apply_hsv_cube` → `_hsv_to_rgb_dcp`
+  → `np.where(valid)`; `apply_rgb_tone`) — behaviour-preserving by construction.
+- **numba** (`numba`, or `auto` = numba-if-importable) — fused, multi-core CPU
   `@njit(parallel=True, cache=True, fastmath=False)` kernels in
-  `accel/_numba_kernels.py`. Optional extra (`pip install lrt-cinema[fast]`);
-  **never a hard dependency**.
+  `accel/_numba_kernels.py`. Per-stage (Stage 5/8 cube, Stage 9 tone); shares
+  memory with numpy so there is no transfer cost. Optional extra
+  (`pip install lrt-cinema[fast]`). The bit-tightest match to numpy (max ΔE
+  6.4e-5) and the only accelerated path that covers **every** preset/intent.
+- **mlx** (`mlx`, opt-in) — the Apple-Silicon **Metal GPU**, `accel/_mlx_kernels.py`
+  (`MlxFaithfulRenderer`). Optional extra (`pip install lrt-cinema[gpu]`,
+  Apple-Silicon-only via env marker). Unlike numba's per-stage CPU kernels, the
+  GPU wants **one upload / one download per frame** (a host↔device round-trip is
+  ~35 ms), so it runs the WHOLE faithful sRGB render on-device — stages 2-9 +
+  Stage-11 + the full **Stage-12 faithful grade** + sRGB encode — with the
+  frame-invariant constants uploaded once. This is the only path that
+  accelerates the **Stage-12 grade**, so it wins biggest exactly where numba/numpy
+  are slowest (graded frames). **Scope:** the faithful `lrtimelapse` sRGB path
+  with a ForwardMatrix profile; anything else (no FM / no ProfileToneCurve / EXR
+  / perceptual) raises `MlxUnsupported` and the cli worker falls back to
+  numba/numpy. Tone curves are baked to 16384-entry LUTs (exact spline; MLX has
+  no `searchsorted`). **Accuracy:** mean ΔE2000 vs numpy ~1–3e-5, max ~1e-3 —
+  the GPU float/`pow`/op-order trade-off makes the per-pixel max looser than
+  numba (boundary pixels can land in an adjacent LookTable cell), so mlx is the
+  display-TIFF fast path, **NOT** a bit-exact reference. numpy remains that.
 
 **What moved (faithful sRGB-TIFF path, the profiled hotspots):**
 
@@ -384,36 +401,48 @@ follow-ups the abstraction already supports.
 — `apply_saturation` / `apply_vibrance` / `apply_hsl` / `apply_color_grade` — are
 NOT yet accelerated** (each ~1.5–4.6 s at 24 MP, all per-pixel numpy in the same
 hexcone-HSV / luminance-mask domain). They cost the same on both backends, so a
-*heavily-graded* full-res frame's speed-up shrinks to **~1.8×** (HSL + Color-Grade
-set: ~26 s → ~14.5 s) even though the DCP-render part is ~6.6×. **This is the #1
-follow-up** for graded product throughput: those four faithful ops are a direct
-re-use of this backend (numpy reference + numba kernel reusing the `accel`
-HSV-scalar helpers + a numpy-twin equivalence test), gated by the same Axis-1
-oracle. The PERCEPTUAL Stage-12 ops (DR-compression / Texture-Clarity / OKLCh
-HSL / ASC-CDL — the EXR path) are likewise unaccelerated and a further follow-up.
-The **proxy path is unaffected by this gap**: it downsamples before Stage 12, so
-preview shrinks the grade cost too (a heavily-graded frame is still ~18–34× at
+*heavily-graded* full-res frame's numba speed-up shrinks to **~1.8×** (HSL +
+Color-Grade set: ~26 s → ~14.5 s) even though the DCP-render part is ~6.6×. **The
+mlx GPU backend closes this** — it runs the full Stage-12 faithful grade
+on-device, so a heavily-graded frame is **9.1×** (below). A **numba/CPU** Stage-12
+acceleration (for non-Apple-Silicon boxes) remains a follow-up: the four faithful
+ops re-use the `accel` HSV-scalar helpers + a numpy-twin equivalence test, gated by
+the Axis-1 oracle. The PERCEPTUAL Stage-12 ops (DR-compression / Texture-Clarity /
+OKLCh HSL / ASC-CDL — the EXR path) are unaccelerated on every backend, a further
+follow-up. The **proxy path is also unaffected**: it downsamples before Stage 12,
+so preview shrinks the grade cost too (a heavily-graded frame is still ~18–34× at
 scale 4–8).
 
-**Measured (D750 Camera Standard, full-res 24 MP, M1 Max 10-core):** DCP-render,
-no grade — full-res single frame **16.9 s → 2.5 s (6.6×)**, the cube+tone stages
-alone **~48×**, 10-frame pool throughput **6.9 → 0.97 s/frame (7.1×)** at 10
-workers × 1 thread (frame-level parallelism beats intra-frame threads for
-throughput); heavily-graded full-res **~1.8×** (Stage-12 faithful unaccelerated,
-above); heavily-graded **preview** scale 4/8 **~18×/34×**. Repeatable via
-`tools/perf/bench_render.py` (identity grade) and `tools/production_test/run.py`
-(full grade).
+**Measured (D750 Camera Standard, full-res 24 MP, M1 Max 10-core):**
+
+| Case | numpy | numba (CPU) | mlx (GPU) |
+|---|---|---|---|
+| single frame, no grade | 16.9 s | 2.5 s (6.6×) | 1.16 s (2.1×, demosaic-bound) |
+| └ cube+tone stages alone | 12.7 s | ~0.27 s (~48×) | — |
+| single frame, heavily graded | ~26 s | ~14.5 s (1.8×) | **1.54 s (9.1×)** |
+| throughput, graded sequence | — | 8.06 s/frame (10w) | **1.02 s/frame (3–4w) = 7.9×** |
+| throughput, no grade | — | 0.97 s/frame (10w) | ~1.0 s/frame |
+
+For numba, frame-level parallelism beats intra-frame threads (10 workers × 1
+thread). For mlx, the GPU serialises colour but the CPU demosaics frames in
+parallel across worker processes, so **3–4 workers** is the sweet spot (more
+plateaus — the GPU is the serial stage). A **split-frame CPU-pool + GPU-lane
+scheduler was measured and rejected** (identity 1.12×, graded **0.94×** — slow
+graded CPU workers contend with the GPU lane's demosaic; the productive overlap
+is just mlx + a few workers). Repeatable via `tools/perf/bench_render.py`
+(identity) and `tools/production_test/run.py` (full grade).
 
 **Load-bearing invariants (do NOT regress):**
 
-1. **numpy is the reference; numba must be colour-identical to it.** Held to
-   **max ΔE2000 < 0.01 vs numpy on a real frame** (measured **6.4e-5**, ~16000×
-   under the 1.0 gate; `bench_render.py verify`) and to numpy-twin equivalence
-   on synthetic random/overrange/negative/tied pixels
-   (`tests/test_accel_kernels.py`, the fixture-free Axis-1 guard — skips when
-   numba is absent). The ΔE ship gate path (Stages 1–9 → `result.prophoto`)
-   includes the cube + tone kernels, so this equivalence is what keeps gym/rose
-   green on either backend.
+1. **numpy is the reference; the accelerated backends must be colour-identical
+   to it.** numba: **max ΔE2000 < 0.01 vs numpy on a real frame** (measured
+   **6.4e-5**, ~16000× under the gate; `bench_render.py verify`) + numpy-twin
+   equivalence on synthetic random/overrange/negative/tied pixels
+   (`tests/test_accel_kernels.py`). mlx: **mean ΔE2000 ~1–3e-5, max ~1e-3** vs
+   numpy (`tests/test_accel_mlx.py` + `bench_render.py`) — looser per-pixel max
+   (the GPU float trade-off) but far below the mean-based 1.0 gate. Both guards
+   are fixture-free and skip when their engine is absent. The ΔE ship gate path
+   (Stages 1–9 → `result.prophoto`) is reproduced by both, so gym/rose stay green.
 2. **Float precision is matched where it is load-bearing:** the cube kernel runs
    float32 (the numpy ref is float32×float32); the tone kernel evaluates the
    spline in **float64** (a float32 evaluate drifts the 128-pt curve). The tone
@@ -430,17 +459,24 @@ above); heavily-graded **preview** scale 4/8 **~18×/34×**. Repeatable via
    stay on the reference unless a caller asks; the **CLI** defaults `--backend auto`
    so the product is fast when numba is present.
 
-**Why numba, not PyTorch MPS / Apple MLX (the GPU options evaluated):** the
-ship-gate constraint puts the verification burden on us — numba lets us pin float
-precision op-by-op and match numpy's operation order, so "max ΔE < 0.01 vs the
-reference" is achievable *and* cheap to verify. GPU `pow`/cube-root/FMA rounding
-cannot be pinned the same way (probably under tolerance, but discovered
-empirically under a forbidden-to-ship-unverified constraint), torch is a heavy
-hard-ish dependency, and MLX gather-correctness for the trilinear/argsort
-patterns is a session risk. numba also keeps the win on CPU (no host↔device
-copy) and composes with the existing ProcessPool. The `accel` dispatch is shaped
-so an MLX kernel can drop in later as a third backend (batch-frames-per-dispatch
-is the natural MLX follow-up for sequence throughput).
+**numba (CPU) vs mlx (GPU) — both shipped, why and when (measured, not assumed):**
+- **Per-kernel, the GPU is NOT faster than CPU here** — the hot kernels are
+  memory-**bandwidth**-bound (8-corner LookTable gather), and on the M1 Max's
+  unified memory CPU and GPU draw from the same ~400 GB/s bus. A compiled MLX
+  cube (~153 ms) ≈ the numba cube (~179 ms). The GPU's FLOPS don't help a
+  gather-bound stage.
+- **The GPU wins by offloading + fusing the WHOLE colour path**, especially the
+  **Stage-12 grade** that numba leaves on the CPU — hence ~parity on a no-grade
+  frame (demosaic-bound) but **9.1×** on a heavily-graded one.
+- **numba is the bit-tightest and most general** (max ΔE 6.4e-5; covers every
+  preset/intent incl. EXR/perceptual + the colorimetric taps), so it is the
+  `auto` default. **mlx is the graded-throughput specialist** (faithful sRGB
+  only, looser max ΔE), opt-in via `--backend mlx`.
+- **PyTorch MPS was not used:** torch is a heavy hard-ish dependency; MLX is the
+  lightweight Apple-native (~56 MB, env-marker-gated) Metal framework and was the
+  right GPU choice for unified memory + a small optional dep.
+- **batch-frames-per-dispatch** (one MLX call over N frames) is the natural
+  further MLX follow-up for sequence throughput beyond the per-worker overlap.
 
 **Proxy / preview (`render_frame(preview_scale=)`, CLI `--preview-scale`):** a
 low-resolution preview for rapid iteration — `preview_scale ∈ {1,2,4,8}`, 1 =

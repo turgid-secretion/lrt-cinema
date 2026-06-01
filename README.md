@@ -116,32 +116,41 @@ See `lrt-cinema render --help` for the full flag surface.
 ### Speed: `--backend` and `--preview-scale`
 
 The per-pixel colour maths is pure-numpy by default (the colour-exact reference
-the ΔE gate measures). Install the optional `numba` extra for **fused multi-core
-JIT kernels** on the hot stages (LookTable / HueSatMap cube + tone curve), which
-are colour-identical to numpy (max ΔE2000 < 1e-4, far below the 1.0 ship gate):
+the ΔE gate measures). Two optional accelerated backends — colour-identical to
+numpy (well under the 1.0 ΔE ship gate), gated behind optional deps:
+
+- **`numba`** (`pip install "lrt-cinema[fast]"`) — fused multi-core **CPU** JIT
+  kernels for the DCP-render hot stages; covers every preset/intent; the `auto`
+  default when installed.
+- **`mlx`** (`pip install "lrt-cinema[gpu]"`, **Apple Silicon**) — runs the
+  WHOLE faithful sRGB render on the **Metal GPU**, including the Stage-12 grade,
+  so it wins biggest on graded frames. Faithful sRGB only (falls back to
+  numba/numpy for EXR/perceptual/unsupported profiles).
 
 ```bash
-pip install "lrt-cinema[fast]"      # or: pip install numba
-
-lrt-cinema render --input ... --output ... \
-  --backend numba                   # default 'auto' = numba if installed, else numpy
+lrt-cinema render --input ... --output ... --backend mlx     # Metal GPU
+lrt-cinema render --input ... --output ... --backend numba   # multi-core CPU
+# default --backend auto = numba if installed, else numpy
 ```
 
 Measured on an Apple M1 Max (10 cores, D750 Camera Standard, full-res 24 MP):
 
-| Path | numpy | numba | speed-up |
+| Path | numpy | numba (CPU) | mlx (GPU) |
 |---|---|---|---|
-| DCP-render stages (1–9), no grade | 16.9 s | 2.5 s | **6.6×** |
-| └ the cube + tone stages alone | 12.7 s | 0.27 s | **~48×** |
-| Throughput, 10-frame pool (DCP-render) | 6.9 s/frame | **0.97 s/frame** | **7.1×** (10 workers vs 6) |
+| DCP-render only (no grade), 1 frame | 16.9 s | **2.5 s (6.6×)** | 1.16 s (2.1×) |
+| └ the cube + tone stages alone | 12.7 s | 0.27 s (**~48×**) | — |
+| **Heavily-graded frame** (HSL + ColorGrade + …) | ~26 s | 14.5 s (1.8×) | **1.54 s (9.1×)** |
+| **Graded sequence throughput** | — | 8.1 s/frame | **1.0 s/frame (7.9×, 3–4 workers)** |
 
-**Scope — what's accelerated:** the numba backend covers the **DCP-render
-stages (1–9)** + the output encode. The **Stage-12 faithful grade ops**
-(Saturation / Vibrance / HSL / Color-Grade) are **not yet accelerated** — they
-add the same cost on both backends, so a heavily-graded frame's full-res
-speed-up shrinks (e.g. a render with HSL + Color-Grade set: ~26 s → ~14.5 s,
-**1.8×**). Accelerating those (same backend, same approach) is the next step;
-see [docs/PIPELINE.md](docs/PIPELINE.md) §11.
+**Why both:** per-kernel the GPU ≈ CPU here (the LookTable gather is
+memory-bandwidth-bound, and the M1's CPU+GPU share one memory bus). The GPU
+wins by running the *whole* colour path — crucially the **Stage-12 grade** that
+numba leaves on the CPU — on-device, so it's ~parity on a flat frame but **9×**
+on a graded one. numba is the bit-tightest, most general path (all
+presets/intents); mlx is the graded-throughput specialist. (A CPU-pool + GPU-lane
+*split-frame* scheduler was measured and **rejected** — counterproductive; the
+real overlap is just mlx with a few workers, where the CPU demosaics frames while
+the GPU renders.) See [docs/PIPELINE.md](docs/PIPELINE.md) §11.
 
 For rapid grade/sequence iteration the **preview path is the answer** — and
 because it downsamples *before* the colour math, it shrinks Stage-12 grading
