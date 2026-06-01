@@ -655,13 +655,14 @@ def apply_stage_12_perceptual(
     `intent` selects the HSL + Color-Grade applicator (DECISIONS.md §7):
     **FAITHFUL** (default) uses the Adobe-hexcone ops — the sRGB TIFF / LRT
     round-trip path; **PERCEPTUAL** uses the modern primitives for the ACEScg
-    master. **ColorGrade** diverges under PERCEPTUAL (offset-only ASC-CDL in
-    ACEScct log, v0.9 step 2 — `_apply_color_grade_perceptual`); **HSL** still
-    aliases faithful (OKLCh, step 3, pending). Each perceptual applicator
-    short-circuits to a byte-exact no-op when its IR `is_identity()`, so a render
-    with no grade intent stays bit-identical across intents (the ΔE ship gate,
-    stages 1–9, is untouched). Only the HSL/ColorGrade applicators + DR-compression
-    branch on intent; ToneCurve/Sat/Vib/Contrast/Sharpness are intent-independent."""
+    master. Both diverge under PERCEPTUAL: **ColorGrade** is offset-only ASC-CDL in
+    ACEScct log (v0.9 step 2 — `_apply_color_grade_perceptual`); **HSL** is
+    hue-stable 8-band HSL in OKLCh (v0.9 step 3 — `_apply_hsl_perceptual`). Each
+    perceptual applicator short-circuits to a byte-exact no-op when its IR
+    `is_identity()`, so a render with no grade intent stays bit-identical across
+    intents (the ΔE ship gate, stages 1–9, is untouched). Only the HSL/ColorGrade
+    applicators + DR-compression branch on intent; ToneCurve/Sat/Vib/Contrast/
+    Sharpness are intent-independent."""
     out = apply_tone_curve_pv2012(prophoto, ops.tone_curve)
     out = apply_saturation(out, ops.saturation)
     out = apply_vibrance(out, ops.vibrance)
