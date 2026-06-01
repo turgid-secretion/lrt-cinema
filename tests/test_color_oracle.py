@@ -40,12 +40,12 @@ from lrt_cinema.develop_ops import (  # noqa: E402
     _DR_BLEND_HALFWIDTH_ANCHOR,
     _DR_BLEND_HALFWIDTH_BREAK,
     _DR_BREAK_STOPS,
-    _DR_EPS,
     _DR_LOG_ANCHOR,
     _DR_SLOPE_GAIN_K,
     _HSL_BAND_CENTERS_HEX,
     _HSL_HUE_MAX_HEX,
     _HSL_LUM_SAT_GATE,
+    _LOG_EPS,
     _OKLCH_BAND_CENTERS_DEG,
     _OKLCH_HUE_MAX_DEG,
     _OKLCH_LUM_CHROMA_GATE,
@@ -1193,7 +1193,7 @@ def _oracle_dr_compress(
     log_anchor = math.log2(anchor)
     k = _DR_SLOPE_GAIN_K
     ha, hb, ub = _DR_BLEND_HALFWIDTH_ANCHOR, _DR_BLEND_HALFWIDTH_BREAK, _DR_BREAK_STOPS
-    eps = _DR_EPS
+    eps = _LOG_EPS
     yw = list(_PROPHOTO_LUMINANCE)
     sign = 1.0 if flip_sign else -1.0  # correct law uses −k
     c_lo = 2.0 ** (sign * k * shadows / 100.0)
@@ -1442,7 +1442,7 @@ def _oracle_guided_uniform(log_l, r, eps_gf):
 def _oracle_texture_clarity(
     rgb, texture, clarity, per_channel=False, swap_radii=False, drop_midtone=False,
 ):
-    eps = _DR_EPS
+    eps = _LOG_EPS
     yw = np.asarray(_PROPHOTO_LUMINANCE)
     r_fine, r_coarse = _TC_RADIUS_FINE, _TC_RADIUS_COARSE
     if swap_radii:  # the band-scale bug — Texture on the coarse band, Clarity on fine
@@ -1953,7 +1953,7 @@ def _oracle_cdl_perceptual(
         log_in = np.array([toe_encode(float(c)) for c in acescg])
 
         lum = float(px @ np.array(yw))
-        proxy = min(max(0.5 + (math.log2(max(lum, 0.0) + _DR_EPS) - log_anchor)
+        proxy = min(max(0.5 + (math.log2(max(lum, 0.0) + _LOG_EPS) - log_anchor)
                         / (2.0 * half_span), 0.0), 1.0)
         tt = proxy ** gamma_b
         sh = (1.0 - tt) ** p
