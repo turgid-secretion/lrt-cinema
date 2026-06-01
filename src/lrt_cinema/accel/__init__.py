@@ -32,9 +32,19 @@ from typing import Any
 
 import numpy as np
 
-_VALID = ("numpy", "numba", "auto")
+_VALID = ("numpy", "numba", "mlx", "auto")
+
+
+class MlxUnsupported(Exception):
+    """A render config is outside the MLX GPU fast path (non-FM profile, no
+    ProfileToneCurve, non-faithful intent, non-sRGB target). Caller falls back
+    to numpy/numba. Defined here (not in `_mlx_kernels`) so it can be caught
+    without importing mlx."""
 _kernel_mod: Any = None  # lazily imported kernel module (None until first use)
 _numba_probe: bool | None = None  # cached "is numba importable?"
+_mlx_probe: bool | None = None    # cached "is mlx importable?"
+_mlx_renderer: Any = None         # cached MlxFaithfulRenderer (keyed by profile id)
+_mlx_renderer_key: Any = None
 
 
 def numba_available() -> bool:
@@ -49,13 +59,27 @@ def numba_available() -> bool:
     return _numba_probe
 
 
+def mlx_available() -> bool:
+    """True if mlx.core imports (Apple-Silicon Metal GPU). Cached."""
+    global _mlx_probe
+    if _mlx_probe is None:
+        try:
+            import mlx.core  # noqa: F401
+            _mlx_probe = True
+        except Exception:
+            _mlx_probe = False
+    return _mlx_probe
+
+
 def resolve_backend(name: str | None = None) -> str:
-    """Resolve the active backend to a concrete ``"numpy"`` or ``"numba"``.
+    """Resolve the active backend to a concrete ``"numpy"`` / ``"numba"`` / ``"mlx"``.
 
     `name` (or `$LRT_CINEMA_BACKEND`, default ``"numpy"``) → ``"auto"`` picks
-    numba-if-available. Raises ValueError on an unknown name, and on an explicit
-    ``"numba"`` request when numba is not importable (fail loud, never silently
-    fall back when the caller asked for numba)."""
+    numba-if-available (the CPU path that covers every preset/intent and is the
+    bit-tightest match to numpy; ``mlx`` is GPU and opt-in — it covers only the
+    faithful sRGB-TIFF path). Raises ValueError on an unknown name, and on an
+    explicit ``numba``/``mlx`` request when that engine is not importable (fail
+    loud — never silently fall back when the caller asked for a specific one)."""
     if name is None:
         name = os.environ.get("LRT_CINEMA_BACKEND", "numpy")
     name = name.lower()
@@ -67,6 +91,11 @@ def resolve_backend(name: str | None = None) -> str:
         raise ValueError(
             "backend 'numba' requested but numba is not importable; "
             "`pip install numba` or use backend 'numpy' / 'auto'.",
+        )
+    if name == "mlx" and not mlx_available():
+        raise ValueError(
+            "backend 'mlx' requested but mlx is not importable; "
+            "`pip install mlx` (Apple Silicon) or use 'numba' / 'numpy' / 'auto'.",
         )
     return name
 
@@ -149,3 +178,46 @@ def apply_rgb_tone(rgb: np.ndarray, curve: Any, *,
     # numpy reference: a DngSplineSolver exposes `.evaluate`; ACR3 is a callable.
     eval_fn = curve.evaluate if isinstance(curve, DngSplineSolver) else curve
     return _np_tone(rgb, eval_fn)
+
+
+# --- Whole-frame MLX (Metal GPU) render path -------------------------------
+
+
+def _get_mlx_renderer(profile):
+    """Cache an `MlxFaithfulRenderer` per profile object (per process). Uploads
+    the frame-invariant GPU constants once, so a sequence reuses them. Raises
+    `MlxUnsupported` for a profile outside the fast path."""
+    global _mlx_renderer, _mlx_renderer_key
+    if _mlx_renderer_key != id(profile):
+        from lrt_cinema.accel._mlx_kernels import MlxFaithfulRenderer
+        _mlx_renderer = MlxFaithfulRenderer(profile)
+        _mlx_renderer_key = id(profile)
+    return _mlx_renderer
+
+
+def mlx_render_frame_to_srgb(raw_path, profile, develop_ops=None,
+                             dcp_path=None, preview_scale: int = 1) -> np.ndarray:
+    """Full FAITHFUL sRGB colour render on the Metal GPU — one upload, one
+    download (decode → stages 2-9 → Stage-11 → Stage-12 faithful → sRGB encode).
+
+    Returns the display-encoded sRGB float array (H, W, 3) in [0, 1] (the writer
+    quantises it). Mirrors `pipeline.render_frame`'s preamble (decode + scene
+    kelvin + baseline exposure + black-render) then runs the whole colour path on
+    the GPU via `MlxFaithfulRenderer`. Raises `MlxUnsupported` for a profile/
+    config outside the fast path — the caller (cli worker) then falls back to the
+    numpy/numba per-stage path. FAITHFUL intent only (the perceptual EXR path is
+    not ported)."""
+    from lrt_cinema import pipeline as P
+    from lrt_cinema.ir import DevelopOps
+    ops = develop_ops if develop_ops is not None else DevelopOps()
+    renderer = _get_mlx_renderer(profile)  # may raise MlxUnsupported
+    cam, asn = P._decode_raw(raw_path, half_size=(preview_scale >= 2))
+    if preview_scale >= 2:
+        cam = P._block_downsample(cam, preview_scale // 2)
+    scene_kelvin = P.DEFAULT_SCENE_KELVIN
+    if ops.temperature_k is not None:
+        scene_kelvin = float(ops.temperature_k)
+        asn = P.kelvin_to_neutral(profile, scene_kelvin)
+    dng_be = P.read_dng_baseline_exposure(raw_path)
+    dbr = P.read_dcp_default_black_render(dcp_path) if dcp_path is not None else 0
+    return renderer.render(cam, asn, scene_kelvin, ops, dng_be, dbr)

@@ -327,6 +327,7 @@ def write_tiff_display(
     bit_depth: Literal[8, 16] = 16,
     icc_profile: bytes | None = None,
     provenance: dict | str | None = None,
+    pre_encoded: bool = False,
 ) -> Path:
     """Write a display-referred, gamma-encoded integer TIFF for the LRT
     round-trip (LRT → Render from Intermediate → Motion Blur).
@@ -346,6 +347,12 @@ def write_tiff_display(
     `provenance` is embedded in ImageDescription (JSON if a dict). It carries
     colour space / transfer / range so downstream tools self-describe; no
     timestamps, so renders are byte-reproducible.
+
+    `pre_encoded`: when True, `prophoto` is ALREADY the display-encoded
+    `colorspace` float [0, 1] (e.g. from the MLX GPU path, which encodes
+    on-device) — skip the ProPhoto→display conversion and quantise directly.
+    The ICC / provenance / NaN-scrub / clip path is otherwise identical, so the
+    emitted file is indistinguishable from the numpy-encoded one.
     """
     import tifffile
 
@@ -365,7 +372,7 @@ def write_tiff_display(
                 f"TIFF without a profile causes LRT colour/gamma shifts).",
             )
 
-    encoded = _prophoto_to_display(prophoto, colorspace)
+    encoded = prophoto if pre_encoded else _prophoto_to_display(prophoto, colorspace)
     # np.clip does NOT sanitize NaN (nan→clip→nan→uint cast→0): a non-finite
     # pixel would silently render solid black with no diagnostic. Scrub + warn
     # so upstream corruption is visible, never a silent black/white frame.

@@ -49,6 +49,14 @@ dev = [
 fast = [
     "numba>=0.59",
 ]
+# Optional Apple-Silicon Metal GPU backend (--backend mlx): runs the whole
+# faithful sRGB render on-device (~9x a heavily-graded full-res frame). The
+# environment marker makes this a NO-OP off Apple Silicon, so `pip install
+# .[gpu]` is safe (and silently skips mlx) on Linux/Intel — the renderer falls
+# back to numba/numpy there. NOT required.
+gpu = [
+    "mlx>=0.20; platform_system == 'Darwin' and platform_machine == 'arm64'",
+]
 # Optional extra for the auto-detect ColorChecker path (used only by the
 # real-fixture leg of tests/test_colorimetric.py). Heavier — pulls OpenCV —
 # so kept out of the base `dev` extra to keep `pip install -e .[dev]` light.
