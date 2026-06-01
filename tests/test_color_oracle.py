@@ -929,10 +929,14 @@ def test_oklch_no_top_clamp_preserves_overrange():
 
 
 def test_oklch_hue_constancy_under_lum_sweep():
-    """The measurable Abney win: in OKLCh a Luminance grade does NOT drift hue. A
-    fixed-(hue, chroma) input swept across L, with band Luminance engaged, must
-    come out at a near-constant OKLCh hue (variance < ~1°) — the hue-stability
-    that the faithful hexcone HSV path cannot give (DECISIONS.md §7)."""
+    """A Luminance grade must act on OKLCh L alone and NOT drift hue (the structural
+    basis of the §7 Abney/Bezold–Brücke advantage). A fixed-(hue, chroma) input
+    swept across L, with band Luminance engaged, comes out at a near-constant OKLCh
+    hue (span < ~1°). This guards that the Luminance op stays in OKLCh L — a wrong
+    space / per-channel lift would rotate hue here — not that the band math itself
+    is correct (the oracle + sensitivity legs carry that); with the Hue sliders 0,
+    `h_out = h` by construction, so this isolates the L-only / hue-preservation
+    property."""
     pp = colour.RGB_COLOURSPACES["ProPhoto RGB"]
     m_rgb_to_xyz = np.asarray(pp.matrix_RGB_to_XYZ)
     m_xyz_to_rgb = np.asarray(pp.matrix_XYZ_to_RGB)
@@ -960,15 +964,32 @@ def test_oklch_hue_constancy_under_lum_sweep():
 
 def test_oklch_neutrals_unaffected_by_lum_gate():
     """§0 / the chroma gate: a near-grey pixel (ill-defined hue) must NOT be pushed
-    by a colour band's Luminance slider — the OKLCh analogue of the faithful
-    `s_gate`. A grey wedge must stay grey even with a large band Luminance set."""
+    by a Luminance slider, while a saturated pixel under the SAME sliders IS lifted.
+    That contrast is the gate's whole purpose (the OKLCh analogue of the faithful
+    `s_gate`).
+
+    **Luminance is engaged on ALL eight bands** (`lum_mult = 1.6` independent of
+    hue), so the chroma gate `c_gate = clip(c/0.04, 0, 1)` is the ONLY thing that
+    can hold neutrals: a broken gate (`c_gate ≡ 1`) would lift greys by ~2.2 in
+    ProPhoto, which this test would catch. (A single-band slider would NOT exercise
+    the gate — pure greys land at OKLCh hue ≈228°, so a Red-band slider has ~zero
+    weight on them and they would be unchanged whether or not the gate works.)"""
     grey = np.array([
-        [[0.4, 0.4, 0.4]], [[0.18, 0.181, 0.179]], [[0.7, 0.7, 0.7]],
+        [[0.05, 0.05, 0.05]], [[0.4, 0.4, 0.4]], [[0.7, 0.7, 0.7]], [[0.95, 0.95, 0.95]],
     ], dtype=np.float64)
-    hsl = HslBands(luminance=(60.0, 0, 0, 0, 0, 0, 0, 0))  # Red-band Lum +60
-    out = _apply_hsl_perceptual(grey, hsl)
-    # Tiny residual is the OKLab round-trip float floor, not a real lift.
-    np.testing.assert_allclose(out, grey, atol=1e-3)
+    hsl = HslBands(luminance=(60.0,) * 8)  # lum_mult = 1.6 for ANY hue
+    grey_out = _apply_hsl_perceptual(grey, hsl)
+    # Pure greys have c≈1e-4 → c_gate≈0.0025 → a ~0.15% residual lift (the gate
+    # ramp, not a real lift); ~4.5e-3 in ProPhoto, three orders below a broken
+    # gate's ~2.2. The bound is the ramp, NOT the OKLab float floor.
+    np.testing.assert_allclose(grey_out, grey, atol=1e-2)
+
+    # Discriminator: a SATURATED pixel under the SAME all-band sliders IS lifted
+    # (c_gate=1 → full L×1.6). Neutral barely moves, saturated moves a lot — proof
+    # the gate gates on chroma rather than zeroing the Luminance op outright.
+    sat = np.array([[[0.05, 0.4, 0.95]]], dtype=np.float64)  # c≈0.37 → c_gate=1
+    sat_out = _apply_hsl_perceptual(sat, hsl)
+    assert np.max(np.abs(sat_out - sat)) > 0.1
 
 
 def test_oklch_bradford_constants_match_colour_science():
