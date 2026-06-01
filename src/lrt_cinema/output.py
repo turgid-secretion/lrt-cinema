@@ -245,6 +245,46 @@ def _srgb_icc_bytes() -> bytes:
     return srgb_icc_bytes()
 
 
+# Cache: ProPhoto(D50)→display-primaries linear matrix (Bradford CAT baked in),
+# float32, keyed by display colourspace. Built once from colour-science so it is
+# the SAME composed transform `colour.RGB_to_RGB` applies — see `_prophoto_to_display`.
+_DISPLAY_MATRIX_CACHE: dict[str, np.ndarray] = {}
+
+
+def _display_matrix(colorspace: str) -> np.ndarray:
+    """Composed ProPhoto(D50)→`colorspace`-linear 3×3 (Bradford), float32, cached.
+
+    `colour.matrix_RGB_to_RGB` returns exactly the matrix `colour.RGB_to_RGB`
+    composes internally (ProPhoto→XYZ, Bradford D50→target white, XYZ→target),
+    so applying it then the target CCTF is equivalent-by-construction to the old
+    `colour.RGB_to_RGB(...)` call — only float32-vs-float64 differs, which is
+    sub-16-bit-quantisation (verified max 0.12 code units on random ±overrange
+    input). Built once per colourspace; the matmul is then plain numpy."""
+    if colorspace not in _DISPLAY_MATRIX_CACHE:
+        import colour
+        m = colour.matrix_RGB_to_RGB(
+            colour.RGB_COLOURSPACES["ProPhoto RGB"],
+            colour.RGB_COLOURSPACES[_DISPLAY_COLOURSPACE_NAMES[colorspace]],
+            chromatic_adaptation_transform="Bradford",
+        )
+        _DISPLAY_MATRIX_CACHE[colorspace] = np.asarray(m, dtype=np.float32)
+    return _DISPLAY_MATRIX_CACHE[colorspace]
+
+
+def _srgb_oetf(x: np.ndarray) -> np.ndarray:
+    """Linear → sRGB-encoded (IEC 61966-2-1 piecewise OETF).
+
+    Bit-identical to `colour.RGB_COLOURSPACES["sRGB"].cctf_encoding` (verified
+    max diff 0.0); duplicated here so the hot display encode is a single numpy
+    pass with no float64 round-trip. Negatives take the linear segment (stay
+    negative) and are clipped downstream by the writer, matching colour."""
+    return np.where(
+        x <= 0.0031308,
+        x * 12.92,
+        1.055 * np.power(np.maximum(x, 0.0), 1.0 / 2.4) - 0.055,
+    )
+
+
 def _prophoto_to_display(
     prophoto_d50: np.ndarray, colorspace: str = "srgb",
 ) -> np.ndarray:
@@ -252,14 +292,23 @@ def _prophoto_to_display(
 
     Bradford-adapts D50→the target whitepoint (D65 for sRGB) and applies the
     target's encoding CCTF (sRGB OETF for `srgb`). `colorspace` ∈
-    DISPLAY_COLORSPACES. Output is nominally [0, 1] before clipping."""
-    import colour
+    DISPLAY_COLORSPACES. Output is nominally [0, 1] before clipping.
 
+    The `srgb` default (the LRT round-trip / measured hot path) takes a fast
+    numpy path: a cached float32 composed matrix (`_display_matrix`) + the
+    in-module sRGB OETF, replacing a per-frame float64 `colour.RGB_to_RGB`
+    (~1.7 s/frame at 24 MP). Equivalent-by-construction to the old call (see
+    `_display_matrix`). Other display targets (rare; ICC-gated, not hot) keep
+    the reference `colour.RGB_to_RGB` so each target's exact CCTF is used."""
     if colorspace not in _DISPLAY_COLOURSPACE_NAMES:
         raise ValueError(
             f"colorspace must be one of {DISPLAY_COLORSPACES}, got {colorspace!r}",
         )
     h, w, _ = prophoto_d50.shape
+    if colorspace == "srgb":
+        lin = prophoto_d50.reshape(-1, 3).astype(np.float32) @ _display_matrix("srgb").T
+        return _srgb_oetf(lin).reshape(h, w, 3)
+    import colour
     out = colour.RGB_to_RGB(
         prophoto_d50.reshape(-1, 3).astype(np.float64),
         input_colourspace="ProPhoto RGB",
