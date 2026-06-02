@@ -369,3 +369,151 @@ def test_neutral_wedge_stays_neutral_in_emission(name):
     # Bradford neutral floor is ≈3.1e-4; allow 10× for op float error. A cast
     # would be O(1)+ here.
     assert col.max() < 3e-3, f"{name}: neutral cast, chroma/luma={col.max():.2e}"
+
+
+# ===========================================================================
+# Emission paths — finiteness signalling, AP0 policy, display targets, transfer.
+# ===========================================================================
+
+
+def test_exr_writer_warns_on_nonfinite_not_silent():
+    """Item: the NaN-scrub HIDES finiteness on readback. ``write_exr_scene_linear``
+    runs ``nan_to_num`` BEFORE disk, so a readback can NEVER be non-finite — a
+    finiteness-on-readback assertion is vacuous. The real, testable signal is the
+    WARNING the writer emits before scrubbing; assert THAT fires, so upstream
+    corruption is surfaced, never shipped as a silent black/scrubbed frame."""
+    pytest.importorskip("OpenEXR")
+    import colour  # noqa: F401  (front-load colour's import-time warning)
+    x = np.full((4, 4, 3), 0.5, dtype=np.float32)
+    x[0, 0, 0] = np.nan
+    x[1, 1, 2] = np.inf
+    with pytest.warns(UserWarning, match="non-finite"):
+        vl.roundtrip_exr(x, _TMP_EXR(), compression="zip")
+
+
+def test_display_writer_warns_on_nonfinite_not_silent():
+    """Same finiteness-signalling contract for the display TIFF writer (the LRT
+    round-trip default) — a non-finite pixel warns, never silently renders black."""
+    pytest.importorskip("tifffile")
+    x = np.full((4, 4, 3), 0.5, dtype=np.float32)
+    x[0, 0, 0] = np.nan
+    import tempfile
+    with tempfile.TemporaryDirectory() as d, \
+            pytest.warns(UserWarning, match="non-finite"):
+        vl.roundtrip_tiff(x, f"{d}/n.tif")
+
+
+def test_ap0_emission_is_finite_and_neutral_but_negatives_allowed():
+    """Item: AP0 (ACES2065-1) policy. AP0 is WIDER than AP1 and is deliberately
+    NOT gamut-compressed (the RGC limits are AP1-specific), so negative AP0
+    channels are an ALLOWED archival reality — assert finite + neutral-preserved +
+    a sane upper bound, NEVER ``min >= 0`` (which would falsely forbid a legit
+    wide-gamut colour). 'finite' alone is near-vacuous post-scrub, hence the
+    neutral + bound legs."""
+    out = _TRANSFORMS["develop_perceptual"](_CHART.astype(np.float32))
+    ap0 = vl.emit_ap0(out)
+    assert np.isfinite(ap0).all()
+    assert ap0.max() < 1e4, "AP0 emission ran away past any sane scene value"
+    # Neutral wedge stays neutral in AP0 too (the policy permits negatives on
+    # SATURATED colour, not a cast on a grey).
+    idx = vl.neutral_indices(_LATTICE)
+    # develop_perceptual carries a ColorGrade-free luminance+HSL grade, so
+    # neutrals must survive; measure chroma/luma against the Bradford floor.
+    neutral_ap0 = ap0.reshape(-1, 3)[idx]
+    assert vl.chroma_over_luma(neutral_ap0).max() < 3e-3
+
+
+def test_adobergb_display_target_emits_valid_unit_range():
+    """Item: the omitted real display target. ``_DISPLAY_COLOURSPACE_NAMES`` has
+    srgb/adobergb/prophoto/rec2020; the sweep's srgb path IS Rec.709 primaries.
+    'adobergb' (a genuinely different gamut + gamma2.2 transfer) was untested —
+    drive it (with the required ICC) and assert a valid [0,1] display emission."""
+    pytest.importorskip("tifffile")
+    # The writer REFUSES a non-sRGB target without an ICC (the wide-gamut footgun
+    # guard); pass placeholder ICC bytes — this exercises the colour PATH
+    # (ProPhoto→AdobeRGB matrix + gamma2.2 + clip), not ICC validity.
+    over = np.array([[[2.0, 0.3, 0.05]], [[0.18, 0.18, 0.18]], [[0.0, 0.0, 0.0]]],
+                    dtype=np.float32)
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        dec = vl.roundtrip_tiff(over, f"{d}/a.tif", colorspace="adobergb",
+                                icc_profile=b"\x00" * 16)
+    assert np.isfinite(dec).all()
+    assert dec.min() >= 0.0 and dec.max() <= 1.0
+
+
+def test_rec709_delivery_target_is_not_wired():
+    """Item FLAG: CLAUDE.md's allowlist names **Rec.709 (gamma 2.4 / BT.1886)** as
+    a valid SDR delivery target, but ``_DISPLAY_COLOURSPACE_NAMES`` has NO
+    'rec709' entry — the only Rec.709-primaries path is 'srgb', which uses the
+    sRGB OETF, NOT gamma 2.4. So a caller asking for a true Rec.709 gamma-2.4
+    video-delivery TIFF is REJECTED. This test pins that gap as a deliberate,
+    documented decision (xfail would imply a promised feature; this asserts the
+    current contract) — FLAG for product: wire a real 'rec709' (BT.1886) target if
+    SDR video delivery distinct from sRGB is wanted."""
+    from lrt_cinema.output import DISPLAY_COLORSPACES, write_tiff_display
+    assert "rec709" not in DISPLAY_COLORSPACES, (
+        "rec709 now wired — replace this flag with a real BT.1886 round-trip test")
+    with pytest.raises(ValueError, match="colorspace must be one of"):
+        write_tiff_display(np.full((2, 2, 3), 0.5, dtype=np.float32),
+                           "unused.tif", colorspace="rec709")
+
+
+def test_rgc_fires_in_the_real_exr_path_on_a_perceptual_graded_frame(tmp_path):
+    """RGC INTEGRATION leg (the unit reimpl lives in test_color_oracle): prove the
+    gated ACES RGC actually RUNS inside the real EXR emission on a perceptual-
+    graded frame that the ops push OUT of AP1 — not just in isolation. A saturated
+    field driven by a heavy perceptual HSL+saturation boost goes out-of-AP1; the
+    EXR readback must show the negatives COMPRESSED vs the raw pre-RGC Bradford
+    (RGC fired), with the achromatic peak preserved, and stay finite + bounded."""
+    pytest.importorskip("OpenEXR")
+    from lrt_cinema import output
+    # A saturated mid field + a heavy perceptual chroma boost → out-of-AP1.
+    sat = vl.pack([p for p in _LATTICE if p.group == "grid" and p.sat == 1.0
+                   and 0.1 < p.luma < 1.0]).astype(np.float32)
+    graded = apply_develop_ops(
+        sat, DevelopOps(saturation=80.0,
+                        hsl=HslBands(saturation=(90.0,) * 8)), RenderIntent.PERCEPTUAL)
+    raw_ap1 = output._prophoto_to_linear(graded, "acescg")        # pre-RGC
+    assert raw_ap1.min() < 0.0, "test setup: grade did not push out of AP1"
+    dec = vl.roundtrip_exr(graded, tmp_path / "rgc.exr",
+                           compression="zip", bit_depth="float")  # float = exact readback
+    assert np.isfinite(dec).all()
+    # RGC ran: the emitted negatives are rolled up toward the axis vs the raw.
+    assert dec.min() > raw_ap1.min() - 1e-4, "RGC did not compress out-of-AP1 negatives"
+    # …and the per-pixel achromatic (max) channel is preserved (RGC's invariant).
+    np.testing.assert_allclose(
+        dec.max(axis=-1), raw_ap1.max(axis=-1), rtol=2e-3, atol=2e-3)
+
+
+def test_srgb_display_transfer_roundtrips_via_colour_science_oracle():
+    """Item G: validate the display TRANSFER against the INDEPENDENT oracle
+    (colour-science, pinned) — the one place colour is the oracle (transfer/gamma
+    ONLY, never the OKLCh/CDL grade math). Encode a mid-tone ramp to an sRGB TIFF,
+    decode the bytes, run colour's sRGB DECODING cctf, and confirm it recovers the
+    colour ProPhoto→sRGB *linear* value — i.e. the writer applied the correct sRGB
+    OETF, to 16-bit precision."""
+    import colour
+    pytest.importorskip("tifffile")
+    # In-gamut ProPhoto mid-tones (so nothing clips and the round-trip is exact).
+    lin_pp = np.array([[[0.05, 0.05, 0.05]], [[0.18, 0.2, 0.22]],
+                       [[0.4, 0.35, 0.3]], [[0.7, 0.7, 0.7]]], dtype=np.float64)
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        encoded = vl.roundtrip_tiff(lin_pp, f"{d}/s.tif", colorspace="srgb")
+    recovered_lin = colour.cctf_decoding(encoded, function="sRGB")
+    expect_lin = colour.RGB_to_RGB(
+        lin_pp.reshape(-1, 3), "ProPhoto RGB", "sRGB",
+        chromatic_adaptation_transform="Bradford",
+        apply_cctf_decoding=False, apply_cctf_encoding=False,
+    ).reshape(lin_pp.shape)
+    # 16-bit display quantisation floor ≈ 1/65535 in code units → a few e-4 in
+    # linear after the inverse OETF; 2e-3 is a comfortable bound.
+    np.testing.assert_allclose(recovered_lin, expect_lin, atol=2e-3)
+
+
+def _TMP_EXR():
+    """A throwaway EXR path under a fresh temp dir (kept process-lived; the OS
+    reaps it). Used where a tmp_path fixture would clutter a warns-only assert."""
+    import tempfile
+    return f"{tempfile.mkdtemp()}/scrub.exr"

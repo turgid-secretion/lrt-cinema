@@ -371,3 +371,52 @@ def test_preset_overrides_target(tmp_path, capsys):
                "--dry-run", "--quiet"])
     assert rc == 0
     assert "preset=lrtimelapse" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# Dropped-op warning — the "never hidden" invariant at the CLI layer.
+#
+# The drop-warning is `sys.stderr.write` (user-facing CLI output), NOT
+# `warnings.warn`, so it is asserted via capsys, not pytest.warns. Under FAITHFUL
+# the perceptual-only knobs (Highlights/Shadows/Whites, Texture/Clarity) are
+# dropped and MUST be surfaced per-field with a frame count; under PERCEPTUAL
+# they drive the ops and must NOT warn (DECISIONS.md §5/§7).
+# ---------------------------------------------------------------------------
+
+
+def test_dropped_ops_warned_under_faithful(capsys):
+    from lrt_cinema.cli import _warn_dropped_ops
+    from lrt_cinema.ir import DevelopOps, RenderIntent
+    per_frame = [
+        DevelopOps(highlights=40.0, shadows=-20.0, whites=15.0,
+                   texture=30.0, clarity=25.0),
+        DevelopOps(),  # a clean frame → the count must be 1/2, not 2/2
+    ]
+    _warn_dropped_ops(per_frame, RenderIntent.FAITHFUL)
+    err = capsys.readouterr().err
+    # Every dropped knob is surfaced, by its crs:* tag, with the frame count …
+    for tag in ("Highlights2012", "Shadows2012", "Whites2012", "Texture", "Clarity2012"):
+        assert f"crs:{tag} set on 1/2 frame" in err, f"{tag} drop not warned"
+    # … and the warning names the perceptual path as where the math is honoured.
+    assert "perceptual" in err.lower()
+
+
+def test_dropped_ops_not_warned_under_perceptual(capsys):
+    """Under PERCEPTUAL the same knobs DRIVE the ops (DR-compression / Texture-
+    Clarity) — they are not dropped, so there must be NO drop warning (warning
+    there would be a false 'these won't apply' to the user)."""
+    from lrt_cinema.cli import _warn_dropped_ops
+    from lrt_cinema.ir import DevelopOps, RenderIntent
+    per_frame = [DevelopOps(highlights=40.0, texture=30.0)]
+    _warn_dropped_ops(per_frame, RenderIntent.PERCEPTUAL)
+    assert capsys.readouterr().err == ""
+
+
+def test_unset_dropped_ops_produce_no_warning(capsys):
+    """No false positives: a render with NONE of the dropped knobs set is silent
+    even under faithful (the warning fires only on a SET-but-dropped field)."""
+    from lrt_cinema.cli import _warn_dropped_ops
+    from lrt_cinema.ir import DevelopOps, RenderIntent
+    _warn_dropped_ops([DevelopOps(exposure_ev=1.0, contrast=20.0)],
+                      RenderIntent.FAITHFUL)
+    assert capsys.readouterr().err == ""
