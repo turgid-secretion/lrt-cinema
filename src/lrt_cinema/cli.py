@@ -187,6 +187,32 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     render.add_argument(
+        "--backend", default="auto", choices=("auto", "numpy", "numba", "mlx"),
+        help=(
+            "Per-pixel compute backend (default: auto). numpy = the reference "
+            "(no extra dep, the ΔE-gate path); numba = fused multi-core CPU JIT "
+            "kernels (DCP-render stages, colour-identical to numpy); mlx = the "
+            "Apple-Silicon Metal GPU, which runs the WHOLE faithful sRGB-TIFF "
+            "render incl. Stage-12 grade on-device (~2x identity / ~9x a heavily-"
+            "graded full-res frame; mean ΔE2000 < 1e-4 vs numpy; faithful sRGB "
+            "only — falls back to numba/numpy for EXR/perceptual/unsupported "
+            "profiles); auto = numba if installed else numpy. With >1 CPU worker, "
+            "intra-frame numba threads are capped to cores/workers."
+        ),
+    )
+    render.add_argument(
+        "--preview-scale", dest="preview_scale", type=int, default=1,
+        choices=(1, 2, 4, 8),
+        help=(
+            "Render a low-resolution PREVIEW at ~1/N linear resolution for "
+            "rapid grade/sequence iteration (default 1 = full delivery res). "
+            "2/4/8 use a fast 2x2-bin demosaic + area downsample, so frames "
+            "render up to ~30x faster. PREVIEW IS NOT COLOUR-EXACT and is "
+            "exempt from the ΔE gate — for visual iteration, not the LRT "
+            "round-trip / final delivery."
+        ),
+    )
+    render.add_argument(
         "--no-dng-convert", dest="no_dng_convert",
         action="store_true", default=False,
         help=(
@@ -217,6 +243,9 @@ class _RenderJob:
     no_dng_convert: bool
     dng_cache_dir: Path
     intent: RenderIntent = RenderIntent.FAITHFUL
+    backend: str = "numpy"        # resolved concrete backend ("numpy"|"numba")
+    threads_per_worker: int = 1   # numba intra-frame thread cap (oversubscription guard)
+    preview_scale: int = 1        # 1 = full res; 2/4/8 = preview
 
 
 @dataclass
@@ -232,11 +261,8 @@ def _render_one_frame(job: _RenderJob) -> _RenderResult:
     output writer. Heavy imports (rawpy, OpenEXR, colour) deferred to here
     so the parent process — and `--dry-run` — stays slim."""
     try:
-        # Lazy imports — these are only needed inside the worker.
-        from lrt_cinema.develop_ops import apply_develop_ops
+        from lrt_cinema import accel
         from lrt_cinema.dng_convert import resolve_render_input
-        from lrt_cinema.output import write_preset_output
-        from lrt_cinema.pipeline import render_frame
 
         if job.dcp_path is not None:
             profile = (
@@ -253,21 +279,62 @@ def _render_one_frame(job: _RenderJob) -> _RenderResult:
         dng_path = resolve_render_input(
             job.src_raw, job.dng_cache_dir, no_convert=job.no_dng_convert,
         )
+        provenance = {
+            "source_frame": job.src_raw.name,
+            "frame_index": job.frame_index,
+            "preset": job.preset,
+        }
+        if job.preview_scale > 1:
+            # Self-describe a preview so a downstream tool can't mistake it for
+            # a colour-exact delivery frame.
+            provenance["preview"] = True
+            provenance["preview_scale"] = job.preview_scale
+
+        # MLX (Metal GPU) fast path — the FAITHFUL sRGB-TIFF target only. One
+        # upload / one download: the whole colour + Stage-12 grade + sRGB encode
+        # runs on-device (accel.mlx_render_frame_to_srgb). For anything outside
+        # that (non-FM profile, no ProfileToneCurve, EXR/perceptual) it raises
+        # MlxUnsupported and we fall through to the CPU path.
+        if (job.backend == "mlx" and job.preset == "lrtimelapse"
+                and job.intent is RenderIntent.FAITHFUL):
+            try:
+                from lrt_cinema.output import write_tiff_display
+                encoded = accel.mlx_render_frame_to_srgb(
+                    dng_path, profile, develop_ops=job.ops,
+                    dcp_path=job.dcp_path, preview_scale=job.preview_scale,
+                )
+                write_tiff_display(
+                    encoded, job.dst_stem.with_suffix(".tif"),
+                    colorspace="srgb", bit_depth=16,
+                    provenance=provenance, pre_encoded=True,
+                )
+                return _RenderResult(job.frame_index, job.src_raw, ok=True)
+            except accel.MlxUnsupported:
+                pass  # fall through to the numpy/numba CPU path
+
+        # CPU path. If MLX was requested but fell back, use numba (not the
+        # per-stage 'mlx'→numpy fallback, which would be slow); else the
+        # resolved backend. Cap numba threads to avoid pool oversubscription.
+        os.environ["LRT_CINEMA_BACKEND"] = (
+            ("numba" if accel.numba_available() else "numpy")
+            if job.backend == "mlx" else job.backend
+        )
+        accel.set_threads(job.threads_per_worker)
+        from lrt_cinema.develop_ops import apply_develop_ops
+        from lrt_cinema.output import write_preset_output
+        from lrt_cinema.pipeline import render_frame
+
         # cinema-linear-master skips DCP LookTable + ProfileToneCurve
         # (Stages 8 + 9) for HDR headroom. LR PV2012 ops (Stages 11+12)
         # still apply on top of the Stage 7 output.
         stop_after_stage = 7 if job.preset in STAGE_7_PRESETS else 9
         result = render_frame(
             dng_path, profile, dcp_path=job.dcp_path, develop_ops=job.ops,
-            stop_after_stage=stop_after_stage,
+            stop_after_stage=stop_after_stage, preview_scale=job.preview_scale,
         )
         with_dev_ops = apply_develop_ops(result.prophoto, job.ops, job.intent)
         write_preset_output(
-            with_dev_ops, job.dst_stem, job.preset,
-            provenance={
-                "source_frame": job.src_raw.name,
-                "frame_index": job.frame_index,
-            },
+            with_dev_ops, job.dst_stem, job.preset, provenance=provenance,
         )
         return _RenderResult(job.frame_index, job.src_raw, ok=True)
     except Exception as exc:
@@ -524,6 +591,31 @@ def _cmd_render(args: argparse.Namespace) -> int:
 
     _warn_dropped_ops(per_frame, intent)
 
+    # Resolve the compute backend once (so all workers agree) and cap each
+    # worker's intra-frame numba threads to cores/workers — N processes each
+    # spinning all cores would thrash. workers==1 (latency/preview) keeps all
+    # cores for the single frame.
+    from lrt_cinema import accel
+    backend = accel.resolve_backend(args.backend)
+    cpu = os.cpu_count() or 2
+    # numba (and an mlx→numba fallback) want cores/workers threads each; numpy
+    # and the mlx GPU path don't use numba threads.
+    threads_per_worker = (max(1, cpu // max(1, args.workers))
+                          if backend in ("numba", "mlx") else 1)
+    sys.stderr.write(
+        f"info: compute backend = {backend}"
+        + (f" (GPU; CPU fallback {threads_per_worker} thread(s)/worker)\n"
+           if backend == "mlx"
+           else f" ({threads_per_worker} thread(s)/worker)\n" if backend == "numba"
+           else "\n"),
+    )
+    if args.preview_scale > 1:
+        sys.stderr.write(
+            f"info: PREVIEW mode — rendering at ~1/{args.preview_scale} resolution "
+            f"(fast 2x2-bin demosaic + downsample). NOT colour-exact / not for "
+            f"the LRT round-trip; for visual iteration only.\n",
+        )
+
     jobs = []
     for i in range(args.from_frame, to_frame):
         src_raw = args.input / seq.source_frames[i]
@@ -538,6 +630,9 @@ def _cmd_render(args: argparse.Namespace) -> int:
             no_dng_convert=args.no_dng_convert,
             dng_cache_dir=dng_cache_dir,
             intent=intent,
+            backend=backend,
+            threads_per_worker=threads_per_worker,
+            preview_scale=args.preview_scale,
         ))
 
     if args.dry_run:
@@ -545,6 +640,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
             f"dry-run: would render {len(jobs)} frame(s) "
             f"[{args.from_frame}..{to_frame}) → {args.output} "
             f"(target={args.target}, preset={preset}, intent={intent.value}, "
+            f"backend={backend}, preview_scale={args.preview_scale}, "
             f"workers={args.workers}).\n",
         )
         return 0
