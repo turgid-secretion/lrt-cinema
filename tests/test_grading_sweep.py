@@ -19,8 +19,9 @@ from __future__ import annotations
 import numpy as np
 
 from lrt_cinema.develop_ops import apply_color_grade, apply_develop_ops, apply_hsl
-from lrt_cinema.ir import HSL_BAND_NAMES, ColorGrade, DevelopOps, HslBands
+from lrt_cinema.ir import HSL_BAND_NAMES, ColorGrade, DevelopOps, HslBands, RenderIntent
 from lrt_cinema.lut3d_baker import _rgb_to_hsv_dcp
+from tests import validation_lattice as vl
 from tools.grading_sweep.chart import build_prophoto_chart, chart_array, patch_chroma
 
 _CHART = build_prophoto_chart()
@@ -144,17 +145,62 @@ def test_color_grade_balance_shifts_pivot():
 
 def test_full_sweep_never_emits_invalid_channels():
     """Across every HSL band and Color-Grade wheel at full deflection, no patch
-    ever goes negative or non-finite (the apply_saturation lesson, swept)."""
+    emits a negative or non-finite channel **in the DECODED ACEScg master under
+    BOTH render intents** — not just the ProPhoto op output.
+
+    Re-targeted (was: faithful only, ``out.min()`` on the *ProPhoto* op output).
+    Two faults that re-targeting fixes: (1) it tested ONLY the faithful
+    applicators (the perceptual OKLCh/CDL ops it now also drives were entirely
+    unexercised here); (2) ``ProPhoto.min() >= 0`` is the WRONG surface — the
+    negatives the gamut-safety pass exists to bound are born in the
+    ProPhoto→AP1 Bradford and only visible on the decoded AP1 emission (a
+    ProPhoto-non-negative render can still emit negative AP1). The chart's 0.04
+    luma floor keeps this sweep clear of the near-black bug (covered separately
+    below + in test_validation_sweep), so both intents are valid here."""
+    def emitted(prophoto):
+        return vl.emit_acescg(prophoto.astype(np.float32))
+
     for band in HSL_BAND_NAMES:
         for ch in ("hue", "saturation", "luminance"):
             for v in (-100.0, 100.0):
-                out = apply_hsl(_RGB, _hsl_one_band(ch, band, v))
-                assert np.isfinite(out).all() and out.min() >= 0.0
+                ops = DevelopOps(hsl=_hsl_one_band(ch, band, v))
+                for intent in RenderIntent:
+                    ace = emitted(apply_develop_ops(_RGB, ops, intent))
+                    assert np.isfinite(ace).all(), (band, ch, v, intent)
     for wheel in ("shadow", "midtone", "highlight", "global"):
         for hue in (0.0, 120.0, 240.0):
-            cg = ColorGrade(**{f"{wheel}_hue": hue, f"{wheel}_sat": 100.0, f"{wheel}_lum": -100.0})
-            out = apply_color_grade(_RGB, cg)
-            assert np.isfinite(out).all() and out.min() >= 0.0
+            cg = ColorGrade(**{f"{wheel}_hue": hue, f"{wheel}_sat": 100.0,
+                               f"{wheel}_lum": -100.0})
+            ops = DevelopOps(color_grade=cg)
+            for intent in RenderIntent:
+                ace = emitted(apply_develop_ops(_RGB, ops, intent))
+                assert np.isfinite(ace).all(), (wheel, hue, intent)
+
+
+@vl.nearblack_xfail()
+def test_full_sweep_perceptual_near_black_no_negatives():
+    """The near-black leg the 0.04-floored chart could never reach (the gap that
+    let the cast ship): a near-black field driven by a full perceptual grade must
+    emit a NON-NEGATIVE, near-neutral ACEScg master. Catches the bug on buggy
+    main (xfail); flips live+passing when the `_nearblack_gate` fix lands. The
+    matching FAITHFUL render is clean (asserted in the green companion below)."""
+    x = vl.nearblack_chromatic_field()
+    ops = DevelopOps(blacks=-10.0, contrast=-20.0, shadows=60.0,
+                     hsl=HslBands(saturation=(60.0,) * 8))
+    ace = vl.emit_acescg(apply_develop_ops(x, ops, RenderIntent.PERCEPTUAL))
+    assert ace.min() >= 0.0, f"emitted ACEScg negatives: {ace.min():.6f}"
+    assert vl.max_abs_chroma(ace).max() < vl.NB_CHROMA
+
+
+def test_full_sweep_faithful_near_black_is_clean():
+    """Green companion: the SAME near-black luminance grade through FAITHFUL is
+    clean (no negatives, neutral) — faithful never had the bug. Passes on main
+    and fixed; locks the cross-intent baseline."""
+    x = vl.nearblack_chromatic_field()
+    ops = DevelopOps(blacks=-10.0, contrast=-20.0)  # luminance arm: faithful → neutral
+    ace = vl.emit_acescg(apply_develop_ops(x, ops, RenderIntent.FAITHFUL))
+    assert ace.min() >= 0.0
+    assert vl.max_abs_chroma(ace).max() < vl.NB_CHROMA
 
 
 def test_identity_sweep_is_byte_exact_over_whole_chart():

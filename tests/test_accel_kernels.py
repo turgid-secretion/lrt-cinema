@@ -30,8 +30,18 @@ _TOL = 1e-4
 
 
 def _adversarial_pixels(seed: int = 0) -> np.ndarray:
-    """(N, 3) float32 covering the branches the kernels must get right."""
+    """(N, 3) float32 covering the branches the kernels must get right.
+
+    Includes a NEAR-BLACK block (log-spaced neutrals down to 1e-5 + near-black
+    chromatic slivers) — the L<0.01 region a uniform ``rand`` (median ~0.5) never
+    samples, and exactly the region the perf kernels were NOT exercised in
+    (synthetic-pixel-tested only). The faithful kernels carry no near-black bug
+    (that is the perceptual path), but they MUST stay numpy-identical and
+    neutral-preserving down here too — this block makes the equivalence + the
+    near-black neutral-preservation tests below cover it."""
     rng = np.random.default_rng(seed)
+    nb_neutral = np.geomspace(1e-5, 1e-2, 30, dtype=np.float32)[:, None] * np.ones(3, np.float32)
+    nb_chromatic = nb_neutral[:20] * np.array([1.0, 0.6, 0.3], np.float32)  # near-black slivers
     blocks = [
         rng.random((4000, 3), dtype=np.float32),                 # in-range
         rng.random((1000, 3), dtype=np.float32) * 1.6,           # overrange (>1)
@@ -39,6 +49,8 @@ def _adversarial_pixels(seed: int = 0) -> np.ndarray:
         np.zeros((10, 3), dtype=np.float32),                     # black
         np.ones((10, 3), dtype=np.float32),                      # white (clipped)
         np.full((10, 3), 0.5, dtype=np.float32),                 # neutral grey (r==g==b)
+        nb_neutral,                                              # near-black neutrals
+        nb_chromatic,                                            # near-black chromatic
     ]
     px = np.concatenate(blocks, axis=0)
     # Force exact two-channel ties (the argsort/scatter edge in the tone curve).
@@ -46,6 +58,13 @@ def _adversarial_pixels(seed: int = 0) -> np.ndarray:
     px[200:400, 2] = px[200:400, 0]        # r == b
     px[400:600, 2] = px[400:600, 1]        # g == b
     return np.ascontiguousarray(px, dtype=np.float32)
+
+
+def _nearblack_neutral_wedge() -> np.ndarray:
+    """A pure-neutral wedge (r==g==b) from deep near-black to mid-tone — for the
+    near-black neutral-PRESERVATION invariant (distinct from raw equivalence)."""
+    v = np.geomspace(1e-5, 0.5, 48, dtype=np.float32)
+    return np.ascontiguousarray(np.stack([v, v, v], axis=-1))
 
 
 def _synthetic_cube(srgb_gamma: bool, seed: int = 1):
@@ -240,3 +259,59 @@ def test_hsl_preserves_neutrals_on_numba():
     px = np.stack([v, v, v], axis=-1)
     out = accel.apply_hsl(px, _hsl_bands_op(), backend="numba")
     assert np.allclose(out[:, 0], out[:, 1]) and np.allclose(out[:, 1], out[:, 2])
+
+
+# --- near-black invariants on the accel FAITHFUL ops (perf kernels are new + ---
+# synthetic-pixel-tested only; the L<0.01 region was the suite's blind spot). ---
+
+
+@pytest.mark.parametrize("op,arg", [
+    ("apply_saturation", 80.0), ("apply_vibrance", 80.0),
+])
+def test_faithful_scalar_op_preserves_nearblack_neutrals_on_numba(op, arg):
+    """B/D at near-black: a near-black NEUTRAL wedge stays neutral (r==g==b) under
+    the numba Saturation/Vibrance kernels — a saturation multiplier on a
+    zero-chroma pixel is a no-op at EVERY luma, incl. the L<1e-3 tail the perf
+    kernel was never tested at. Guards a near-black neutral-cast regression in the
+    new kernels (matches the numpy reference identically)."""
+    wedge = _nearblack_neutral_wedge()
+    out = getattr(accel, op)(wedge, arg, backend="numba")
+    ref = getattr(accel, op)(wedge, arg, backend="numpy")
+    assert np.allclose(out[:, 0], out[:, 1]) and np.allclose(out[:, 1], out[:, 2]), \
+        "near-black neutral cast on numba"
+    assert np.max(np.abs(out.astype(np.float64) - ref.astype(np.float64))) < _TOL
+
+
+def test_faithful_hsl_preserves_nearblack_neutrals_on_numba():
+    """B/D at near-black for the HSL kernel: the s_gate must protect near-black
+    neutrals (ill-defined hue) at every luma down to 1e-5 — they stay neutral
+    under an engaged 8-band HSL, on numba, matching numpy."""
+    wedge = _nearblack_neutral_wedge()
+    out = accel.apply_hsl(wedge, _hsl_bands_op(), backend="numba")
+    ref = accel.apply_hsl(wedge, _hsl_bands_op(), backend="numpy")
+    assert np.allclose(out[:, 0], out[:, 1]) and np.allclose(out[:, 1], out[:, 2])
+    assert np.max(np.abs(out.astype(np.float64) - ref.astype(np.float64))) < _TOL
+
+
+@pytest.mark.parametrize("op,mk", [
+    ("apply_saturation", lambda: 80.0),
+    ("apply_vibrance", lambda: 80.0),
+    ("apply_hsl", _hsl_bands_op),
+    ("apply_color_grade", _color_grade_op),
+])
+def test_faithful_accel_ops_no_negatives_on_nearblack_chromatic_numba(op, mk):
+    """C at near-black: the faithful numba kernels emit NO negative ProPhoto
+    channel on near-black chromatic slivers (incl. the degenerate single-channel
+    shape) — the apply_saturation [0,1]-clamp lesson must hold on the kernel path
+    too, at near-black, where it was never exercised. (ColorGrade legitimately
+    TINTS neutrals, so it is checked for no-negatives, not neutral-preservation.)"""
+    v = np.geomspace(1e-5, 5e-3, 24, dtype=np.float32)[:, None]
+    nb = np.ascontiguousarray(
+        np.concatenate([
+            v * np.array([1.0, 0.05, 0.02], np.float32),   # near-black saturated red
+            v * np.array([0.02, 1.0, 0.05], np.float32),   # green
+            v * np.array([0.02, 0.05, 1.0], np.float32),   # blue
+        ], axis=0))
+    out = getattr(accel, op)(nb, mk(), backend="numba")
+    assert np.isfinite(out).all()
+    assert out.min() >= 0.0, f"{op}: negative ProPhoto at near-black: {out.min():.2e}"
