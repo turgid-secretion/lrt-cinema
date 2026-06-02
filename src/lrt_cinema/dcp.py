@@ -584,9 +584,11 @@ def kelvin_tint_to_xy(kelvin: float, tint: float = 0.0) -> tuple[float, float]:
     v_locus = f * lo[2] + (1 - f) * hi[2]
 
     # Tint offset along the perpendicular to the locus at that mired.
-    # DNG SDK applies tint after dividing by an "Anti_Tint_Scale" of
-    # 3000 — i.e. the user-facing tint=±150 ≈ 5% of locus orthogonal
-    # length on the (u, v) plane. We follow the same convention.
+    # DNG SDK (`dng_temperature.cpp`) uses `kTintScale = -3000` — the sign
+    # matters: a POSITIVE ACR Tint slider (magenta) moves the *white point*
+    # toward GREEN, so neutralising it tints the IMAGE magenta (the slider's
+    # documented direction). `tint=±150 ≈ 5%` of locus orthogonal length on
+    # the (u, v) plane. The negative scale is load-bearing once tint != 0.
     slope_lo = 1.0 / np.sqrt(1.0 + lo[3] * lo[3])
     slope_hi = 1.0 / np.sqrt(1.0 + hi[3] * hi[3])
     du_lo, dv_lo = slope_lo, lo[3] * slope_lo
@@ -596,7 +598,7 @@ def kelvin_tint_to_xy(kelvin: float, tint: float = 0.0) -> tuple[float, float]:
     norm = np.sqrt(du * du + dv * dv)
     du, dv = du / norm, dv / norm
 
-    offset = tint / 3000.0
+    offset = tint / -3000.0
     u = u_locus + du * offset
     v = v_locus + dv * offset
 
