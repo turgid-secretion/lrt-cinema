@@ -459,6 +459,44 @@ def test_rec709_delivery_target_is_not_wired():
                            "unused.tif", colorspace="rec709")
 
 
+def test_dwab_is_lossy_but_lossless_codec_is_exact_spot_check(tmp_path):
+    """Item: spot-check the production DWAB default SEPARATELY, looser tolerance.
+    DWAB is DCT-LOSSY — it can quantise a flat near-black cast away (a false green
+    on buggy code), which is exactly WHY the near-black math legs pin a lossless
+    codec. Here a moderate in-gamut frame confirms: the lossless (zip) round-trip
+    is ~exact, while DWAB only matches to a looser visually-lossless tolerance —
+    documenting the distinction the math legs rely on."""
+    pytest.importorskip("OpenEXR")
+    mid = vl.pack([p for p in _LATTICE if p.group == "grid" and p.sat == 0.5
+                   and 0.1 < p.luma < 1.0]).astype(np.float32)
+    graded = apply_develop_ops(mid, DevelopOps(saturation=30.0, contrast=20.0),
+                               RenderIntent.PERCEPTUAL)
+    exact = vl.roundtrip_exr(graded, tmp_path / "z.exr", compression="zip",
+                             bit_depth="float")
+    lossy = vl.roundtrip_exr(graded, tmp_path / "d.exr", compression="dwab",
+                             bit_depth="half")
+    ref = vl.emit_acescg(graded).astype(np.float64)
+    assert np.max(np.abs(exact - ref)) < 1e-3, "lossless zip/float is not exact"
+    assert np.isfinite(lossy).all()
+    # DWAB matches only loosely (it IS lossy) — a much wider bound than zip.
+    np.testing.assert_allclose(lossy, ref, atol=5e-2)
+
+
+def test_rec2020_display_target_emits_valid_unit_range():
+    """Item (emissions list): the rec2020 display target — same ICC-gated path as
+    adobergb, a DIFFERENT (BT.2020) gamut. Drive it and assert a valid [0,1]
+    display emission, completing the display-colourspace allowlist coverage."""
+    pytest.importorskip("tifffile")
+    over = np.array([[[2.0, 0.3, 0.05]], [[0.18, 0.18, 0.18]], [[0.0, 0.0, 0.0]]],
+                    dtype=np.float32)
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        dec = vl.roundtrip_tiff(over, f"{d}/r.tif", colorspace="rec2020",
+                                bit_depth=16, icc_profile=b"\x00" * 16)
+    assert np.isfinite(dec).all()
+    assert dec.min() >= 0.0 and dec.max() <= 1.0
+
+
 def test_rgc_fires_in_the_real_exr_path_on_a_perceptual_graded_frame(tmp_path):
     """RGC INTEGRATION leg (the unit reimpl lives in test_color_oracle): prove the
     gated ACES RGC actually RUNS inside the real EXR emission on a perceptual-
