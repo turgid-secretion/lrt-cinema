@@ -51,6 +51,17 @@ from lrt_cinema.lut3d_baker import _hsv_to_rgb_dcp
 # strict flag still fires if `main` is fixed without this sentinel (forcing the
 # line updated). Two-sided-verified vs fix/perceptual-nearblack: red on main,
 # green-live with the guard.
+#
+# FOLLOW-UP (do once fix/perceptual-nearblack is PERMANENTLY on main): convert
+# these catchers to UNCONDITIONAL live tests (delete the conditional — keep the
+# assertions). The known limit of the conditional form: it keys "is this a
+# catcher" on the guard's EXISTENCE, so a future DELETION of `_nearblack_gate`
+# would flip BUG_PRESENT back to True and report the reintroduced cast as XFAIL
+# (green) — re-blinding the net to its own bug class. That regression IS still
+# caught post-merge by the fix branch's own unconditional
+# `test_develop_ops.py::test_perceptual_nearblack_*`, but these catchers should
+# not lean on that indefinitely. (An always-live version cannot be added now —
+# it would fail on this pre-fix branch.)
 BUG_PRESENT = not hasattr(_do, "_nearblack_gate")
 
 # Near-black chroma bound (absolute, AP1 scale). The bug blows a near-black
