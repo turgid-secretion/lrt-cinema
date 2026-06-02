@@ -525,6 +525,51 @@ rename — are pure impl, see CHANGELOG):
    amendment (Lightroom applies Basic tone before Color Grading). Both ops remain
    byte-exact no-ops at zero sliders, so the ship gate is still untouched.
 
+**Amendment (2026-06-01) — perceptual NEAR-BLACK stability guard (a fix-class, not a
+new op).** The shipped perceptual master turned near-black NEUTRAL pixels into a
+saturated red/blue cast (and ~0.35% negative AP1 channels) in the ACEScg EXR; faithful
+rendered the identical grade with neutral shadows + zero negatives. **Root cause (proven
+by per-op isolation on the D750 gym frame, NOT the originally-hypothesised OKLCh/ACEScct
+toe explosion):** an interaction between two intent-INDEPENDENT-then-perceptual stages —
+(1) `apply_blacks_2012` (Stage 11, shared by both intents) subtracts a uniform bias and
+floors at 0, so a dark slightly-chromatic pixel loses its smaller channels to *exactly* 0,
+leaving a degenerate single-channel near-black pixel (e.g. `[0,0,2.6e-6]`); (2) a
+shadow-LIFTING perceptual reapply (Contrast<0; +Shadows DR-compression; Texture) forms
+`ratio = lum_out/lum`, which → ∞ as lum → 0 and multiplies that degeneracy into a bright
+false cast — which the ProPhoto→AP1 Bradford then renders as negative AP1 channels the
+gated RGC cannot rescue at near-black (its correction scales by `|ach| ≈ 0`). Faithful is
+immune for free: per-channel `apply_contrast_2012` lifts every channel toward the 0.18
+pivot, so near-black goes neutral regardless of imbalance. **Decision — fix as a CLASS,
+upstream, at the perceptual ops (not in `output.py`):** a shared near-black gate
+(`_nearblack_gate`, `_NEARBLACK_LUM_FLOOR = 0.004`, the floor that caps the effective
+ratio amplification at ≈9× and clears 100% of the false-cast + negative population on the
+production frame) drives two reapply helpers — `_reapply_luminance_ratio` (rolls the
+hue-preserving out/in ratio toward an achromatic lift `[lum_out]³` near black; used by
+DR-compression, Texture/Clarity, Contrast) and `_roll_chroma_to_neutral` (rolls the
+output toward its own-luminance neutral near black; used by the OKLCh-HSL and ACEScct-CDL
+colour ops). **Above the floor the gate is exactly 1.0** (smoothstep clamps), so legit
+shadow colour is byte-identical to the raw op — the guard touches ONLY the near-black tail
+and does NOT blanket-desaturate (a 1%-grey saturated pixel is untouched). The zero-slider
+`is_identity()` short-circuit fires first, so the ΔE ship gate (faithful stages 1–9) and
+every byte-exact-identity invariant are untouched; the FAITHFUL applicators are unchanged
+(already correct). **Negatives — fixed at birth, NO `output.py`/RGC change:** the
+negatives are born in `output.py`'s ProPhoto→AP1 Bradford from *saturated* near-black
+ProPhoto, so a ProPhoto-non-negative floor is necessary-but-insufficient; preventing the
+*saturation* upstream (near-black neutrals stay neutral → in-gamut AP1) eliminates them at
+source (measured 0.62% → **0.000%** on the production frame). RGC keeps its role for
+*legit* out-of-AP1 saturated colour (residual-compressed-but-negative *by design* beyond
+the per-channel limit — §7 RGC amendment), which near-black neutrals no longer reach; a
+hard near-black AP1 clamp was rejected (it would break RGC's smooth roll + the byte-exact
+in-gamut no-op). The OKLCh cube-root toe was measured NOT to explode on a clean imbalance
+(chroma is not divided by luma in OKLCh); the ACEScct-log CDL toe *does* inject a near-black
+cast under a shadow/global-wheel Saturation, so its guard is load-bearing, not insurance.
+Regression: `tests/test_develop_ops.py::test_perceptual_nearblack_*` /
+`::test_nearblack_guard_*` (a near-neutral-darks-straddling-the-Blacks-bias field that
+reproduces ≈0.5% negatives + 8× casts with the guard removed, fixed with it; + a
+legit-colour-preserved byte-identity leg + an all-five-ops class leg); the OKLCh Axis-1
+oracle (`test_color_oracle.py`) reimplements the guard independently. Constants are
+TUNING, not an LR-fidelity claim. Authority: `PIPELINE.md` §Stage 12 / §7.
+
 ---
 
 ## Also settled — do not re-explore (pointers, not re-derivations)
