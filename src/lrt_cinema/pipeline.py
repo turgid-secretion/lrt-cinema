@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from lrt_cinema import accel
 from lrt_cinema._acr3_curve import ACR3_DEFAULT_CURVE
 from lrt_cinema.dcp import (
     DCPProfile,
@@ -56,11 +57,6 @@ from lrt_cinema.dcp import (
     xy_to_uv,
 )
 from lrt_cinema.ir import DevelopOps
-from lrt_cinema.lut3d_baker import (
-    _apply_hsv_cube,
-    _hsv_to_rgb_dcp,
-    _rgb_to_hsv_dcp,
-)
 
 if TYPE_CHECKING:
     pass
@@ -343,9 +339,7 @@ def read_as_shot_neutral(raw_path: str | Path) -> np.ndarray:
     import rawpy
 
     with rawpy.imread(str(raw_path)) as raw:
-        wb = np.array(raw.camera_whitebalance[:3], dtype=np.float32)
-    asn = 1.0 / wb
-    return asn / asn[1]
+        return _asn_from_wb(raw.camera_whitebalance)
 
 
 def neutral_to_kelvin(
@@ -413,7 +407,34 @@ def kelvin_to_neutral(profile: DCPProfile, kelvin: float) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-def demosaic_camera_rgb(raw_path: str | Path) -> np.ndarray:
+def _postprocess_kwargs(rawpy_mod, half_size: bool) -> dict:
+    """The maximally-neutral libraw postprocess args (shared by the demosaic
+    entry points so they cannot drift). LINEAR demosaic, no auto-bright, unit
+    WB, raw output colour — Adobe-SDK-matching; see `demosaic_camera_rgb`."""
+    return dict(
+        output_bps=16,
+        gamma=(1, 1),
+        no_auto_bright=True,
+        use_camera_wb=False,
+        use_auto_wb=False,
+        user_wb=[1.0, 1.0, 1.0, 1.0],
+        output_color=rawpy_mod.ColorSpace.raw,
+        demosaic_algorithm=rawpy_mod.DemosaicAlgorithm.LINEAR,
+        half_size=half_size,
+        four_color_rgb=False,
+        highlight_mode=rawpy_mod.HighlightMode.Clip,
+    )
+
+
+def _asn_from_wb(camera_whitebalance) -> np.ndarray:
+    """libraw `camera_whitebalance` → AsShotNeutral, float32 (3,), G-normalised.
+    Shared by `read_as_shot_neutral` and `_decode_raw` so both agree exactly."""
+    wb = np.array(camera_whitebalance[:3], dtype=np.float32)
+    asn = 1.0 / wb
+    return (asn / asn[1]).astype(np.float32)
+
+
+def demosaic_camera_rgb(raw_path: str | Path, half_size: bool = False) -> np.ndarray:
     """Demosaic via libraw with maximally-neutral postprocess settings.
 
     Accepts NEF or DNG. DNG strongly preferred — libraw honors the embedded
@@ -422,26 +443,58 @@ def demosaic_camera_rgb(raw_path: str | Path) -> np.ndarray:
     `docs/research/dng-pipeline-findings.md` §"Verification of the LINEAR
     demosaic finding".
 
+    `half_size` (preview only): libraw's fast 2×2-bin demosaic — one output
+    pixel per Bayer quad, so it skips interpolation AND returns a (H/2, W/2)
+    image, roughly quartering decode time. This is the demosaic-floor cut the
+    proxy path needs (CLAUDE-graded full renders pass `half_size=False`). The
+    binned result is NOT colour-graded for delivery — preview only.
+
     Returns float32 (H, W, 3) in linear camera RGB, normalized [0, 1] after
     black-level subtract.
     """
     import rawpy
 
     with rawpy.imread(str(raw_path)) as raw:
-        rgb = raw.postprocess(
-            output_bps=16,
-            gamma=(1, 1),
-            no_auto_bright=True,
-            use_camera_wb=False,
-            use_auto_wb=False,
-            user_wb=[1.0, 1.0, 1.0, 1.0],
-            output_color=rawpy.ColorSpace.raw,
-            demosaic_algorithm=rawpy.DemosaicAlgorithm.LINEAR,
-            half_size=False,
-            four_color_rgb=False,
-            highlight_mode=rawpy.HighlightMode.Clip,
-        )
+        rgb = raw.postprocess(**_postprocess_kwargs(rawpy, half_size))
     return rgb.astype(np.float32) / 65535.0
+
+
+def _decode_raw(
+    raw_path: str | Path, half_size: bool = False,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Open the raw ONCE; return (linear camera RGB, AsShotNeutral).
+
+    `render_frame` needs both the demosaiced pixels and the camera AsShotNeutral;
+    opening the file twice (`read_as_shot_neutral` + `demosaic_camera_rgb`) wastes
+    a full ~0.3 s raw decode per frame — dominant at high `preview_scale`, where
+    the pixel work is tiny. This folds them into a single `rawpy.imread`. The
+    returned values are byte-identical to the two separate calls (same WB tag,
+    same postprocess args)."""
+    import rawpy
+
+    with rawpy.imread(str(raw_path)) as raw:
+        asn = _asn_from_wb(raw.camera_whitebalance)
+        rgb = raw.postprocess(**_postprocess_kwargs(rawpy, half_size))
+    return rgb.astype(np.float32) / 65535.0, asn
+
+
+def _block_downsample(img: np.ndarray, k: int) -> np.ndarray:
+    """Area-average downsample a (H, W, 3) image by integer factor `k`.
+
+    Preview-only: averages k×k blocks (crops to a multiple of k first), which
+    is a cheap, alias-suppressing box filter on linear-light pixels — correct
+    to do BEFORE the colour math so the per-pixel stages see k² fewer pixels.
+    `k <= 1` is a no-op (returns the input)."""
+    if k <= 1:
+        return img
+    h, w, c = img.shape
+    h2, w2 = (h // k) * k, (w // k) * k
+    return (
+        img[:h2, :w2]
+        .reshape(h2 // k, k, w2 // k, k, c)
+        .mean(axis=(1, 3))
+        .astype(img.dtype)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -561,21 +614,16 @@ def apply_adobe_pipeline(
     if stop_after_stage == 4:
         return prophoto
 
-    # Stage 5: HueSatMap in HSV.
+    # Stage 5: HueSatMap in HSV (backend-dispatched; numpy ref or numba kernel).
     rgb = prophoto
     if profile.hue_sat_map is not None:
-        h_arr, s_arr, v_arr, valid = _rgb_to_hsv_dcp(rgb)
         hsm_blended = interpolate_hsv_cube(
             profile.hue_sat_map,
             scene_kelvin,
             profile.kelvin_1,
             profile.kelvin_2,
         )
-        h_arr, s_arr, v_arr = _apply_hsv_cube(
-            h_arr, s_arr, v_arr, hsm_blended, profile.hue_sat_map,
-        )
-        rgb_post_hsm = _hsv_to_rgb_dcp(h_arr, s_arr, v_arr)
-        rgb = np.where(valid[..., None], rgb_post_hsm, rgb)
+        rgb = accel.apply_hsv_cube_rgb(rgb, hsm_blended, profile.hue_sat_map)
 
     # Stages 6+7: TotalBaselineExposure folded into ExposureRamp.
     # TotalBE = DNG.BaselineExposure + DCP.BaselineExposureOffset per Adobe
@@ -614,14 +662,11 @@ def apply_adobe_pipeline(
         # (exposure/WB/blacks/contrast/sat/vib) keeps the headroom.
         return rgb
 
-    # Stage 8: LookTable in HSV.
+    # Stage 8: LookTable in HSV (backend-dispatched; numpy ref or numba kernel).
     if profile.look_table is not None:
-        h_arr, s_arr, v_arr, valid = _rgb_to_hsv_dcp(rgb)
-        h_arr, s_arr, v_arr = _apply_hsv_cube(
-            h_arr, s_arr, v_arr, profile.look_table.data_1, profile.look_table,
+        rgb = accel.apply_hsv_cube_rgb(
+            rgb, profile.look_table.data_1, profile.look_table,
         )
-        rgb_post_lt = _hsv_to_rgb_dcp(h_arr, s_arr, v_arr)
-        rgb = np.where(valid[..., None], rgb_post_lt, rgb)
 
     # Stage 9: ProfileToneCurve (or ACR3 default fallback), applied as Adobe's
     # hue/saturation-preserving RGB tone (RefBaselineRGBTone), NOT per-channel.
@@ -631,9 +676,9 @@ def apply_adobe_pipeline(
     if profile.profile_tone_curve is not None:
         curve_pts = profile.profile_tone_curve
         solver = DngSplineSolver(curve_pts[:, 0], curve_pts[:, 1])
-        rgb = apply_rgb_tone(rgb, solver.evaluate)
+        rgb = accel.apply_rgb_tone(rgb, solver)
     else:
-        rgb = apply_rgb_tone(rgb, apply_acr3_default)
+        rgb = accel.apply_rgb_tone(rgb, apply_acr3_default)
 
     return rgb
 
@@ -662,15 +707,29 @@ class FrameRenderResult:
     default_black_render: int
 
 
+_PREVIEW_SCALES = (1, 2, 4, 8)
+
+
 def render_frame(
     raw_path: str | Path,
     profile: DCPProfile,
     dcp_path: str | Path | None = None,
     develop_ops: DevelopOps | None = None,
     stop_after_stage: int = 9,
+    preview_scale: int = 1,
 ) -> FrameRenderResult:
     """End-to-end render of a single RAW frame through pipeline stages 1
     through `stop_after_stage`.
+
+    `preview_scale` ∈ {1, 2, 4, 8} (default 1 = full resolution, the only
+    delivery-grade setting). Values > 1 render a **low-resolution PREVIEW** at
+    ~1/scale linear resolution for rapid grade/sequence iteration: the demosaic
+    runs in fast 2×2-bin (`half_size`) mode and the linear camera RGB is then
+    area-downsampled by `scale // 2`, so the per-pixel colour stages process
+    ~scale² fewer pixels. The colour maths is otherwise identical, but the
+    output is NOT colour-exact (binned demosaic + downsample) and is exempt from
+    the ΔE ship gate — it is for visual iteration, not the LRT round-trip /
+    final delivery. The colorimetric taps (stage 3/4) ignore it.
 
     `raw_path` should point to a converted DNG (use `dng_convert.py`, which
     wraps dnglab, to produce one from a NEF). NEF input works but loses the
@@ -692,14 +751,21 @@ def render_frame(
     linear ProPhoto(D50) immediately post-ForwardMatrix, pre-HSM) for the
     Axis-2 absolute-accuracy harness — see `apply_adobe_pipeline`.
     """
-    asn = read_as_shot_neutral(raw_path)
+    if preview_scale not in _PREVIEW_SCALES:
+        raise ValueError(
+            f"preview_scale must be one of {_PREVIEW_SCALES}, got {preview_scale}",
+        )
+
+    # One raw open yields both the demosaiced pixels and AsShotNeutral (the
+    # separate read wasted a full decode — costly at high preview_scale).
+    camera_rgb, asn = _decode_raw(raw_path, half_size=(preview_scale >= 2))
+    if preview_scale >= 2:
+        camera_rgb = _block_downsample(camera_rgb, preview_scale // 2)
 
     scene_kelvin = DEFAULT_SCENE_KELVIN
     if develop_ops is not None and develop_ops.temperature_k is not None:
         scene_kelvin = float(develop_ops.temperature_k)
         asn = kelvin_to_neutral(profile, scene_kelvin)
-
-    camera_rgb = demosaic_camera_rgb(raw_path)
 
     dng_be = read_dng_baseline_exposure(raw_path)
     dbr = read_dcp_default_black_render(dcp_path) if dcp_path is not None else 0

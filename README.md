@@ -113,6 +113,56 @@ lrt-cinema render \
 
 See `lrt-cinema render --help` for the full flag surface.
 
+### Speed: `--backend` and `--preview-scale`
+
+The per-pixel colour maths is pure-numpy by default (the colour-exact reference
+the ΔE gate measures). Two optional accelerated backends — colour-identical to
+numpy (well under the 1.0 ΔE ship gate), gated behind optional deps:
+
+- **`numba`** (`pip install "lrt-cinema[fast]"`) — fused multi-core **CPU** JIT
+  kernels for the DCP-render hot stages; covers every preset/intent; the `auto`
+  default when installed.
+- **`mlx`** (`pip install "lrt-cinema[gpu]"`, **Apple Silicon**) — runs the
+  WHOLE faithful sRGB render on the **Metal GPU**, including the Stage-12 grade,
+  so it wins biggest on graded frames. Faithful sRGB only (falls back to
+  numba/numpy for EXR/perceptual/unsupported profiles).
+
+```bash
+lrt-cinema render --input ... --output ... --backend mlx     # Metal GPU
+lrt-cinema render --input ... --output ... --backend numba   # multi-core CPU
+# default --backend auto = numba if installed, else numpy
+```
+
+Measured on an Apple M1 Max (10 cores, D750 Camera Standard, full-res 24 MP):
+
+| Path | numpy | numba (CPU) | mlx (GPU) |
+|---|---|---|---|
+| DCP-render only (no grade), 1 frame | 16.9 s | **2.5 s (6.6×)** | 1.16 s (2.1×) |
+| └ the cube + tone stages alone | 12.7 s | 0.27 s (**~48×**) | — |
+| **Heavily-graded frame** (HSL + ColorGrade + …) | ~26 s | **3.0 s (8.8×)** | **1.54 s (9.1×)** |
+| **Graded sequence throughput** | — | ~3 s/frame | **1.0 s/frame (7.9×, 3–4 workers)** |
+
+**Why both:** both accelerate the full faithful path *including the Stage-12
+grade*, so both are fast on graded frames — numba ~8.8× (CPU, every platform,
+bit-tight: max ΔE 1.6e-4), mlx ~9.1× (Apple GPU, max ΔE ~3e-3). Per-kernel the
+GPU only *ties* the CPU (the LookTable gather is memory-bandwidth-bound and the
+M1's CPU+GPU share one bus); mlx pulls slightly ahead by keeping everything
+on-device, and scales better in a pool (CPU demosaics while the GPU renders). A
+CPU-pool + GPU-lane *split-frame* scheduler was measured and **rejected**
+(counterproductive). See [docs/PIPELINE.md](docs/PIPELINE.md) §11.
+
+For rapid grade/sequence iteration the **preview path is the answer** — and
+because it downsamples *before* the colour math, it shrinks Stage-12 grading
+too, so it stays fast even on heavily-graded frames. Add `--preview-scale
+{2,4,8}` (fast 2×2-bin demosaic + downsample): a heavily-graded frame renders
+**~18× (scale 4) to ~34× (scale 8)** faster. **Preview output is not
+colour-exact** (exempt from the ΔE gate) — for visual iteration, not the LRT
+round-trip or final delivery:
+
+```bash
+lrt-cinema render --input ... --output ... --preview-scale 4   # ~1/4 res
+```
+
 ## Scope and non-goals
 
 **In scope:**

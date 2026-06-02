@@ -35,7 +35,14 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e '.[dev]'
+          # [fast] pulls numba so the backend-equivalence guard
+          # (tests/test_accel_kernels.py) RUNS in CI on every arch (arm64 +
+          # x86_64 + aarch64) instead of skipping — this is what catches any
+          # cross-architecture float drift in the JIT kernels vs the numpy ref.
+          # [gpu] pulls mlx ONLY on the Apple-Silicon runner (env marker; no-op
+          # on Linux), so tests/test_accel_mlx.py runs the Metal GPU equivalence
+          # check on macos-14 and skips elsewhere.
+          python -m pip install -e '.[dev,fast,gpu]'
 
       - name: Ruff
         run: ruff check .
