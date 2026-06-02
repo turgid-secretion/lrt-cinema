@@ -29,7 +29,13 @@ dependencies = [
     "filelock>=3.12",
     "numpy>=1.24",
     "rawpy>=0.18",
-    "colour-science>=0.4",
+    # Pinned to a compatible release: colour-science is BOTH a runtime dependency
+    # (it builds the production ProPhoto↔ACEScg / OKLab / ACEScct matrices and
+    # transfer curves) AND the independent oracle the validation sweep checks
+    # transfer round-trips against. An unpinned float would let a future colour
+    # release silently shift both the production matrices and the oracle in
+    # lockstep — hiding a regression. ~=0.4.6 tracks 0.4.x bugfixes, not 0.5.
+    "colour-science~=0.4.6",
     "scipy>=1.10",
     "tifffile>=2024.0",
     "OpenEXR>=3.2",
@@ -80,6 +86,11 @@ lrt_cinema = []
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = [
+    "nearblack: perceptual near-black stability catchers (xfail until the _nearblack_gate fix lands)",
+    "spatial: spatial-domain op assertions (halo/ringing) on real 2-D fields",
+    "temporal: temporal-coherence / flicker assertions over a frame ramp",
+]
 
 [tool.ruff]
 target-version = "py310"
