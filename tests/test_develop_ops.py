@@ -406,7 +406,16 @@ def test_render_intent_default_is_faithful():
 
 def test_render_intent_identity_byte_exact_both_modes():
     """Default ops are a byte-exact no-op under BOTH intents — the ship-gate
-    guarantee survives the dual-mode seam."""
+    guarantee survives the dual-mode seam.
+
+    NB this identity short-circuit is NECESSARY for the ΔE ship gate (a no-grade
+    render must be byte-identical across intents) but NOT SUFFICIENT as
+    validation: it only exercises the ``if is_identity(): return prophoto`` guard
+    — zero of the actual OKLCh/ACEScct/guided maths runs. The ~12% of the suite
+    that is identity-only therefore proves nothing about a grade that is
+    *engaged*; the engaged-grade invariants live in test_validation_sweep.py and
+    the diverges_from_faithful tests above (which now assert validity on engaged
+    output, not just divergence)."""
     x = np.random.rand(8, 8, 3).astype(np.float32)
     for intent in RenderIntent:
         np.testing.assert_array_equal(apply_develop_ops(x, DevelopOps(), intent), x)
@@ -448,14 +457,32 @@ def test_perceptual_hsl_diverges_from_faithful():
     (hue-stable OKLCh) is intentionally DIFFERENT from the faithful Adobe-hexcone
     HSV — the dual-mode seam now produces two distinct HSL grades. A *zero* HSL
     must still match byte-exact (the identity short-circuit) so the ship gate
-    stays green. (This replaces the prior alias assertion, which step 3 flips.)"""
-    x = np.random.rand(8, 8, 3).astype(np.float32)
+    stays green.
 
-    # Engaged band → the two intents diverge measurably.
+    Re-targeted: the input is the deterministic near-black-inclusive lattice (NOT
+    ``np.random.rand``, whose median ~0.5 never samples the L<0.01 region where
+    the cast lives), and divergence is no longer the *only* assertion — the
+    engaged output must also be FINITE and VALID (no negative ProPhoto channel)
+    under both intents. Divergence-only let two grades differ for the WRONG
+    reason (one of them invalid)."""
+    from tests import validation_lattice as vl
+    x = vl.pack(vl.build_lattice()).astype(np.float32)
+
+    # Engaged band → the two intents diverge measurably …
     graded = DevelopOps(hsl=HslBands(saturation=(50.0, 0, 0, 0, 0, 0, 0, 0)))
     faithful = apply_develop_ops(x, graded, RenderIntent.FAITHFUL)
     perceptual = apply_develop_ops(x, graded, RenderIntent.PERCEPTUAL)
     assert np.max(np.abs(faithful - perceptual)) > 1e-3
+    # … but BOTH must be valid (finite, non-negative ProPhoto) — divergence for
+    # the right reason (a different look), not because one went invalid.
+    for out in (faithful, perceptual):
+        assert np.isfinite(out).all() and out.min() >= 0.0
+    # HSL protects neutrals under BOTH intents (s_gate / c_gate): the neutral
+    # wedge — incl. near-black — stays neutral, not cast.
+    ni = vl.neutral_indices(vl.build_lattice())
+    for out in (faithful, perceptual):
+        col = vl.chroma_over_luma(out.reshape(-1, 3)[ni])
+        assert col.max() < 3e-3, f"HSL cast a neutral: chroma/luma={col.max():.2e}"
 
     # Zero HSL → byte-identical under both intents (no-grade ship gate).
     zero = DevelopOps(hsl=HslBands())
@@ -470,14 +497,25 @@ def test_perceptual_color_grade_diverges_from_faithful():
     applicator (offset-only ASC-CDL in ACEScct log) is intentionally DIFFERENT
     from the faithful split-tone (additive-in-linear-ProPhoto) — the dual-mode
     seam now produces two distinct grades. A *zero* Color-Grade must still match
-    byte-exact (the identity short-circuit) so the ship gate stays green."""
-    x = np.random.rand(8, 8, 3).astype(np.float32)
+    byte-exact (the identity short-circuit) so the ship gate stays green.
 
-    # Engaged wheel → the two intents diverge measurably.
+    Re-targeted: the input is the deterministic lattice (NOT ``np.random.rand``),
+    and divergence is no longer the only assertion — both engaged outputs must be
+    FINITE and non-negative in ProPhoto. (Unlike HSL, ColorGrade legitimately
+    TINTS neutrals — split-tone — so neutral-preservation is NOT asserted here;
+    the near-black ColorGrade cast is the perceptual-only bug covered by
+    test_validation_sweep's near-black catchers.)"""
+    from tests import validation_lattice as vl
+    x = vl.pack(vl.build_lattice()).astype(np.float32)
+
+    # Engaged wheel → the two intents diverge measurably …
     graded = DevelopOps(color_grade=ColorGrade(global_hue=120.0, global_sat=50.0))
     faithful = apply_develop_ops(x, graded, RenderIntent.FAITHFUL)
     perceptual = apply_develop_ops(x, graded, RenderIntent.PERCEPTUAL)
     assert np.max(np.abs(faithful - perceptual)) > 1e-3
+    # … but BOTH must be valid (finite, non-negative ProPhoto floored at 0).
+    for out in (faithful, perceptual):
+        assert np.isfinite(out).all() and out.min() >= 0.0
 
     # Zero Color-Grade → byte-identical under both intents (no-grade ship gate).
     zero = DevelopOps(color_grade=ColorGrade())
