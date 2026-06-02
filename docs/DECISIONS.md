@@ -572,6 +572,97 @@ TUNING, not an LR-fidelity claim. Authority: `PIPELINE.md` §Stage 12 / §7.
 
 ---
 
+## 8. Highlight recovery — Tier-1 cross-channel ratio propagation (camera-space, pre-WB)
+
+**Decision.** Reconstruct blown highlights the demosaic's libraw hard clip
+(`HighlightMode.Clip`) discards, as a **camera-RGB pre-stage** inserted
+POST-demosaic / BEFORE Stage-2 white balance (`pipeline.render_frame` →
+`highlight_recovery.reconstruct_highlights`). Phase 1 ships **Tier 1**:
+cross-channel ratio propagation — for a clipped channel, restore the LOCAL
+channel ratio anchored by the channels that still carry signal (a box-window
+mean over unclipped same-channel neighbours; per-pixel brightness
+`s = Σ_survivors cam / Σ_survivors m`; clipped_c ← `max(cam_c, s·m_c)`). Handles
+1- and 2-channel clips (≥1 survivor). Fully-blown pixels (0 survivors) get a
+neutral interim and are flagged for **Tier 2** (gradient-domain Poisson, Phase 2)
+via the returned `tier2_mask`. Clean-room reimplementation — librtprocess /
+RawTherapee / darktable are GPL and were used as algorithm references only; no
+GPL code, deterministic (no learned methods), numpy.
+
+**The load-bearing invariant (prevents magenta).** Reconstruct in camera space,
+before WB, where the per-channel clip point is **uniform** (libraw normalises the
+raw WhiteLevel → 1.0 under unit WB). Survivors anchor the result; the asymmetric
+Stage-2 WB multiply applies afterwards, unchanged, so the reconstruction inherits
+the correct WB-aware clip asymmetry for free. A fully-blown pixel is set
+**∝ AsShotNeutral** (post-WB neutral), NOT camera `[1,1,1]` — the latter maps to
+the warm/magenta cast after WB (`[1,1,1]·wb_mul`). RawTherapee's in-engine
+Color-Propagation contract: WB-agnostic data, WB-aware clip points.
+
+**Gating + auto-default.** The stage is a **strict byte-identical no-op when no
+channel clips** (returns the input object), and off by default at the
+`render_frame` level — so every existing caller (incl. the gym/rose ΔE ship gate,
+whose gym frame *is* the clipped DSC_4053 window frame) stays byte-identical with
+zero audit. CLI flag `--highlight-recovery / --no-highlight-recovery` defaults
+**AUTO**: ON for `cinema-linear-master` (the scene-linear tap-7 EXR, where the
+recovered over-white headroom survives), OFF for every tone-curve (tap-9) path —
+see the finding below. Explicit flag overrides; `--no-highlight-recovery` also
+re-enables the MLX GPU fast path (which does not run this camera-space pre-stage).
+
+**Why it diverges from `dng_validate` (intentional).** `dng_validate` (the gym/rose
+oracle, Adobe's reference renderer) does **no** highlight reconstruction — it
+clips. So in clipped regions this stage **deliberately diverges** from
+`dng_validate`: we match the ACR/LRT reality (ACR recovers partial clips), not
+Adobe's reference clip. The ship gate is kept unmoved by rendering it with
+recovery **disabled** (default-off at `render_frame`) so the validated gym 0.026 /
+rose 0.545 baselines are byte-identical; the divergence lives only on the
+opt-in recovery path. (Had it been on, the gym frame's ~0.48 %-clipped pixels
+would have moved the baseline.)
+
+**Load-bearing FINDING — inert in the faithful path; benefit is scene-linear.**
+Adobe's Stage-9 **ProfileToneCurve clamps ≥1.0 → 1.0** (verified on the real
+128-pt D750 Camera Standard curve: `curve(1.1)=curve(1.6)=curve(2.0)=1.0`), and
+Stage 9 runs **before** every LR user-tone op (Stage 11 Exposure/Blacks, Stage 12
+grade — PIPELINE.md flow). So for highlights reaching ProPhoto ≥ 1.0 the recovered
+over-white headroom is erased at Stage 9 on **every tap-9 path** (the default
+`lrtimelapse` sRGB AND `cinema-linear-finished`), and an LR exposure/highlights
+pulldown — which is downstream of Stage 9 — cannot bring it back. Measured
+**0.000 %** of sRGB pixels changed on DSC_4053 (whose blown windows already render
+~[240] neutral ≈ the LRT JPG's ~[238] — no dark/warm cast to fix in this path).
+Two caveats keep this from being a universal "structurally zero" claim (it is
+*negligible / sub-LSB*, not provably nil for all frames): the hue-preserving curve
+clamps the max channel but its mid-channel interpolation lets a **sub-LSB residual**
+through on multi-channel clips (the Stage-9 ProPhoto Δ was 0.003, not 0), and a
+**dim saturated single-channel clip** can map to ProPhoto < 1.0, where the curve
+does not clamp at all. The 0 % figure is one frame (DSC_4053), measured with a
+hand-built `DevelopOps`, not the production XMP→materialize path. Either way it is
+**correct, not a gap**: the faithful path matches Adobe, and `dng_validate` clamps
+blown highlights to white too. The recovery's real benefit is the
+**`cinema-linear-master` tap-7 scene-linear EXR** (no ProfileToneCurve): there it
+turns warm/magenta blown highlights **neutral** — measured on DSC_4053, mean
+ProPhoto on changed pixels `[1.74, 1.07, 1.81]` (R,B high, G low) → `[1.22, 1.15,
+1.23]`; channel spread (0 = neutral) 0.489 → 0.075; a representative pixel
+`[1.81, 1.07, 1.89] → [1.06, 1.06, 1.06]`. **Faithful-sRGB highlight handling that
+survives the byte-exact Adobe tone curve is a separate, unsolved decision** —
+recorded as a follow-up, NOT delivered here.
+
+**Phase-2 scope flag (Tier 2 inherits this).** Tier 2 (gradient-domain Poisson)
+plugs into the **same** Stage-1.5 camera-space insertion point, so its
+reconstructed output also passes through the Stage-9 clamp → it likewise advances
+**only the tap-7 `cinema-linear-master`** scene-linear path, NOT the default LRT
+sRGB round-trip. Surfacing recovered highlight detail in the *faithful sRGB*
+default would require highlight handling **at/after Stage 9** — which then also
+collides with the **dropped** PV5 Highlights/Shadows/Whites (§5), the other half
+of why the faithful path can't surface recovered highlight detail. That is a
+distinct line of work to weigh before investing further in the pre-WB tiers.
+
+**Validation.** Synthetic CI (`tests/test_highlight_recovery.py`, fixture-free,
+the binding correctness proof): single- and double-channel clips reconstructed
+with the ratio restored, fully-blown → neutral-after-WB (not magenta), step-edge
+no overshoot, finite / non-negative, byte-identical no-op on a no-clip field, and
+the `tier2_mask` hand-off contract. Real-frame reference (drive-gated): the
+DSC_4053 measurements above. Authority: `PIPELINE.md` §"Stage 1.5".
+
+---
+
 ## Also settled — do not re-explore (pointers, not re-derivations)
 
 - **darktable render path** — removed in v0.6 (in-process Python DNG pipeline

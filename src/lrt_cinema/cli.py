@@ -222,6 +222,22 @@ def _build_parser() -> argparse.ArgumentParser:
             "no dnglab binary is available."
         ),
     )
+    render.add_argument(
+        "--highlight-recovery", dest="highlight_recovery",
+        action=argparse.BooleanOptionalAction, default=None,
+        help=(
+            "Tier-1 raw highlight reconstruction: recover blown highlights from "
+            "surviving channels by cross-channel ratio propagation (camera space, "
+            "pre-WB) so clipped highlights neutralise instead of casting warm. "
+            "Default AUTO: ON for cinema-linear-master (the scene-linear tap-7 "
+            "EXR, where the recovered over-white headroom survives) and OFF for "
+            "tone-curve paths (sRGB / cinema-linear-finished), where Adobe's "
+            "ProfileToneCurve clamps highlights to white and recovery is a no-op "
+            "for non-trivial cost. Force with --highlight-recovery / "
+            "--no-highlight-recovery (the latter also re-enables the MLX GPU "
+            "fast path). See docs/DECISIONS.md §'Highlight recovery'."
+        ),
+    )
 
     return parser
 
@@ -246,6 +262,7 @@ class _RenderJob:
     backend: str = "numpy"        # resolved concrete backend ("numpy"|"numba")
     threads_per_worker: int = 1   # numba intra-frame thread cap (oversubscription guard)
     preview_scale: int = 1        # 1 = full res; 2/4/8 = preview
+    highlight_recovery: bool = True  # Tier-1 raw highlight reconstruction (pre-WB)
 
 
 @dataclass
@@ -295,8 +312,12 @@ def _render_one_frame(job: _RenderJob) -> _RenderResult:
         # runs on-device (accel.mlx_render_frame_to_srgb). For anything outside
         # that (non-FM profile, no ProfileToneCurve, EXR/perceptual) it raises
         # MlxUnsupported and we fall through to the CPU path.
+        # Highlight recovery is a camera-space pre-stage the on-device MLX
+        # renderer doesn't run, so recovery-on forces the CPU path (rather than
+        # silently dropping the recovery). `--no-highlight-recovery` keeps MLX.
         if (job.backend == "mlx" and job.preset == "lrtimelapse"
-                and job.intent is RenderIntent.FAITHFUL):
+                and job.intent is RenderIntent.FAITHFUL
+                and not job.highlight_recovery):
             try:
                 from lrt_cinema.output import write_tiff_display
                 encoded = accel.mlx_render_frame_to_srgb(
@@ -331,6 +352,7 @@ def _render_one_frame(job: _RenderJob) -> _RenderResult:
         result = render_frame(
             dng_path, profile, dcp_path=job.dcp_path, develop_ops=job.ops,
             stop_after_stage=stop_after_stage, preview_scale=job.preview_scale,
+            highlight_recovery=job.highlight_recovery,
         )
         with_dev_ops = apply_develop_ops(result.prophoto, job.ops, job.intent)
         write_preset_output(
@@ -583,6 +605,13 @@ def _cmd_render(args: argparse.Namespace) -> int:
 
     # --preset (advanced) overrides --target's preset bundle.
     preset = args.preset or _TARGET_TO_PRESET[args.target]
+    # Highlight recovery default is AUTO: it only changes output on the tap-7
+    # (cinema-linear-master) path; every tap-9 path clamps it away at the Adobe
+    # ProfileToneCurve, so default it on only where it pays. Explicit flag wins.
+    highlight_recovery = (
+        args.highlight_recovery if args.highlight_recovery is not None
+        else (preset in STAGE_7_PRESETS)
+    )
     # Intent default is per-target (sRGB→faithful, EXR→perceptual); --render-intent
     # overrides. All creative values still come from the XMP — intent only picks
     # the grading math (DECISIONS.md §7).
@@ -633,6 +662,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
             backend=backend,
             threads_per_worker=threads_per_worker,
             preview_scale=args.preview_scale,
+            highlight_recovery=highlight_recovery,
         ))
 
     if args.dry_run:
@@ -641,6 +671,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
             f"[{args.from_frame}..{to_frame}) → {args.output} "
             f"(target={args.target}, preset={preset}, intent={intent.value}, "
             f"backend={backend}, preview_scale={args.preview_scale}, "
+            f"highlight_recovery={highlight_recovery}, "
             f"workers={args.workers}).\n",
         )
         return 0

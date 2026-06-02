@@ -717,6 +717,7 @@ def render_frame(
     develop_ops: DevelopOps | None = None,
     stop_after_stage: int = 9,
     preview_scale: int = 1,
+    highlight_recovery: bool = False,
 ) -> FrameRenderResult:
     """End-to-end render of a single RAW frame through pipeline stages 1
     through `stop_after_stage`.
@@ -750,6 +751,16 @@ def render_frame(
     would otherwise consume; 3 / 4 expose the colorimetric tap (XYZ(D50) /
     linear ProPhoto(D50) immediately post-ForwardMatrix, pre-HSM) for the
     Axis-2 absolute-accuracy harness — see `apply_adobe_pipeline`.
+
+    `highlight_recovery`: when True, run the Tier-1 raw highlight-reconstruction
+    pre-stage (`highlight_recovery.reconstruct_highlights`) on the camera RGB
+    POST-demosaic, BEFORE Stage-2 WB — recovering blown highlights from surviving
+    channels by local ratio propagation (clean white instead of dark/warm). A
+    strict byte-identical no-op when no channel clips. **Default False** so every
+    caller (incl. the gym/rose ΔE ship gate, whose gym frame is itself clipped)
+    stays byte-identical; the CLI/preset layer turns it on for production. In
+    clipped regions this intentionally diverges from `dng_validate` (which clips,
+    not reconstructs) — docs/DECISIONS.md §"Highlight recovery".
     """
     if preview_scale not in _PREVIEW_SCALES:
         raise ValueError(
@@ -769,6 +780,14 @@ def render_frame(
 
     dng_be = read_dng_baseline_exposure(raw_path)
     dbr = read_dcp_default_black_render(dcp_path) if dcp_path is not None else 0
+
+    # Stage 1.5: Tier-1 raw highlight reconstruction (camera space, pre-WB).
+    # Uses the FINAL `asn` (incl. any Holy-Grail kelvin override above) so the
+    # fully-blown neutral interim lands neutral after the Stage-2 WB multiply.
+    # No-op (byte-identical) when no channel clips. See `highlight_recovery`.
+    if highlight_recovery:
+        from lrt_cinema.highlight_recovery import reconstruct_highlights
+        camera_rgb = reconstruct_highlights(camera_rgb, asn)
 
     prophoto = apply_adobe_pipeline(
         camera_rgb=camera_rgb,
