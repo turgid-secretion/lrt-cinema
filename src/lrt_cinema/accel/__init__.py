@@ -232,3 +232,76 @@ def mlx_render_frame_to_srgb(raw_path, profile, develop_ops=None,
     dng_be = P.read_dng_baseline_exposure(raw_path)
     dbr = P.read_dcp_default_black_render(dcp_path) if dcp_path is not None else 0
     return renderer.render(cam, asn, scene_kelvin, ops, dng_be, dbr)
+
+
+# --- Stage 12 (faithful) grade ops — backend-dispatched -------------------
+#
+# Called by develop_ops.apply_{saturation,vibrance,hsl,color_grade} AFTER their
+# byte-exact identity short-circuit, so these always see a non-identity op. The
+# numpy branch calls the develop_ops reference body (no recursion); the numba
+# branch calls the fused kernel. 'mlx' resolves to the numpy branch here — the
+# MLX whole-frame renderer does Stage 12 itself, it never calls these.
+
+
+def _np2d(rgb: np.ndarray) -> np.ndarray:
+    return np.ascontiguousarray(rgb, dtype=np.float32).reshape(-1, 3)
+
+
+def apply_saturation(rgb: np.ndarray, sat: float, *, backend: str | None = None) -> np.ndarray:
+    """LR Saturation (HSV S-multiplier), backend-dispatched."""
+    if resolve_backend(backend) == "numba":
+        out = _kernels().saturation_hsv(_np2d(rgb), 1.0 + sat / 100.0)
+        return out.reshape(rgb.shape)
+    from lrt_cinema.develop_ops import _scale_hsv_saturation
+    mult = 1.0 + sat / 100.0
+    return _scale_hsv_saturation(rgb, lambda s: np.clip(s * mult, 0.0, 1.0))
+
+
+def apply_vibrance(rgb: np.ndarray, vib: float, *, backend: str | None = None) -> np.ndarray:
+    """LR Vibrance (non-linear HSV S-boost), backend-dispatched."""
+    if resolve_backend(backend) == "numba":
+        out = _kernels().vibrance_hsv(_np2d(rgb), vib / 100.0)
+        return out.reshape(rgb.shape)
+    from lrt_cinema.develop_ops import _scale_hsv_saturation
+    k = vib / 100.0
+    return _scale_hsv_saturation(rgb, lambda s: np.clip(s + k * s * (1.0 - s), 0.0, 1.0))
+
+
+def apply_hsl(rgb: np.ndarray, hsl, *, backend: str | None = None) -> np.ndarray:
+    """LR HSL (8 hue bands × H/S/L), backend-dispatched."""
+    if resolve_backend(backend) == "numba":
+        from lrt_cinema.develop_ops import (
+            _HSL_BAND_CENTERS_HEX,
+            _HSL_HUE_MAX_HEX,
+            _HSL_LUM_SAT_GATE,
+        )
+        lo = np.asarray(_HSL_BAND_CENTERS_HEX, dtype=np.float64)
+        hi = np.concatenate([lo[1:], [6.0]]).astype(np.float64)
+        nxt = np.array([(j + 1) % 8 for j in range(8)], dtype=np.int64)
+        hue_pb = np.asarray(hsl.hue, dtype=np.float64) / 100.0 * _HSL_HUE_MAX_HEX
+        sat_pb = 1.0 + np.asarray(hsl.saturation, dtype=np.float64) / 100.0
+        lum_pb = 1.0 + np.asarray(hsl.luminance, dtype=np.float64) / 100.0
+        out = _kernels().hsl_bands(
+            _np2d(rgb), hue_pb, sat_pb, lum_pb, lo, hi, nxt, float(_HSL_LUM_SAT_GATE),
+        )
+        return out.reshape(rgb.shape)
+    from lrt_cinema.develop_ops import _hsl_numpy
+    return _hsl_numpy(rgb, hsl)
+
+
+def apply_color_grade(rgb: np.ndarray, cg, *, backend: str | None = None) -> np.ndarray:
+    """LR Color Grade (luminance-masked split-tone), backend-dispatched."""
+    if resolve_backend(backend) == "numba":
+        from lrt_cinema.develop_ops import _PROPHOTO_LUMINANCE, _color_grade_wheel_tint
+        tsh = np.ascontiguousarray(_color_grade_wheel_tint(cg.shadow_hue, cg.shadow_sat, cg.shadow_lum))
+        tmid = np.ascontiguousarray(_color_grade_wheel_tint(cg.midtone_hue, cg.midtone_sat, cg.midtone_lum))
+        thi = np.ascontiguousarray(_color_grade_wheel_tint(cg.highlight_hue, cg.highlight_sat, cg.highlight_lum))
+        tg = np.ascontiguousarray(_color_grade_wheel_tint(cg.global_hue, cg.global_sat, cg.global_lum))
+        gamma_balance = 2.0 ** (-cg.balance / 100.0)
+        p = 1.0 + 2.0 * (1.0 - min(max(cg.blending, 0.0), 100.0) / 100.0)
+        lum_row = np.ascontiguousarray(_PROPHOTO_LUMINANCE, dtype=np.float64)
+        out = _kernels().color_grade(_np2d(rgb), tsh, tmid, thi, tg, lum_row,
+                                     float(gamma_balance), float(p))
+        return out.reshape(rgb.shape)
+    from lrt_cinema.develop_ops import _color_grade_numpy
+    return _color_grade_numpy(rgb, cg)

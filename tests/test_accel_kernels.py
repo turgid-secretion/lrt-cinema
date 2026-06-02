@@ -185,3 +185,58 @@ def test_resolve_backend_rules():
 def test_set_threads_is_safe():
     accel.set_threads(1)
     accel.set_threads(9999)   # clamped to the launch maximum, no raise
+
+
+# --- Stage-12 faithful grade ops (numba vs numpy) --------------------------
+
+
+def _hsl_bands_op():
+    from lrt_cinema.ir import HslBands
+    return HslBands(hue=(5, -5, 0, 10, 0, -8, 0, 3),
+                    saturation=(10, 0, -10, 5, 0, 8, 0, 0),
+                    luminance=(0, 5, -5, 0, 3, -3, 0, 0))
+
+
+def _color_grade_op():
+    from lrt_cinema.ir import ColorGrade
+    return ColorGrade(shadow_hue=220, shadow_sat=15, highlight_hue=45,
+                      highlight_sat=12, midtone_sat=6, balance=-10, blending=50)
+
+
+def test_saturation_numba_matches_numpy():
+    px = _adversarial_pixels(seed=11)
+    a = accel.apply_saturation(px, 15.0, backend="numpy")
+    b = accel.apply_saturation(px, 15.0, backend="numba")
+    assert np.max(np.abs(a.astype(np.float64) - b.astype(np.float64))) < _TOL
+
+
+def test_vibrance_numba_matches_numpy():
+    px = _adversarial_pixels(seed=12)
+    a = accel.apply_vibrance(px, 10.0, backend="numpy")
+    b = accel.apply_vibrance(px, 10.0, backend="numba")
+    assert np.max(np.abs(a.astype(np.float64) - b.astype(np.float64))) < _TOL
+
+
+def test_hsl_numba_matches_numpy():
+    px = _adversarial_pixels(seed=13)
+    hsl = _hsl_bands_op()
+    a = accel.apply_hsl(px, hsl, backend="numpy")
+    b = accel.apply_hsl(px, hsl, backend="numba")
+    assert np.max(np.abs(a.astype(np.float64) - b.astype(np.float64))) < _TOL
+
+
+def test_color_grade_numba_matches_numpy():
+    px = _adversarial_pixels(seed=14)
+    cg = _color_grade_op()
+    a = accel.apply_color_grade(px, cg, backend="numpy")
+    b = accel.apply_color_grade(px, cg, backend="numba")
+    assert np.max(np.abs(a.astype(np.float64) - b.astype(np.float64))) < _TOL
+
+
+def test_hsl_preserves_neutrals_on_numba():
+    """Neutral pixels (r==g==b) must stay neutral on numba — the s_gate
+    luminance gating (CLAUDE.md §0: a grey wedge must stay grey)."""
+    v = np.linspace(0.0, 1.0, 64, dtype=np.float32)
+    px = np.stack([v, v, v], axis=-1)
+    out = accel.apply_hsl(px, _hsl_bands_op(), backend="numba")
+    assert np.allclose(out[:, 0], out[:, 1]) and np.allclose(out[:, 1], out[:, 2])

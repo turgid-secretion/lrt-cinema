@@ -340,3 +340,207 @@ def rgb_tone_spline(rgb, X, Y, S):
         out[i, imin] = mn_o
         out[i, imid] = md_o
     return out
+
+
+# ---------------------------------------------------------------------------
+# Stage-12 FAITHFUL grade ops (reusable scalar HSV helpers + kernels)
+# ---------------------------------------------------------------------------
+#
+# These mirror develop_ops.{apply_saturation,apply_vibrance,apply_hsl,
+# apply_color_grade} exactly, including the numpy reference's float PRECISION:
+# Saturation/Vibrance run float32 (float32 array × weak python float); HSL's
+# per-band weighted sums and Color-Grade run float64 (numpy promotes there) —
+# matched here so the kernels stay bit-tight to numpy (verified by
+# tests/test_accel_kernels.py).
+
+
+@njit(cache=True, fastmath=False, inline="always")
+def _rgb2hsv(r, g, b):
+    """Scalar Adobe-hexcone RGB→HSV. Returns (h in [0,6), s, v, valid)."""
+    vmin = min(r, g, b)
+    vmax = max(r, g, b)
+    delta = vmax - vmin
+    valid = vmin >= 0.0
+    v = vmax
+    s = (delta / vmax) if vmax > 0.0 else 0.0 * vmax
+    if delta > 1e-10 or delta < -1e-10:
+        if r >= vmax:
+            h = (g - b) / delta
+        elif g >= vmax:
+            h = 2.0 + (b - r) / delta
+        else:
+            h = 4.0 + (r - g) / delta
+        if h < 0.0:
+            h += 6.0
+        elif h >= 6.0:
+            h -= 6.0
+    else:
+        h = 0.0 * vmax
+    return h, s, v, valid
+
+
+@njit(cache=True, fastmath=False, inline="always")
+def _hsv2rgb(h, s, v):
+    """Scalar Adobe-hexcone HSV→RGB (h in [0,6)). Returns (r, g, b)."""
+    if h < 0.0:
+        h += 6.0
+    elif h >= 6.0:
+        h -= 6.0
+    sector = int(np.floor(h))
+    f = h - np.floor(h)
+    if sector < 0:
+        sector = 0
+    elif sector > 5:
+        sector = 5
+    p = v * (1.0 - s)
+    q = v * (1.0 - f * s)
+    t = v * (1.0 - (1.0 - f) * s)
+    if sector == 0:
+        return v, t, p
+    if sector == 1:
+        return q, v, p
+    if sector == 2:
+        return p, v, t
+    if sector == 3:
+        return p, q, v
+    if sector == 4:
+        return t, p, v
+    return v, p, q
+
+
+@njit(parallel=True, cache=True, fastmath=False)
+def saturation_hsv(rgb, mult):
+    """LR Saturation: S *= mult, clipped [0,1] (float32). Matches apply_saturation
+    via _scale_hsv_saturation; negative-component pixels pass through."""
+    n = rgb.shape[0]
+    out = np.empty_like(rgb)
+    m = np.float32(mult)
+    z = np.float32(0.0)
+    one = np.float32(1.0)
+    for i in prange(n):
+        r = rgb[i, 0]
+        g = rgb[i, 1]
+        b = rgb[i, 2]
+        h, s, v, valid = _rgb2hsv(r, g, b)
+        if not valid:
+            out[i, 0] = r
+            out[i, 1] = g
+            out[i, 2] = b
+            continue
+        s_out = s * m
+        s_out = z if s_out < z else (one if s_out > one else s_out)
+        rr, gg, bb = _hsv2rgb(h, s_out, v)
+        out[i, 0] = rr
+        out[i, 1] = gg
+        out[i, 2] = bb
+    return out
+
+
+@njit(parallel=True, cache=True, fastmath=False)
+def vibrance_hsv(rgb, k):
+    """LR Vibrance: S += k·S·(1−S), clipped [0,1] (float32). Matches apply_vibrance."""
+    n = rgb.shape[0]
+    out = np.empty_like(rgb)
+    kk = np.float32(k)
+    z = np.float32(0.0)
+    one = np.float32(1.0)
+    for i in prange(n):
+        r = rgb[i, 0]
+        g = rgb[i, 1]
+        b = rgb[i, 2]
+        h, s, v, valid = _rgb2hsv(r, g, b)
+        if not valid:
+            out[i, 0] = r
+            out[i, 1] = g
+            out[i, 2] = b
+            continue
+        s_out = s + kk * s * (one - s)
+        s_out = z if s_out < z else (one if s_out > one else s_out)
+        rr, gg, bb = _hsv2rgb(h, s_out, v)
+        out[i, 0] = rr
+        out[i, 1] = gg
+        out[i, 2] = bb
+    return out
+
+
+@njit(parallel=True, cache=True, fastmath=False)
+def hsl_bands(rgb, hue_pb, sat_pb, lum_pb, centers_lo, centers_hi, nxt_idx, lum_gate):
+    """LR HSL: 8-band partition-of-unity in hexcone HSV (matches apply_hsl).
+
+    `*_pb` length-8 float64 per-band arrays (hue shift hex / sat factor / lum
+    factor); `centers_lo/hi`/`nxt_idx` the 8 segments. Band math runs **float64**
+    (numpy promotes via `weights @ per_band`); luminance is saturation-gated so
+    neutrals stay put. Negative-component pixels pass through."""
+    n = rgb.shape[0]
+    out = np.empty_like(rgb)
+    for i in prange(n):
+        r = rgb[i, 0]
+        g = rgb[i, 1]
+        b = rgb[i, 2]
+        h, s, v, valid = _rgb2hsv(r, g, b)
+        if not valid:
+            out[i, 0] = r
+            out[i, 1] = g
+            out[i, 2] = b
+            continue
+        # segment index j: #(centers_lo <= h) - 1, clamped (h in [lo[j], hi[j]))
+        j = 0
+        for c in range(8):
+            if h >= centers_lo[c]:
+                j = c
+        lo = centers_lo[j]
+        hi = centers_hi[j]
+        nj = nxt_idx[j]
+        frac = (h - lo) / (hi - lo)
+        wj = 1.0 - frac
+        hue_shift = wj * hue_pb[j] + frac * hue_pb[nj]
+        sat_mult = wj * sat_pb[j] + frac * sat_pb[nj]
+        lum_mult = wj * lum_pb[j] + frac * lum_pb[nj]
+        h_out = h + hue_shift
+        if h_out < 0.0:
+            h_out += 6.0
+        elif h_out >= 6.0:
+            h_out -= 6.0
+        s_out = s * sat_mult
+        s_out = 0.0 if s_out < 0.0 else (1.0 if s_out > 1.0 else s_out)
+        s_gate = s / lum_gate
+        s_gate = 0.0 if s_gate < 0.0 else (1.0 if s_gate > 1.0 else s_gate)
+        eff_lum = 1.0 + s_gate * (lum_mult - 1.0)
+        v_out = v * eff_lum
+        if v_out < 0.0:
+            v_out = 0.0
+        rr, gg, bb = _hsv2rgb(h_out, s_out, v_out)
+        out[i, 0] = rr
+        out[i, 1] = gg
+        out[i, 2] = bb
+    return out
+
+
+@njit(parallel=True, cache=True, fastmath=False)
+def color_grade(rgb, tint_sh, tint_mid, tint_hi, tint_glob, lum_row,
+                gamma_balance, p):
+    """LR Color Grade: luminance-masked additive split-tone (matches
+    apply_color_grade). Runs **float64** (numpy does `prophoto.astype(float64)`);
+    `tint_*` are precomputed float64 (3,) wheel tints, `lum_row` the ProPhoto
+    luminance row. Output floored at 0."""
+    n = rgb.shape[0]
+    out = np.empty_like(rgb)
+    for i in prange(n):
+        r = rgb[i, 0]
+        g = rgb[i, 1]
+        b = rgb[i, 2]
+        lum = r * lum_row[0] + g * lum_row[1] + b * lum_row[2]
+        lc = 0.0 if lum < 0.0 else (1.0 if lum > 1.0 else lum)
+        perceptual = _oetf(lc)
+        tt = 0.0 if perceptual < 0.0 else (1.0 if perceptual > 1.0 else perceptual)
+        t = tt ** gamma_balance
+        shadow_w = (1.0 - t) ** p
+        highlight_w = t ** p
+        midtone_w = 1.0 - shadow_w - highlight_w
+        or_ = r + shadow_w * tint_sh[0] + midtone_w * tint_mid[0] + highlight_w * tint_hi[0] + tint_glob[0]
+        og = g + shadow_w * tint_sh[1] + midtone_w * tint_mid[1] + highlight_w * tint_hi[1] + tint_glob[1]
+        ob = b + shadow_w * tint_sh[2] + midtone_w * tint_mid[2] + highlight_w * tint_hi[2] + tint_glob[2]
+        out[i, 0] = max(or_, 0.0)
+        out[i, 1] = max(og, 0.0)
+        out[i, 2] = max(ob, 0.0)
+    return out
