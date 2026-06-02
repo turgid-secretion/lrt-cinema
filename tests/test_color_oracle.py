@@ -46,6 +46,7 @@ from lrt_cinema.develop_ops import (  # noqa: E402
     _HSL_HUE_MAX_HEX,
     _HSL_LUM_SAT_GATE,
     _LOG_EPS,
+    _NEARBLACK_LUM_FLOOR,
     _OKLCH_BAND_CENTERS_DEG,
     _OKLCH_HUE_MAX_DEG,
     _OKLCH_LUM_CHROMA_GATE,
@@ -823,8 +824,16 @@ def _oracle_oklch_band_adjust(
         lms2 = lms_p2 ** 3
         xyz65b = m1_inv @ lms2
         xyz50b = m_back @ xyz65b
-        ppb = m_xyz50_to_pp @ xyz50b
-        out[i] = np.maximum(ppb, 0.0)
+        ppb = np.maximum(m_xyz50_to_pp @ xyz50b, 0.0)
+        # Near-black guard (independent reimpl of develop_ops._roll_chroma_to_neutral):
+        # roll the floored result toward neutral (its OWN luminance) as INPUT
+        # luminance → 0, so the OKLCh cube-root toe cannot inject a near-black cast.
+        # Hand-rolled smoothstep gate (not the production helper — contract 4).
+        lum_in = float(_PROPHOTO_LUMINANCE @ flat[i])
+        g = min(max(lum_in / _NEARBLACK_LUM_FLOOR, 0.0), 1.0)
+        g = g * g * (3.0 - 2.0 * g)
+        lum_g = float(_PROPHOTO_LUMINANCE @ ppb)
+        out[i] = g * ppb + (1.0 - g) * lum_g
     return out.reshape(rgb.shape)
 
 

@@ -13,8 +13,12 @@ import pytest
 
 from lrt_cinema.develop_ops import (
     _DR_GUIDED_RADIUS,
+    _LOG_EPS,
+    _NEARBLACK_LUM_FLOOR,
     _PROPHOTO_LUMINANCE,
+    _apply_color_grade_perceptual,
     _apply_contrast_perceptual,
+    _apply_hsl_perceptual,
     _box_sum,
     _dr_compress_luminance,
     _dr_slopes,
@@ -1043,3 +1047,109 @@ def test_texture_clarity_not_applied_on_faithful_via_dispatcher():
     finally:
         do.apply_texture_clarity = monkeypatch_target
     assert called == [], "apply_texture_clarity must not run on the faithful path"
+
+
+# ---------------------------------------------------------------------------
+# Near-black stability (fix/perceptual-nearblack) — the perceptual ops must not
+# turn near-black NEUTRAL pixels into a saturated false cast or negative AP1
+# channels in the emitted ACEScg master. See develop_ops `_nearblack_gate` /
+# `_reapply_luminance_ratio` / `_roll_chroma_to_neutral` + PIPELINE.md Stage 12.
+# ---------------------------------------------------------------------------
+
+
+def _emit_acescg(prophoto):
+    """ProPhoto(D50) → emitted ACEScg(AP1): the exact `output.py` EXR colour path
+    (Bradford + NaN scrub + gated ACES RGC), minus the float→half write. This is
+    where the bug surfaced — the ProPhoto→AP1 Bradford turns an out-of-AP1 cast
+    into negative AP1 channels, which the gated RGC cannot rescue at near-black."""
+    from lrt_cinema import output
+
+    ap1 = output._prophoto_to_linear(prophoto, "acescg").astype(np.float32)
+    ap1 = np.nan_to_num(ap1, nan=0.0, posinf=65504.0, neginf=0.0)
+    return output._aces_rgc_compress_ap1(ap1)
+
+
+def test_perceptual_nearblack_neutral_not_false_cast_or_negative():
+    """Regression: a near-black NEUTRAL pixel emits a NEUTRAL, NON-NEGATIVE ACEScg
+    value under the perceptual intent — never a saturated false cast.
+
+    Reproduces the production mechanism end-to-end through Stage 11+12:
+      * dark, slightly-chromatic ProPhoto (the post-DCP shadow character);
+      * Blacks2012(-10): the additive floor crushes the smaller channels to 0,
+        leaving a degenerate single-channel near-black pixel (e.g. [0,0,ε]); then
+      * a shadow-LIFTING perceptual Contrast(-20): without the near-black guard the
+        hue-preserving ratio reapply (lum_out/lum → ∞) amplifies that degeneracy
+        into a saturated cast + negative AP1 channels.
+    Faithful renders it neutral with zero negatives (per-channel pivot lift); the
+    guarded perceptual path must now match (bounded chroma, no negatives, no flip)."""
+    rng = np.random.default_rng(0)
+    # Genuine near-NEUTRAL darks straddling the Blacks(-10) = 0.005 bias: base ≈
+    # 0.005, channels within ±6%. The channels just above 0.005 survive the
+    # additive floor as TINY slivers while the rest floor to 0 → the degenerate
+    # near-black pixels the bug amplifies. This field REPRODUCES the production
+    # failure with the guard removed (≈0.5% negative pixels + casts up to ~8×,
+    # cf. the real frame's 0.62% / false-blue) and is fully fixed with it.
+    base = (0.0045 + 0.001 * rng.random((48, 48, 1))).astype(np.float32)
+    x = (base * (1.0 + 0.06 * (rng.random((48, 48, 3)) - 0.5))).astype(np.float32)
+    ops = DevelopOps(blacks=-10.0, contrast=-20.0)
+
+    pe = _emit_acescg(apply_develop_ops(x, ops, RenderIntent.PERCEPTUAL))
+    fa = _emit_acescg(apply_develop_ops(x, ops, RenderIntent.FAITHFUL))
+
+    # 1. zero negative AP1 channels in the emitted perceptual master.
+    assert pe.min() >= 0.0, f"emitted ACEScg has negatives: min={pe.min():.6f}"
+    # 2. near-black chroma bounded — no false cast (the bug was ~0.05 R-G / B-G).
+    rg = np.abs(pe[..., 0] - pe[..., 1])
+    bg = np.abs(pe[..., 2] - pe[..., 1])
+    assert rg.max() < 5e-3 and bg.max() < 5e-3, (float(rg.max()), float(bg.max()))
+    # 3. no hue-flip: the guarded perceptual stays at faithful's neutral result.
+    assert np.max(np.abs(pe - fa)) < 5e-3
+
+
+def test_nearblack_guard_preserves_legit_shadow_colour():
+    """The guard must NOT blanket-desaturate legit shadow colour: a pixel with
+    luminance ≥ _NEARBLACK_LUM_FLOOR keeps the FULL hue-preserving perceptual grade
+    — the gate clamps to 1.0 there, so the guarded reapply is byte-identical to the
+    raw out/in ratio. (Only the near-black tail below the floor rolls to neutral.)"""
+    import lrt_cinema.develop_ops as do
+
+    x = np.array([[[0.30, 0.15, 0.02]]], dtype=np.float32)  # saturated, lum ≈ 0.2
+    assert float((x @ do._PROPHOTO_LUMINANCE).reshape(-1)[0]) > _NEARBLACK_LUM_FLOOR
+    guarded = _apply_contrast_perceptual(x, -20.0)
+    # the raw (pre-guard) ratio reapply for the identical op:
+    lum = x @ _PROPHOTO_LUMINANCE
+    lum_out = np.maximum(0.18 + (lum - 0.18) * 0.8, 0.0)
+    raw = np.maximum(x * (lum_out / np.maximum(lum, _LOG_EPS))[..., None], 0.0)
+    np.testing.assert_array_equal(guarded, raw.astype(x.dtype))
+
+
+def test_nearblack_guard_holds_across_the_perceptual_op_class():
+    """Every chroma-capable perceptual op (the ratio-reapply DR/Texture/Contrast
+    AND the OKLCh-HSL / ACEScct-CDL colour ops) keeps near-black neutrals neutral.
+    A near-neutral near-black field (below the floor) graded hard by each op in
+    turn must emit bounded ACEScg chroma with no negatives — the class invariant,
+    not just the one op that fired in the production frame."""
+    rng = np.random.default_rng(3)
+    # DEEP near-black (luminance well below _NEARBLACK_LUM_FLOOR, so the gate ≈ 0
+    # and every op must fully neutralise) — the smooth C1 transition just below the
+    # floor is by-design partial grading, not the invariant under test here.
+    base = (0.0002 + 0.0005 * rng.random((24, 24, 1))).astype(np.float32)
+    x = (base * (1.0 + 0.06 * (rng.random((24, 24, 3)) - 0.5))).astype(np.float32)
+    assert float((x @ _PROPHOTO_LUMINANCE).max()) < _NEARBLACK_LUM_FLOOR
+
+    cases = {
+        "DR +Shadows": lambda p: apply_dr_compression(p, 0.0, 80.0, 0.0),
+        "Texture/Clarity": lambda p: apply_texture_clarity(p, 80.0, 80.0),
+        "Contrast -40": lambda p: _apply_contrast_perceptual(p, -40.0),
+        "HSL +Sat": lambda p: _apply_hsl_perceptual(
+            p, HslBands(saturation=(80.0,) * 8)),
+        "CDL shadow-blue": lambda p: _apply_color_grade_perceptual(
+            p, ColorGrade(shadow_hue=240.0, shadow_sat=90.0)),
+    }
+    for name, op in cases.items():
+        ap1 = _emit_acescg(op(x))
+        rg = np.abs(ap1[..., 0] - ap1[..., 1])
+        bg = np.abs(ap1[..., 2] - ap1[..., 1])
+        assert ap1.min() >= 0.0, f"{name}: emitted negatives min={ap1.min():.6f}"
+        assert rg.max() < 5e-3 and bg.max() < 5e-3, (
+            name, float(rg.max()), float(bg.max()))
