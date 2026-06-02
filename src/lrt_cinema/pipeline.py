@@ -382,7 +382,7 @@ def neutral_to_kelvin(
     return uv_to_kelvin(u, v)
 
 
-def kelvin_to_neutral(profile: DCPProfile, kelvin: float) -> np.ndarray:
+def kelvin_to_neutral(profile: DCPProfile, kelvin: float, tint: float = 0.0) -> np.ndarray:
     """Holy Grail kelvin → AsShotNeutral.
 
     Wraps Adobe SDK's `dng_color_spec::SetWhiteXY` iterative solve (ported
@@ -397,7 +397,7 @@ def kelvin_to_neutral(profile: DCPProfile, kelvin: float) -> np.ndarray:
     """
     from lrt_cinema.dcp import kelvin_tint_to_xy, xy_to_camera_neutral
 
-    x, y = kelvin_tint_to_xy(kelvin, tint=0)
+    x, y = kelvin_tint_to_xy(kelvin, tint=tint)
     asn = xy_to_camera_neutral(profile, x, y)
     return (asn / asn[1]).astype(np.float32)
 
@@ -765,7 +765,7 @@ def render_frame(
     scene_kelvin = DEFAULT_SCENE_KELVIN
     if develop_ops is not None and develop_ops.temperature_k is not None:
         scene_kelvin = float(develop_ops.temperature_k)
-        asn = kelvin_to_neutral(profile, scene_kelvin)
+        asn = kelvin_to_neutral(profile, scene_kelvin, float(develop_ops.tint or 0.0))
 
     dng_be = read_dng_baseline_exposure(raw_path)
     dbr = read_dcp_default_black_render(dcp_path) if dcp_path is not None else 0
