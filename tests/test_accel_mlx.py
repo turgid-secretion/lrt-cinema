@@ -113,6 +113,80 @@ def test_mlx_render_matches_numpy(ops_name):
     assert de.max() < 0.02, f"MLX max ΔE {de.max():.2e} too high ({ops_name})"
 
 
+def _decoded_unit_range(encoded):
+    """Push the renderer's display-encoded sRGB through the REAL writer (the clip
+    happens there, not in the renderer) and read the bytes back as [0,1] float —
+    the actual shipped emission. Returns (min, max) of the decoded TIFF."""
+    import tempfile
+
+    import tifffile
+
+    from lrt_cinema.output import write_tiff_display
+    with tempfile.TemporaryDirectory() as d:
+        write_tiff_display(encoded, f"{d}/m.tif", colorspace="srgb",
+                           bit_depth=16, pre_encoded=True)
+        dec = tifffile.imread(f"{d}/m.tif").astype(np.float64) / 65535.0
+    return float(dec.min()), float(dec.max())
+
+
+def test_mlx_faithful_srgb_is_display_valid_and_nearblack_neutral():
+    """The MLX faithful-sRGB fast-path (the new perf emission path) must emit
+    FINITE renderer pixels that the writer clips to an in-gamut [0,1] DISPLAY
+    emission, and keep a near-black NEUTRAL region neutral (no cast).
+
+    A flat ASN-balanced near-black patch (cam = k·ASN → WB → k·[1,1,1] → neutral
+    through the whole pipeline) is dropped into a corner; the rendered output
+    there must be neutral, not a saturated cast. (The renderer output itself is
+    NOT pre-clipped — scene-referred encode keeps out-of-[0,1] sRGB until the
+    writer clips — so [0,1] is asserted on the WRITTEN emission, not the raw
+    renderer array; only finiteness is required of the renderer.)"""
+    from lrt_cinema.accel._mlx_kernels import MlxFaithfulRenderer
+    from lrt_cinema.ir import DevelopOps, HslBands
+    profile = _profile()
+    cam = _synthetic_camera_rgb()
+    asn = np.array([0.52, 1.0, 0.63], dtype=np.float32)
+    cam[:8, :8] = (0.03 * asn).astype(np.float32)   # ASN-balanced near-black neutral
+    # A neutral-PRESERVING faithful grade (NO ColorGrade — its split-tone tints
+    # shadows by design, which would legitimately colour a near-black neutral and
+    # is NOT a cast). Saturation/Vibrance/HSL/Contrast keep neutrals neutral.
+    ops = DevelopOps(exposure_ev=0.3, contrast=20.0, saturation=15.0, vibrance=10.0,
+                     hsl=HslBands(saturation=(10, 0, -10, 5, 0, 8, 0, 0)))
+    got = MlxFaithfulRenderer(profile).render(cam, asn, 5500.0, ops, 0.0, 0)
+    assert np.isfinite(got).all(), "MLX renderer emitted non-finite pixels"
+    lo, hi = _decoded_unit_range(got)
+    assert lo >= 0.0 and hi <= 1.0, f"written emission out of [0,1]: {lo}..{hi}"
+    # The near-black neutral corner stays neutral (channel spread small, no cast).
+    corner = got[:8, :8].reshape(-1, 3)
+    spread = float((corner.max(axis=-1) - corner.min(axis=-1)).max())
+    assert spread < 5e-3, f"MLX cast a near-black neutral: channel spread {spread:.4f}"
+
+
+def test_mlx_render_frame_to_srgb_full_and_proxy_emit_valid():
+    """The whole-frame entry point ``accel.mlx_render_frame_to_srgb`` (decode →
+    GPU colour → sRGB) and its ``--preview-scale`` PROXY both emit finite pixels
+    that clip to an in-gamut [0,1] display emission. Fixture-gated on a converted
+    DNG (skips in CI); the proxy is exempt from ΔE fidelity, so only validity is
+    asserted, not accuracy."""
+    from pathlib import Path
+
+    from lrt_cinema import accel
+    dng = next((Path(p) for p in (
+        "/tmp/dng_out/DSC_4053_dnglab.dng", "/tmp/dng_out/DSC_4053.dng",
+        "tests/fixtures/raw/sample.dng") if Path(p).is_file()), None)
+    if dng is None:
+        pytest.skip("no converted DNG fixture for the full mlx decode path")
+    profile = _profile()
+    for scale in (1, 4):  # full + a proxy preview
+        try:
+            out = accel.mlx_render_frame_to_srgb(
+                str(dng), profile, develop_ops=_ops_graded(), preview_scale=scale)
+        except accel.MlxUnsupported:
+            pytest.skip("fixture profile outside the mlx fast path")
+        assert np.isfinite(out).all(), f"scale={scale}: non-finite"
+        lo, hi = _decoded_unit_range(out)
+        assert lo >= 0.0 and hi <= 1.0, f"scale={scale}: written emission out of [0,1]"
+
+
 def test_mlx_unsupported_without_forward_matrix():
     """A profile with no ForwardMatrix raises MlxUnsupported (caller falls back)."""
     from lrt_cinema.accel._mlx_kernels import MlxFaithfulRenderer
