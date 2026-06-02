@@ -375,6 +375,14 @@ def _apply_hsl_perceptual(prophoto: np.ndarray, hsl: HslBands) -> np.ndarray:
     xyz_d65_out = colour.Oklab_to_XYZ(colour.Oklch_to_Oklab(oklch_out))
     pp_out = (xyz_d65_out @ _M_BRADFORD_D65_TO_D50.T) @ m_xyz_to_pp.T
     out = np.maximum(pp_out.reshape(shape), 0.0)  # floor 0; NO top clamp
+    # Near-black guard (shared): the OKLCh cube-root toe gives near-neutral darks
+    # an ill-defined, easily-amplified hue; roll the result to neutral in the
+    # near-black tail so a colour band cannot inject a cast there. Above the floor
+    # this is byte-identical (gate = 1). Measured: HSL's own near-black injection
+    # is already negligible (chroma is not divided by luma in OKLCh), so this is
+    # belt-and-suspenders that keeps the whole perceptual chain uniformly safe.
+    lum_in = (flat @ _PROPHOTO_LUMINANCE).reshape(shape[:-1])
+    out = _roll_chroma_to_neutral(out, lum_in)
     return out.astype(prophoto.dtype)
 
 
@@ -526,6 +534,13 @@ def _apply_color_grade_perceptual(prophoto: np.ndarray, cg: ColorGrade) -> np.nd
     acescg_out = colour.models.log_decoding_ACEScct(log_out)
     pp_out = acescg_out @ to_prophoto.T
     out = np.maximum(pp_out.reshape(shape), 0.0)
+    # Near-black guard (shared): the ACEScct log toe makes the zero-sum-in-log
+    # chroma offset wildly ASYMMETRIC in linear near black (a shadow/global wheel
+    # with Saturation injects a measurable cast on near-neutral darks — e.g.
+    # |B-G| 0.0005→0.026 measured). Roll the result to neutral in the near-black
+    # tail; above the floor it is byte-identical (gate = 1). Reuse the luminance
+    # already computed for the zone weights.
+    out = _roll_chroma_to_neutral(out, luminance.reshape(shape[:-1]))
     return out.astype(prophoto.dtype)
 
 
@@ -621,8 +636,11 @@ def apply_dr_compression(
     log_l_out = base_comp + detail_log
     lum_out = np.maximum(np.exp2(log_l_out) - _LOG_EPS, 0.0)
 
-    ratio = lum_out / np.maximum(lum, _LOG_EPS)
-    out = np.maximum(prophoto * ratio[..., None], 0.0)  # floor 0; NO top clamp (overrange survives)
+    # §0 hue-preserving reapply, near-black-safe: a +Shadows lift forms a huge
+    # lum_out/lum ratio at near-black that would amplify a degenerate channel
+    # imbalance into a false cast + AP1 negatives — the shared guard rolls that
+    # tail to neutral (legit colour above the floor is byte-identical).
+    out = _reapply_luminance_ratio(prophoto, lum, lum_out)  # floor 0; NO top clamp
     return out.astype(prophoto.dtype)
 
 
@@ -721,8 +739,11 @@ def apply_texture_clarity(
     log_l_out = base_coarse + texture_gain * texture_band + clarity_gain * clarity_band
     lum_out = np.maximum(np.exp2(log_l_out) - _LOG_EPS, 0.0)
 
-    ratio = lum_out / np.maximum(lum, _LOG_EPS)
-    out = np.maximum(prophoto * ratio[..., None], 0.0)  # floor 0; NO top clamp (overrange survives)
+    # §0 hue-preserving reapply, near-black-safe (shared guard — see
+    # `_reapply_luminance_ratio`): a detail boost that lifts a near-black pixel
+    # would otherwise amplify a degenerate channel imbalance via the lum_out/lum
+    # ratio; the guard rolls that tail to neutral (legit colour byte-identical).
+    out = _reapply_luminance_ratio(prophoto, lum, lum_out)  # floor 0; NO top clamp
     return out.astype(prophoto.dtype)
 
 
@@ -778,8 +799,14 @@ def _apply_contrast_perceptual(prophoto: np.ndarray, contrast: float) -> np.ndar
     gain = 1.0 + contrast / 100.0
     lum = prophoto @ _PROPHOTO_LUMINANCE
     lum_out = np.maximum(0.18 + (lum - 0.18) * gain, 0.0)
-    ratio = lum_out / np.maximum(lum, _LOG_EPS)
-    out = np.maximum(prophoto * ratio[..., None], 0.0)  # floor 0; NO top clamp
+    # §0 hue-preserving reapply, near-black-safe (shared guard). A NEGATIVE
+    # contrast lifts shadows toward the 0.18 pivot → a huge lum_out/lum ratio at
+    # near-black; without the guard that amplifies the degenerate single-channel
+    # pixels apply_blacks_2012 can leave (e.g. [0,0,2.6e-6]) into a saturated
+    # false cast + AP1 negatives (the original perceptual-near-black bug). The
+    # guard rolls that tail to neutral, matching faithful per-channel Contrast2012;
+    # legit shadow colour above the floor is byte-identical.
+    out = _reapply_luminance_ratio(prophoto, lum, lum_out)  # floor 0; NO top clamp
     return out.astype(prophoto.dtype)
 
 
@@ -1192,6 +1219,100 @@ def _smoothstep(x: np.ndarray) -> np.ndarray:
     which is exactly what makes the slope-blend C1 at each window edge."""
     x = np.clip(x, 0.0, 1.0)
     return x * x * (3.0 - 2.0 * x)
+
+
+# ---------------------------------------------------------------------------
+# Internal — near-black stability guard (shared across the perceptual ops)
+# ---------------------------------------------------------------------------
+#
+# Why this exists. The perceptual Stage-12 ops are §0 hue-PRESERVING by design
+# (out/in-ratio reapply for the luminance ops; OKLCh / ACEScct-log working spaces
+# for the colour ops). That hue-preservation is correct for legit colour but is
+# DANGEROUS in the near-black tail, for two compounding reasons:
+#   * `apply_blacks_2012` (Stage 11, intent-INDEPENDENT) subtracts a uniform bias
+#     and floors at 0, so a dark, slightly-chromatic pixel can lose its smaller
+#     channels to EXACTLY 0 — leaving a degenerate, maximally-"saturated"
+#     single-channel near-black pixel (observed on the D750 gym frame:
+#     [0,0,2.6e-6] pure-blue, [1.9e-6,0,0] pure-red); and
+#   * a shadow-LIFTING reapply (Contrast2012<0, +Shadows DR-compression, …) forms
+#     `ratio = lum_out/lum`, which → ∞ as lum → 0 and multiplies that degenerate
+#     imbalance into a bright false cast. After the ProPhoto→AP1 Bradford in
+#     `output._prophoto_to_linear` the cast presents as NEGATIVE AP1 channels that
+#     the gated ACES RGC cannot rescue at near-black (its correction scales by
+#     |ach| ≈ 0). The ACEScct-log ColorGrade toe similarly turns a zero-sum-in-log
+#     chroma offset into a real near-black cast.
+# The FAITHFUL ops get near-black neutrality for free: per-channel Contrast2012
+# lifts EVERY channel toward the 0.18 pivot, so a near-black pixel goes neutral
+# regardless of its imbalance (this is exactly why faithful renders the same grade
+# with clean shadows + zero negatives). These guards give the perceptual ops the
+# same near-black neutrality WITHOUT sacrificing hue-stability on legit colour:
+# above `_NEARBLACK_LUM_FLOOR` the gate is EXACTLY 1.0 (smoothstep clamps), so
+# legit shadow colour is byte-identical to the raw op; only the near-black tail
+# rolls to neutral. The op's zero-slider `is_identity()` short-circuit fires first,
+# so a no-grade render never reaches here (the ΔE ship gate is untouched).
+#
+# Floor choice. `_NEARBLACK_LUM_FLOOR = 0.004` caps the effective ratio
+# amplification at ≈ lum_out/floor ≈ 9× (a typical shadow lift reaches ≈0.036).
+# Measured on the D750 production frame it clears 100% of the false-cast + AP1-
+# negative population (a floor of 0.002 still left the worst pixel at −3.2e-4;
+# 0.004 → min +4.9e-4, zero negatives) while leaving every pixel ≥ ~0.4% grey
+# byte-untouched. Gated on the op's INPUT luminance — the stable, pre-toe quantity
+# — so a post-lift LOW-luminance cast (a lifted pure-blue still has luminance ≈ 0)
+# cannot evade the gate. Tuning, not an LR-fidelity claim, like the other `_*`
+# perceptual constants; the Axis-1 oracle validates the *defined* blend, not
+# appearance.
+_NEARBLACK_LUM_FLOOR = 0.004
+
+
+def _nearblack_gate(lum: np.ndarray) -> np.ndarray:
+    """C1 near-black weight: 0 at `lum=0`, smoothly → 1 at `lum ≥
+    _NEARBLACK_LUM_FLOOR` (EXACTLY 1.0 above the floor — smoothstep clamps — so the
+    guard is byte-identical to the raw op for legit colour). `lum` is a
+    scene-linear luminance array `(…,)`."""
+    return _smoothstep(lum / _NEARBLACK_LUM_FLOOR)
+
+
+def _reapply_luminance_ratio(
+    prophoto: np.ndarray, lum: np.ndarray, lum_out: np.ndarray,
+) -> np.ndarray:
+    """Reapply a per-pixel luminance change `lum → lum_out` as the §0 hue-
+    preserving out/in ratio `rgb · lum_out/lum`, rolling toward the achromatic
+    pixel that carries the SAME luminance (`[lum_out]³` — exact because
+    `sum(_PROPHOTO_LUMINANCE) = 1`) as input luminance → 0. The shared near-black-
+    safe reapply for the luminance-domain perceptual ops (DR-compression,
+    Texture/Clarity, Contrast).
+
+    Above `_NEARBLACK_LUM_FLOOR` the gate is 1.0, so this returns the literal
+    `rgb · lum_out/lum` (byte-identical to the pre-guard op — `1·x + 0·y == x`).
+    Both blend branches carry luminance `lum_out`, so the guard rolls CHROMA →
+    neutral in the near-black tail WITHOUT touching tone. Floored at 0; NO top
+    clamp (overrange survives → downstream ACES RGC). The caller recasts to its
+    own dtype. See the section comment for the failure mode this prevents."""
+    ratio = lum_out / np.maximum(lum, _LOG_EPS)
+    hue_preserving = prophoto * ratio[..., None]
+    g = _nearblack_gate(lum)[..., None]
+    achromatic = np.broadcast_to(lum_out[..., None], hue_preserving.shape)
+    out = g * hue_preserving + (1.0 - g) * achromatic
+    return np.maximum(out, 0.0)
+
+
+def _roll_chroma_to_neutral(graded: np.ndarray, lum_in: np.ndarray) -> np.ndarray:
+    """Roll a perceptual COLOUR op's output toward neutral (its own luminance,
+    zero chroma) as INPUT luminance → 0, so the op injects no colour into the
+    near-black tail where its working-space toe (OKLCh cube-root; ACEScct log)
+    can turn a tiny / zero-sum imbalance into a spurious cast. Shared by
+    `_apply_hsl_perceptual` and `_apply_color_grade_perceptual`.
+
+    Above `_NEARBLACK_LUM_FLOOR` the gate is 1.0, so it returns `graded`
+    byte-for-byte (legit colour untouched — the ops' oracle patches all sit above
+    the floor). The neutral target is `graded`'s OWN luminance broadcast to three
+    channels, so the roll removes only the near-black CHROMA the op added, never
+    its tone. `lum_in` is the op's INPUT scene luminance (the stable, pre-toe gate
+    quantity)."""
+    g = _nearblack_gate(lum_in)[..., None]
+    lum_graded = (graded @ _PROPHOTO_LUMINANCE)[..., None]
+    achromatic = np.broadcast_to(lum_graded, graded.shape)
+    return g * graded + (1.0 - g) * achromatic
 
 
 def _dr_slopes(highlights: float, shadows: float, whites: float) -> tuple[float, float, float]:
