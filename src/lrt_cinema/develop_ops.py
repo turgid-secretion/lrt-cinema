@@ -116,14 +116,15 @@ def apply_saturation(prophoto: np.ndarray, sat: float) -> np.ndarray:
     """
     if sat == 0.0:
         return prophoto
-    mult = 1.0 + sat / 100.0
     # Clamp S to [0, 1] BEFORE recompose. S>1 drives _hsv_to_rgb_dcp to emit
     # negative linear-ProPhoto channels; output.py's ProPhoto→target matrix then
     # MIXES those negatives into the other channels before the [0, 1] clip, so
     # the clip does NOT neutralise it and saturated colour renders wrong (a grey
     # wedge is blind to this — see CLAUDE.md §0). Mirrors apply_vibrance, which
     # already clamps. Guarded by test_color_oracle.py with a pixel past S=1.
-    return _scale_hsv_saturation(prophoto, lambda s: np.clip(s * mult, 0.0, 1.0))
+    # Backend-dispatched (numpy reference / numba kernel) via accel.
+    from lrt_cinema import accel
+    return accel.apply_saturation(prophoto, sat)
 
 
 def apply_vibrance(prophoto: np.ndarray, vib: float) -> np.ndarray:
@@ -132,8 +133,8 @@ def apply_vibrance(prophoto: np.ndarray, vib: float) -> np.ndarray:
     s * (1 - s)`. Peak boost at s=0.5; no effect at s=0 or s=1."""
     if vib == 0.0:
         return prophoto
-    k = vib / 100.0
-    return _scale_hsv_saturation(prophoto, lambda s: np.clip(s + k * s * (1.0 - s), 0.0, 1.0))
+    from lrt_cinema import accel
+    return accel.apply_vibrance(prophoto, vib)
 
 
 def apply_hsl(prophoto: np.ndarray, hsl: HslBands) -> np.ndarray:
@@ -166,7 +167,14 @@ def apply_hsl(prophoto: np.ndarray, hsl: HslBands) -> np.ndarray:
     """
     if hsl.is_identity():
         return prophoto
+    from lrt_cinema import accel
+    return accel.apply_hsl(prophoto, hsl)
 
+
+def _hsl_numpy(prophoto: np.ndarray, hsl: HslBands) -> np.ndarray:
+    """numpy reference body for `apply_hsl` (post-identity). The backend-agnostic
+    maths; `accel.apply_hsl` calls this on the numpy branch and the `hsl_bands`
+    kernel on numba. See `apply_hsl` for the algorithm + fidelity caveat."""
     from lrt_cinema.lut3d_baker import _hsv_to_rgb_dcp, _rgb_to_hsv_dcp
 
     h, s, v, valid = _rgb_to_hsv_dcp(prophoto)
@@ -223,7 +231,14 @@ def apply_color_grade(prophoto: np.ndarray, cg: ColorGrade) -> np.ndarray:
     """
     if cg.is_identity():
         return prophoto
+    from lrt_cinema import accel
+    return accel.apply_color_grade(prophoto, cg)
 
+
+def _color_grade_numpy(prophoto: np.ndarray, cg: ColorGrade) -> np.ndarray:
+    """numpy reference body for `apply_color_grade` (post-identity); `accel.
+    apply_color_grade` calls this on the numpy branch and the `color_grade`
+    kernel on numba. See `apply_color_grade` for the algorithm + caveat."""
     from lrt_cinema.lut3d_baker import _srgb_oetf
 
     tint_shadow = _color_grade_wheel_tint(cg.shadow_hue, cg.shadow_sat, cg.shadow_lum)

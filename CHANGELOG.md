@@ -37,10 +37,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Measured M1 Max: cube **~49×**, tone **~44×**; DCP-render full-res frame
   **6.6×**; 10-frame pool throughput **7.1×** (0.97 s/frame). The Stage-13
   output encode is also de-floated (cached float32 ProPhoto→sRGB matrix + OETF,
-  ≤1 16-bit code unit, helps both backends). NB: the Stage-12 **faithful** grade
-  ops (Saturation/Vibrance/HSL/Color-Grade) are **not yet accelerated**, so a
-  heavily-graded full-res frame is ~1.8× — the documented #1 follow-up
-  (docs/PIPELINE.md §11).
+  ≤1 16-bit code unit, helps both backends).
+- **numba Stage-12 faithful grade ops.** `apply_saturation` / `apply_vibrance` /
+  `apply_hsl` / `apply_color_grade` (~11 s/frame of numpy at 24 MP) now have
+  fused `@njit` kernels (shared `_rgb2hsv`/`_hsv2rgb` scalar helpers; float32 for
+  Sat/Vib, float64 for the HSL band sums + Color-Grade, matching numpy's
+  promotion). develop_ops dispatches them through `accel.*` after their byte-exact
+  identity short-circuit, so a heavily-graded full-res frame is now **~8.8× on
+  numba** (was ~1.8×) — colour-identical to numpy (max ΔE2000 **1.6e-4**). This
+  makes the CPU `auto` path fast on graded frames on **every** platform (not just
+  Apple Silicon). The PERCEPTUAL EXR Stage-12 ops remain the one unaccelerated set.
 - **Low-resolution preview mode (`--preview-scale {1,2,4,8}`).** Fast 2×2-bin
   demosaic + linear-domain area downsample for rapid grade/sequence iteration
   (~18–34× faster even on heavily-graded frames, since it shrinks Stage-12 too).

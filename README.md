@@ -139,18 +139,17 @@ Measured on an Apple M1 Max (10 cores, D750 Camera Standard, full-res 24 MP):
 |---|---|---|---|
 | DCP-render only (no grade), 1 frame | 16.9 s | **2.5 s (6.6×)** | 1.16 s (2.1×) |
 | └ the cube + tone stages alone | 12.7 s | 0.27 s (**~48×**) | — |
-| **Heavily-graded frame** (HSL + ColorGrade + …) | ~26 s | 14.5 s (1.8×) | **1.54 s (9.1×)** |
-| **Graded sequence throughput** | — | 8.1 s/frame | **1.0 s/frame (7.9×, 3–4 workers)** |
+| **Heavily-graded frame** (HSL + ColorGrade + …) | ~26 s | **3.0 s (8.8×)** | **1.54 s (9.1×)** |
+| **Graded sequence throughput** | — | ~3 s/frame | **1.0 s/frame (7.9×, 3–4 workers)** |
 
-**Why both:** per-kernel the GPU ≈ CPU here (the LookTable gather is
-memory-bandwidth-bound, and the M1's CPU+GPU share one memory bus). The GPU
-wins by running the *whole* colour path — crucially the **Stage-12 grade** that
-numba leaves on the CPU — on-device, so it's ~parity on a flat frame but **9×**
-on a graded one. numba is the bit-tightest, most general path (all
-presets/intents); mlx is the graded-throughput specialist. (A CPU-pool + GPU-lane
-*split-frame* scheduler was measured and **rejected** — counterproductive; the
-real overlap is just mlx with a few workers, where the CPU demosaics frames while
-the GPU renders.) See [docs/PIPELINE.md](docs/PIPELINE.md) §11.
+**Why both:** both accelerate the full faithful path *including the Stage-12
+grade*, so both are fast on graded frames — numba ~8.8× (CPU, every platform,
+bit-tight: max ΔE 1.6e-4), mlx ~9.1× (Apple GPU, max ΔE ~3e-3). Per-kernel the
+GPU only *ties* the CPU (the LookTable gather is memory-bandwidth-bound and the
+M1's CPU+GPU share one bus); mlx pulls slightly ahead by keeping everything
+on-device, and scales better in a pool (CPU demosaics while the GPU renders). A
+CPU-pool + GPU-lane *split-frame* scheduler was measured and **rejected**
+(counterproductive). See [docs/PIPELINE.md](docs/PIPELINE.md) §11.
 
 For rapid grade/sequence iteration the **preview path is the answer** — and
 because it downsamples *before* the colour math, it shrinks Stage-12 grading

@@ -387,8 +387,10 @@ the colour science**. Three backends (`--backend` / `LRT_CINEMA_BACKEND`):
 |---|---|---|---|---|
 | 5 / 8 | `lut_cube_rgb` | numba | cube **8.86 s → 0.18 s** | fused RGB→HSV→trilinear→HSV→RGB + neg-passthrough, **float32** (matches the ref) |
 | 9 | `rgb_tone_spline` | numba | **3.82 s → 0.09 s** | `RefBaselineRGBTone`, Hermite eval in **float64** (matches `DngSplineSolver`) |
+| 12 | `saturation_hsv`/`vibrance_hsv`/`hsl_bands`/`color_grade` | numba | Sat/Vib/HSL/CG **~11 s total → sub-0.1 s ea** | faithful grade ops; **float32** (Sat/Vib) / **float64** (HSL band sums + Color-Grade, matching numpy's promotion). max ΔE 1.6e-4 |
 | 13 | `_prophoto_to_display` | numpy (fast) | **1.76 s → 0.59 s** | cached float32 composed ProPhoto→sRGB matrix + sRGB OETF, replacing per-frame float64 `colour.RGB_to_RGB`; helps **both** backends |
 | 1 | demosaic + ASN | numpy | one `rawpy.imread` (was two) | `_decode_raw` folds the AsShotNeutral read into the demosaic open |
+| 2–9 + 11 + 12 + 13 | `MlxFaithfulRenderer` | mlx | whole render on GPU, 1 up/download | the full faithful sRGB path on Metal — incl. Stage-12 grade; mean ΔE 1–3e-5, max ~3e-3 |
 
 The remaining linear stages (2 WB, 3 cam→XYZ, 4 XYZ→ProPhoto, 7 ExposureRamp)
 stay numpy — at the throughput config (N workers × 1 thread) a single-threaded
@@ -396,22 +398,20 @@ kernel would not beat their already-lean vectorised matmuls; fusing the linear
 matrices (2+3+4 → one matmul, FM path) and JIT-ing the ramp/encode are recorded
 follow-ups the abstraction already supports.
 
-**Scope (and the load-bearing caveat for honest numbers):** this covers
-**Stages 1–9 (the DCP render) + the encode**. The **Stage-12 FAITHFUL grade ops
-— `apply_saturation` / `apply_vibrance` / `apply_hsl` / `apply_color_grade` — are
-NOT yet accelerated** (each ~1.5–4.6 s at 24 MP, all per-pixel numpy in the same
-hexcone-HSV / luminance-mask domain). They cost the same on both backends, so a
-*heavily-graded* full-res frame's numba speed-up shrinks to **~1.8×** (HSL +
-Color-Grade set: ~26 s → ~14.5 s) even though the DCP-render part is ~6.6×. **The
-mlx GPU backend closes this** — it runs the full Stage-12 faithful grade
-on-device, so a heavily-graded frame is **9.1×** (below). A **numba/CPU** Stage-12
-acceleration (for non-Apple-Silicon boxes) remains a follow-up: the four faithful
-ops re-use the `accel` HSV-scalar helpers + a numpy-twin equivalence test, gated by
-the Axis-1 oracle. The PERCEPTUAL Stage-12 ops (DR-compression / Texture-Clarity /
-OKLCh HSL / ASC-CDL — the EXR path) are unaccelerated on every backend, a further
-follow-up. The **proxy path is also unaffected**: it downsamples before Stage 12,
-so preview shrinks the grade cost too (a heavily-graded frame is still ~18–34× at
-scale 4–8).
+**Scope:** the **Stage-12 FAITHFUL grade ops** (`apply_saturation` /
+`apply_vibrance` / `apply_hsl` / `apply_color_grade`, ~11 s/frame of numpy at
+24 MP) are now accelerated on **both** backends — numba (per-op kernels reusing
+shared `_rgb2hsv`/`_hsv2rgb` scalar helpers; max ΔE **1.6e-4**) and mlx (in the
+whole-frame path). So a *heavily-graded* full-res frame is **~8.8× on numba** (was
+~1.8× before these kernels: ~26 s → ~3.0 s) and **~9.1× on mlx** — the graded
+product path is fast on every platform, not just Apple Silicon. develop_ops
+dispatches these four through `accel.*` *after* their byte-exact identity
+short-circuit (so a zero-slider render is untouched and the ΔE gate is unmoved);
+the numpy branch calls the `_hsl_numpy` / `_color_grade_numpy` / `_scale_hsv_saturation`
+references. The **PERCEPTUAL** Stage-12 ops (DR-compression / Texture-Clarity /
+OKLCh HSL / ASC-CDL — the EXR path) are the one remaining unaccelerated set on
+every backend, a follow-up. The **proxy path** shrinks the grade cost too
+(downsamples before Stage 12 → a heavily-graded frame is still ~18–34× at scale 4–8).
 
 **Measured (D750 Camera Standard, full-res 24 MP, M1 Max 10-core):**
 
@@ -419,8 +419,8 @@ scale 4–8).
 |---|---|---|---|
 | single frame, no grade | 16.9 s | 2.5 s (6.6×) | 1.16 s (2.1×, demosaic-bound) |
 | └ cube+tone stages alone | 12.7 s | ~0.27 s (~48×) | — |
-| single frame, heavily graded | ~26 s | ~14.5 s (1.8×) | **1.54 s (9.1×)** |
-| throughput, graded sequence | — | 8.06 s/frame (10w) | **1.02 s/frame (3–4w) = 7.9×** |
+| single frame, heavily graded | ~26 s | **3.0 s (8.8×)** | **1.54 s (9.1×)** |
+| throughput, graded sequence | — | ~3 s/frame (10w) | **1.02 s/frame (3–4w) = 7.9×** |
 | throughput, no grade | — | 0.97 s/frame (10w) | ~1.0 s/frame |
 
 For numba, frame-level parallelism beats intra-frame threads (10 workers × 1
