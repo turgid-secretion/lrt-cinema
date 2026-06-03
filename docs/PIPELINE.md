@@ -143,9 +143,16 @@ highlights → neutral (DSC_4053: mean ProPhoto `[1.74,1.07,1.81]→[1.22,1.15,1
 Hence the CLI auto-default: ON for `cinema-linear-master`, OFF for tap-9.
 **Tier 2 (Poisson) shares this insertion point → it too advances only the tap-7
 path, not the default LRT sRGB round-trip** (DECISIONS §8 Phase-2 scope flag).
-Faithful-sRGB highlight handling that survives the Adobe tone curve is an open
-follow-up, not delivered. Tests: `tests/test_highlight_recovery.py` (Axis-1-style,
-fixture-free).
+
+**This clamp-before-develop-ops ordering is a defect for *graded* sequences, not a
+neutral design choice** (DECISIONS §8 retraction): Stage 9 discards the headroom
+before Stage 11 `apply_exposure_2012` runs, so an exposure/highlights pulldown can't
+surface it — proven by faithful recovery ON==OFF byte-identical even under a −3 EV
+pulldown. "Matches `dng_validate` (which clamps to white)" is the *baseline*
+criterion, not the goal: `dng_validate` is a **regression tripwire, not the
+north-star** (DECISIONS §9; CLAUDE.md). A headroom-preserving reorder is a **gated
+proposal** (DECISIONS §10), unvalidated on this constant-neutral-grade sequence.
+Tests: `tests/test_highlight_recovery.py` (Axis-1-style, fixture-free).
 
 ---
 

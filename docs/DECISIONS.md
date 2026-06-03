@@ -633,9 +633,22 @@ clamps the max channel but its mid-channel interpolation lets a **sub-LSB residu
 through on multi-channel clips (the Stage-9 ProPhoto Δ was 0.003, not 0), and a
 **dim saturated single-channel clip** can map to ProPhoto < 1.0, where the curve
 does not clamp at all. The 0 % figure is one frame (DSC_4053), measured with a
-hand-built `DevelopOps`, not the production XMP→materialize path. Either way it is
-**correct, not a gap**: the faithful path matches Adobe, and `dng_validate` clamps
-blown highlights to white too. The recovery's real benefit is the
+hand-built `DevelopOps`, not the production XMP→materialize path. **This is NOT
+"correct, not a gap" (an earlier framing, now retracted).** Matching `dng_validate`'s
+clip is correct only for the *static baseline / a constant-neutral grade*; in a
+**transform** pipeline it is a real limitation. The faithful path applies the
+clamping ProfileToneCurve at Stage 9 **before** its own develop transforms (Stage 11
+`apply_exposure_2012`, Stage 12), so an exposure/highlights pulldown — which would
+pull recovered/over-range highlights back into the sRGB range — has nothing left to
+act on. **Airtight proof:** faithful recovery ON == OFF **byte-identical even under a
+synthetic −3 EV `apply_exposure_2012` pulldown** on DSC_4053 — the Stage-9 clamp had
+already discarded the headroom before Stage 11 ran. This is a **pipeline-ordering
+defect for graded sequences**, surfaced (not hidden), and the reason `dng_validate`
+is a regression tripwire, **not** the north-star (see §"Validation hierarchy" + the
+reorder proposal §"Headroom-through-develop-ops"). (NB the production sequence here
+is *constant-neutral grade* — `crs:Exposure2012=0`, only ±0.05-stop deflicker — so
+this defect is **not exercised by the current deliverable**; the windows already
+match the JPG. It bites exposure-ramped sequences.) The recovery's real benefit is the
 **`cinema-linear-master` tap-7 scene-linear EXR** (no ProfileToneCurve): there it
 turns warm/magenta blown highlights **neutral** — measured on DSC_4053, mean
 ProPhoto on changed pixels `[1.74, 1.07, 1.81]` (R,B high, G low) → `[1.22, 1.15,
@@ -660,6 +673,78 @@ with the ratio restored, fully-blown → neutral-after-WB (not magenta), step-ed
 no overshoot, finite / non-negative, byte-identical no-op on a no-clip field, and
 the `tier2_mask` hand-off contract. Real-frame reference (drive-gated): the
 DSC_4053 measurements above. Authority: `PIPELINE.md` §"Stage 1.5".
+
+---
+
+## 9. Validation hierarchy — LRT JPG is the north-star; `dng_validate` ΔE is a regression tripwire
+
+**Decision (what "success" means).** The real goal is to **match the LRTimelapse JPG
+outputs** the colorist signed off on (Axis 3, `tools/diagnose_vs_lrt_preview.py`) —
+and then, in targeted areas, **deliberately exceed** them (highlight/shadow
+reconstruction, sharpening, noise reduction — enhancements `dng_validate` and an
+8-bit JPEG do not have). The **mean ΔE2000 < 1.0 vs `dng_validate`** ship gate
+(gym 0.026 / rose 0.545) is **demoted to a regression tripwire** for the baseline
+colour science of stages 1–9: it was the sanity check during the darktable→in-house
+model switch-out, and it still catches *accidental* colour drift, but it **has no
+veto over intentional, goal-directed divergences**.
+
+**Rationale.** `dng_validate` is Adobe's *baseline* DNG renderer — no develop ops,
+no highlight reconstruction, no sharpening, no NR. It clips blown highlights to
+white. Treating "byte-identical to dng_validate" as the success criterion is an
+**active footgun** the moment we add value beyond the baseline: it would forbid
+exactly the reconstruction/enhancement work that *is* the point (e.g. "keep
+highlights byte-identical to a renderer that throws highlight data away"). The
+0.026 number is a floor we don't want to *regress*, not a target that should *drive*
+design against the real goal.
+
+**Operational.** Keep gym/rose green for accidental-drift detection. Promote the
+LRT-JPG residual to the headline progress metric (closed-source PV5 + 8-bit-JPEG
+floor ~2.0 affine-residual; the goal is "match the look," not bit-equality). When a
+feature *intentionally* diverges from `dng_validate` (highlight recovery already
+does — §8), that is expected and documented, not a regression. Authority: CLAUDE.md
+§"Validation invariants" (north-star reframed), `docs/VALIDATION.md`.
+
+---
+
+## 10. Headroom-through-develop-ops re-ordering — PROPOSAL (go/no-go gated, NOT decided, NOT implemented)
+
+**Problem (established, §8).** The faithful path applies the **clamping** DCP
+ProfileToneCurve at Stage 9 **before** its own develop transforms (Stage 11
+`apply_exposure_2012`; Stage 12). So recovered / sensor over-range highlights are
+discarded at Stage 9 before any exposure/highlights pulldown — which would pull them
+back into sRGB range — can use them. Proven: faithful recovery ON==OFF byte-identical
+even under a −3 EV pulldown. A pipeline-ordering defect for **graded** sequences.
+
+**Proposed fix.** Apply the scene-linear-appropriate develop tone ops (Exposure2012;
+a future faithful Highlights/Whites) **before** the DCP ProfileToneCurve, and apply
+the ProfileToneCurve as the display tonemap **last** (clamp only at the display
+encode). Mirrors ACR's layering (exposure is scene-linear; the profile tone renders
+to display). **Identity-case constraint:** with no develop ops the deferred curve
+reproduces `dng_validate` exactly, so the gym/rose tripwire stays green — and the
+gate renders **stages 1–9 with no develop ops**, so the Stage-9↔11 reorder is
+**orthogonal to the gate entirely** (the gate is not the obstacle; this is §9 in
+practice).
+
+**Why it is a PROPOSAL, not a decision (what must be earned first).**
+1. `tone(x·2^EV) ≠ tone(x)·2^EV` for `EV≠0` — the reorder changes **every pixel** on
+   a graded frame, not just highlights. It could move graded frames **closer to OR
+   further from** the LRT JPG.
+2. The fix assumes ACR applies exposure **scene-linear (pre profile-tone)** — this is
+   **UNVERIFIED** (DNG SDK / ACR order not yet confirmed).
+3. **Go/no-go = a graded-frame-vs-LRT-JPG experiment:** render both orderings on a
+   frame with a real exposure grade, compare each to its `LRT_000NN.jpg`. Reduces
+   residual → adopt (and it is a match-the-look win, high priority). Worsens → the
+   ACR-order model is wrong; rethink before committing.
+
+**Blocker for the experiment (current data).** The production sequence is
+**constant-neutral grade** (`crs:Exposure2012=0` on all 5033 frames; only ±0.05-stop
+`LocalExposure2012` deflicker; constant Temp 4034). So `tone(x·2^EV) ≈ tone(x)` and
+the reorder is a **near-no-op on this entire deliverable** — it cannot be validated
+against these JPGs, and it does **not** change the current job (whose windows already
+match the JPG, §8). Validating the reorder needs an **exposure-ramped sequence**
+(real Holy-Grail day↔night, or a project that grades highlights). Until then this
+stays an unimplemented proposal; it must not become the new anchor that drives
+decisions (the §9 footgun in a different coat).
 
 ---
 

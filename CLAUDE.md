@@ -84,9 +84,19 @@ Three axes — never conflate (detail: [docs/VALIDATION.md]):
    colorist saw. Report affine-**residual** (structural) + raw; floor = closed-source
    PV5 look + 8-bit JPEG.
 
-**North-star (Adobe purge):** ship gate = mean ΔE2000 < 1.0 vs `dng_validate`
-(Adobe's DNG reference renderer; test-only oracle). Head: gym **0.026**, rose
-**0.545** mean (was 0.789 / 0.844). The gym near-bit-match landed on 2026-05-30 by
+**North-star = the LRT JPG look — NOT `dng_validate`.** The real goal is to match
+(then, in targeted areas — highlight/shadow reconstruction, sharpening, NR —
+deliberately *exceed*) the LRTimelapse JPG outputs the colorist signed off on
+(Axis 3, `tools/diagnose_vs_lrt_preview.py`). The mean ΔE2000 < 1.0 vs
+`dng_validate` (Adobe's DNG reference renderer; test-only oracle) is a **regression
+tripwire for the baseline colour science (stages 1–9)** — it was the sanity check
+during the model switch-out and still guards against *accidental* colour drift, but
+it has **NO veto over intentional, goal-directed divergences**. dng_validate does no
+highlight reconstruction, no sharpening, no NR; matching its *clip* in those areas
+is the wrong target. **Do not let the 0.026 number drive decisions against the real
+goal** (it is an active footgun when it does — e.g. "keep highlights byte-identical
+to a renderer that throws highlight data away"). Baseline-regression head: gym
+**0.026**, rose **0.545** mean (was 0.789 / 0.844). The gym near-bit-match landed on 2026-05-30 by
 fixing Stage 9 to apply the ProfileToneCurve as Adobe's **hue/saturation-preserving
 `RefBaselineRGBTone`** (curve max+min, interpolate the middle channel) instead of
 per-channel — the old "demosaic-edge tail" was mostly this per-channel tone error
