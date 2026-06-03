@@ -371,22 +371,26 @@ the **LRT JPG look is the north-star**; the mean ΔE2000 < 1.0 vs `dng_validate`
 colour science of stages 1–9 — it has no veto over goal-directed divergences
 (highlight/shadow reconstruction, sharpening, NR, or matching the PV2012 tone).
 
-**Baseline — DSC_4053 ↔ LRT_00001, production-faithful sRGB (temp 4034/tint 20):**
+**Baseline — DSC_4053 ↔ LRT_00001, production-faithful sRGB (temp 4034/tint 20).**
+Centre-**crop** aligned (8 px sensor border; NOT the resize the tool defaults to —
+resize misregisters edges ≤8 px and inflates the edge ΔE):
 
-| Metric (ours vs LRT JPG) | mean ΔE | P50 | P90 |
+| mean ΔE2000 (ours vs LRT JPG) | full | smooth (70%) | edges (30%) |
 |---|---:|---:|---:|
-| raw | 2.66 | 1.71 | 5.31 |
-| after affine (gain 0.83, no cast) | 1.77 | — | — |
-| after per-channel **monotonic tone-transfer** | 1.60 | 0.85 | 3.25 |
-| └ smooth regions only (edges excluded) | **0.88** | 0.66 | 1.53 |
-| └ edge pixels (35%, post-tone) | 2.94 | — | — |
+| raw | 2.43 | 1.57 | 4.04 |
+| after **luminance-only** monotonic tone-transfer (hue-preserving — the op §11 proposes) | 1.55 | **1.11** | 2.38 |
+| after **per-channel** monotonic tone-transfer (lower bound) | 1.27 | **0.85** | 2.07 |
 
 **Root cause = a tone-curve SHAPE difference, NOT color / BaselineExposure / a bug.**
-A monotonic tone-transfer collapses the smooth-region gap to **0.88** (≈ the 8-bit-JPEG
-floor) → the smooth gap is **purely tonal and closeable by a 1-D tone op**. The
-residual after tone-correction lives at **edges** (2.94) = ACR default sharpening
-(our `apply_sharpness` is a no-op stub) + resize/JPEG measurement artifact — spatial,
-not tone-closeable. Centre-crop luma shows the shape: highlights P95 ours 0.723 ≈
+A monotonic tone-transfer collapses the smooth-region gap from 1.57: a **luminance-only**
+(color-preserving) curve reaches **~1.11**, and a **per-channel** curve reaches **0.85**
+(≈ the 8-bit-JPEG floor). So the smooth-region gap is **mostly luminance-tone**, with a
+**small per-channel/color-tone component** (~0.26 ΔE) on top — i.e. a hue-preserving
+shoulder/toe closes most of it; a mild per-channel term closes the rest. The residual
+after tone-correction concentrates at **edges** (2.07 per-channel) = ACR default
+sharpening (our `apply_sharpness` is a no-op stub) + residual sub-pixel
+misalignment/JPEG — spatial, not tone-closeable (smaller than the resize-inflated 2.94
+first measured). Centre-crop luma shows the shape: highlights P95 ours 0.723 ≈
 Adobe-baseline (`final.tif`) 0.726 **> LRT 0.668**; mids/shadows P50 ours 0.004 <
 LRT 0.016. So **LRT = darker highlights (shoulder) + lifted shadows (toe) = the
 lower-contrast PV2012 look**; ours = the bare DCP-baseline ProfileToneCurve.

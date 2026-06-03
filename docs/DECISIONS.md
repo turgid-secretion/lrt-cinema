@@ -753,16 +753,21 @@ decisions (the §9 footgun in a different coat).
 **Problem (measured, VALIDATION.md 2026-06-02).** On the north-star (LRT JPG), the
 gap is a tone-curve **shape** difference: LRT = darker highlights (shoulder) + lifted
 shadows (toe) = the lower-contrast PV2012 look; ours = the bare DCP-baseline
-ProfileToneCurve (brighter highs, crushed shadows). Confirmed closeable: a monotonic
-tone-transfer collapses the **smooth-region** residual from 1.59 → **0.88 mean ΔE**
-(≈ the 8-bit-JPEG floor). Not color (a*/b* match), not BaselineExposure (+0.10,
-applied by both), not highlight reconstruction (windows already match).
+ProfileToneCurve (brighter highs, crushed shadows). Confirmed closeable (centre-crop
+aligned): a monotonic tone-transfer collapses the **smooth-region** residual from 1.57
+— a **luminance-only** (hue-preserving) curve reaches **~1.11**, a **per-channel** curve
+reaches **0.85** (≈ the 8-bit-JPEG floor). So the gap is **mostly luminance-tone with a
+small (~0.26 ΔE) per-channel/color-tone component** on top. Not BaselineExposure (+0.10,
+applied by both), not highlight reconstruction (windows already match); color is close
+but **not byte-identical** (the residual per-channel term).
 
 **Proposed op.** A **parametric, luminance-domain (hue/sat-preserving) shoulder+toe
 tone op** in **Stage 12 (faithful develop)**, applied on top of the DCP baseline, with
 a few knobs (pivot, highlight-shoulder strength, shadow-toe lift) **fit to minimise
-the smooth-region LRT-JPG residual**. Hue-preserving like Stage-9 `RefBaselineRGBTone`
-(the gap is tonal; color already matches). Parametric, **not** a baked per-frame LUT —
+the smooth-region LRT-JPG residual**. Hue-preserving like Stage-9 `RefBaselineRGBTone`.
+**Expect it to reach ~1.1 smooth-region** (the luminance-only ceiling); to recover the
+last ~0.26 toward 0.85, allow an **optional mild per-channel term** (a gentle per-channel
+gain/curve) — keep it small so it stays a tone-match, not a color regrade. Parametric, **not** a baked per-frame LUT —
 the measured transfer overfits the frame/JPEG; a parametric curve generalises across
 the (constant-grade) sequence and is JPEG-noise-robust.
 
@@ -782,14 +787,18 @@ closed-source — the documented PV5 floor, §5; this op matches the *observable
 response, it is **not** the dropped per-slider Highlights/Shadows/Whites math). Knobs
 are tuned to **this** project's look (this DCP, temp 4034); other looks/DCPs need
 per-look tuning or a learned default. Validate across **multiple** aligned frames
-(needs the LRT output↔source map in `.lrt/lrtsequence.json`); the 0.88 confirmation is
-one frame. The residual it **cannot** close (edges, ΔE 2.94 post-tone) is sharpening
-(our `apply_sharpness` no-op stub — a separate "push past" item) + 8-bit-JPEG/resize
-measurement artifact.
+(needs the LRT output↔source map in `.lrt/lrtsequence.json`); the smooth-region
+confirmation is **one frame, in-sample** — the parametric fit must be validated on a
+**held-out aligned frame** before shipping (that is the §11 ship gate, not just a
+caveat). The residual it **cannot** close (edges, ΔE ~2.07 post-tone, centre-crop) is
+ACR sharpening (our `apply_sharpness` no-op stub — a separate "push past" item) +
+residual sub-pixel-misalignment/JPEG artifact (smaller than the 2.94 the tool's resize
+first reported).
 
-**Status: recommended next feature.** Go signal (the 0.88 smooth-region collapse) is
-earned. Implementation = the Stage-12 op + a fit harness against
-`tools/diagnose_vs_lrt_preview.py`'s smooth-region residual.
+**Status: recommended next feature.** Go signal (the smooth-region tone collapse,
+1.57 → ~1.1 luma-only / 0.85 per-channel) is earned. Implementation = the Stage-12 op +
+a fit harness against `tools/diagnose_vs_lrt_preview.py`'s smooth-region residual,
+**validated on a held-out frame**.
 
 ---
 
