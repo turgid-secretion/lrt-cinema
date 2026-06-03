@@ -404,7 +404,7 @@ re-ingests (LRT → Render from Intermediate → Motion Blur); see
 | Rose (D750 Adobe Standard, real) mean ΔE2000 | **0.545** | `test_pipeline.py` |
 | Synthetic flat patches — neutral median / chromatic mean | **0.000 / 0.052** | `test_synthetic_dng.py` |
 | Absolute colorimetric (Axis 2) | 0.70–0.86 on the 0.81–0.84 SSF Luther floor | `test_colorimetric.py` |
-| vs LRT preview (affine residual) | ~2.0 (closed-source PV5 + 8-bit JPEG floor) | `tools/diagnose_vs_lrt_preview.py` |
+| vs LRT JPG (**north-star**), DSC_4053↔LRT_00001 | raw mean ΔE 2.66 / P50 1.71; **smooth-region tone-closeable to 0.88** (gap = PV2012 tone-shape, DECISIONS §11) | `tools/diagnose_vs_lrt_preview.py` |
 
 History: gym/rose were 0.789/0.844 before the 2026-05-30 hue-preserving-tone fix.
 

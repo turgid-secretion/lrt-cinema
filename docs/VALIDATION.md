@@ -358,6 +358,47 @@ as a test-only oracle and tune open-DCP renders back toward the **proven 0.026**
 (gym, median 0.000 — the maths bit-match). The preview is the human-facing
 end-to-end check, reported as raw + affine-residual with the PV5 floor named so
 it is never mistaken for our error or chased past what is closed-source.
+*(↑ This north-star framing is SUPERSEDED by the 2026-06-02 finding below: the LRT
+JPG is the north-star; `dng_validate`/0.026 is demoted to a regression tripwire. And
+the "benign global offset" read of the LRT gap is refined to a closeable tone-SHAPE
+gap.)*
+
+### Empirical finding 2026-06-02 — LRT-JPG north-star baseline + tone-shape root cause
+
+**Validation hierarchy reframed (project-owner directive; CLAUDE.md, DECISIONS §9):**
+the **LRT JPG look is the north-star**; the mean ΔE2000 < 1.0 vs `dng_validate`
+(gym 0.026 / rose 0.545) is **demoted to a regression tripwire** for the baseline
+colour science of stages 1–9 — it has no veto over goal-directed divergences
+(highlight/shadow reconstruction, sharpening, NR, or matching the PV2012 tone).
+
+**Baseline — DSC_4053 ↔ LRT_00001, production-faithful sRGB (temp 4034/tint 20):**
+
+| Metric (ours vs LRT JPG) | mean ΔE | P50 | P90 |
+|---|---:|---:|---:|
+| raw | 2.66 | 1.71 | 5.31 |
+| after affine (gain 0.83, no cast) | 1.77 | — | — |
+| after per-channel **monotonic tone-transfer** | 1.60 | 0.85 | 3.25 |
+| └ smooth regions only (edges excluded) | **0.88** | 0.66 | 1.53 |
+| └ edge pixels (35%, post-tone) | 2.94 | — | — |
+
+**Root cause = a tone-curve SHAPE difference, NOT color / BaselineExposure / a bug.**
+A monotonic tone-transfer collapses the smooth-region gap to **0.88** (≈ the 8-bit-JPEG
+floor) → the smooth gap is **purely tonal and closeable by a 1-D tone op**. The
+residual after tone-correction lives at **edges** (2.94) = ACR default sharpening
+(our `apply_sharpness` is a no-op stub) + resize/JPEG measurement artifact — spatial,
+not tone-closeable. Centre-crop luma shows the shape: highlights P95 ours 0.723 ≈
+Adobe-baseline (`final.tif`) 0.726 **> LRT 0.668**; mids/shadows P50 ours 0.004 <
+LRT 0.016. So **LRT = darker highlights (shoulder) + lifted shadows (toe) = the
+lower-contrast PV2012 look**; ours = the bare DCP-baseline ProfileToneCurve.
+
+**This confirms the reframe with data:** ours ≈ Adobe-baseline (≈ `dng_validate`, the
+0.026 anchor) **≠ LRT in the highlights** → matching 0.026 anchored our highlight
+tone to Adobe's *baseline*, not the colorist's PV2012 look. **The lever to match the
+look is a PV2012-style tone op (shoulder/toe) that intentionally diverges from
+`dng_validate`** (DECISIONS §11 proposal); it is orthogonal to the gym gate (which
+renders stages 1–9, no develop ops). Caveats: single aligned frame (multi-frame needs
+the LRT output↔source map); `final.tif` used a different WB than ours, so only the
+desaturated-highlight luma comparison is WB-robust (the shadow read is confounded).
 
 ### Synthetic-chart harness (Axes 2 & 3) — landed 2026-05-30
 

@@ -748,6 +748,51 @@ decisions (the §9 footgun in a different coat).
 
 ---
 
+## 11. PV2012 tone-emulation op — PROPOSAL (the lever to match the LRT-JPG look)
+
+**Problem (measured, VALIDATION.md 2026-06-02).** On the north-star (LRT JPG), the
+gap is a tone-curve **shape** difference: LRT = darker highlights (shoulder) + lifted
+shadows (toe) = the lower-contrast PV2012 look; ours = the bare DCP-baseline
+ProfileToneCurve (brighter highs, crushed shadows). Confirmed closeable: a monotonic
+tone-transfer collapses the **smooth-region** residual from 1.59 → **0.88 mean ΔE**
+(≈ the 8-bit-JPEG floor). Not color (a*/b* match), not BaselineExposure (+0.10,
+applied by both), not highlight reconstruction (windows already match).
+
+**Proposed op.** A **parametric, luminance-domain (hue/sat-preserving) shoulder+toe
+tone op** in **Stage 12 (faithful develop)**, applied on top of the DCP baseline, with
+a few knobs (pivot, highlight-shoulder strength, shadow-toe lift) **fit to minimise
+the smooth-region LRT-JPG residual**. Hue-preserving like Stage-9 `RefBaselineRGBTone`
+(the gap is tonal; color already matches). Parametric, **not** a baked per-frame LUT —
+the measured transfer overfits the frame/JPEG; a parametric curve generalises across
+the (constant-grade) sequence and is JPEG-noise-robust.
+
+**Why this is clean:**
+- **Orthogonal to the gym gate.** The gate renders **stages 1–9 with no develop ops**;
+  a Stage-12 op never touches it → gym 0.026 / rose 0.545 stay green by construction.
+  This is §9 in action: we diverge from `dng_validate` toward the LRT look **without**
+  moving the regression tripwire.
+- **Decoupled from the reorder (§10).** The gap lives in **non-clipped** highlights
+  (~0.3–0.95, present in both renders); the Stage-9 clamp only affects the truly-blown
+  small %. So this op closes the bulk of the look gap **without** needing the
+  headroom-reorder. (The reorder remains relevant only for the blown remnant + graded
+  sequences.)
+
+**Caveats / non-claims.** It is a **look-match**, not PV2012-math fidelity (PV2012 is
+closed-source — the documented PV5 floor, §5; this op matches the *observable* tone
+response, it is **not** the dropped per-slider Highlights/Shadows/Whites math). Knobs
+are tuned to **this** project's look (this DCP, temp 4034); other looks/DCPs need
+per-look tuning or a learned default. Validate across **multiple** aligned frames
+(needs the LRT output↔source map in `.lrt/lrtsequence.json`); the 0.88 confirmation is
+one frame. The residual it **cannot** close (edges, ΔE 2.94 post-tone) is sharpening
+(our `apply_sharpness` no-op stub — a separate "push past" item) + 8-bit-JPEG/resize
+measurement artifact.
+
+**Status: recommended next feature.** Go signal (the 0.88 smooth-region collapse) is
+earned. Implementation = the Stage-12 op + a fit harness against
+`tools/diagnose_vs_lrt_preview.py`'s smooth-region residual.
+
+---
+
 ## Also settled — do not re-explore (pointers, not re-derivations)
 
 - **darktable render path** — removed in v0.6 (in-process Python DNG pipeline
