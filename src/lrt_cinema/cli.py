@@ -262,18 +262,18 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     render.add_argument(
         "--demosaic", dest="demosaic", default="linear",
-        choices=("linear", "dcb", "ahd", "dht", "vng", "ppg", "aahd"),
+        choices=("linear", "rcd", "dcb", "ahd", "dht", "vng", "ppg", "aahd"),
         help=(
             "Demosaic algorithm (default: linear). 'linear' = libraw bilinear, the "
             "byte-exact match to the dng_validate regression tripwire (LOW quality — "
-            "~5 dB below modern algorithms). 'dcb'/'ahd'/'dht' = higher-quality "
-            "delivery demosaics (DCB recommended) that reduce edge/false-colour "
-            "residual vs the Lightroom JPG north-star. NB: AMaZE/RCD are GPL-blocked/"
-            "absent in this libraw (a clean-room RCD port is a follow-up). A "
-            "non-'linear' choice changes output → validate against the gym/rose gate + "
-            "LRT-JPG A/B before relying on it (it also forces the CPU path off MLX). "
-            "Ignored under --preview-scale>1 (fast 2x2-bin). See "
-            "docs/research/pipeline-overhaul-plan.md."
+            "~5 dB below modern algorithms). 'rcd' = the clean-room RCD-family demosaic "
+            "(Hamilton-Adams directional green + Malvar colour-difference R/B; "
+            "highlight-headroom-preserving) — best edge/detail quality, recommended for "
+            "delivery (+5–10 dB vs bilinear on realistic content). 'dcb'/'ahd'/'dht' = "
+            "libraw higher-quality alternatives (DCB next-best). A non-'linear' choice "
+            "changes output → validate against the gym/rose gate + LRT-JPG A/B before "
+            "relying on it (it also forces the CPU path off MLX). Ignored under "
+            "--preview-scale>1 (fast 2x2-bin). See docs/research/pipeline-overhaul-plan.md."
         ),
     )
 

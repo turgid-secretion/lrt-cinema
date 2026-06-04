@@ -466,6 +466,71 @@ def _postprocess_kwargs(rawpy_mod, half_size: bool, demosaic: str = "linear") ->
     )
 
 
+def _bayer_pattern_str(raw_pattern, color_desc) -> str | None:
+    """libraw `raw_pattern` (2×2 colour-index grid) + `color_desc` (e.g. b"RGBG")
+    → a Bayer phase string ("RGGB"/"BGGR"/"GRBG"/"GBRG") for `rcd_demosaic`, or
+    None if the sensor is not a 2×2 Bayer CFA (e.g. X-Trans) — caller falls back."""
+    import numpy as _np
+    rp = _np.asarray(raw_pattern)
+    if rp.shape != (2, 2):
+        return None
+    desc = color_desc.decode() if isinstance(color_desc, (bytes, bytearray)) else str(color_desc)
+    letters = "".join(desc[int(rp[i, j])] for i, j in ((0, 0), (0, 1), (1, 0), (1, 1)))
+    return letters if letters in ("RGGB", "BGGR", "GRBG", "GBRG") else None
+
+
+def _rcd_decode(raw) -> np.ndarray:
+    """Demosaic an open rawpy `raw` with the clean-room RCD-family demosaic
+    (`_rcd_demosaic.rcd_demosaic`) instead of libraw.
+
+    Extracts the linearised Bayer mosaic (`raw_image_visible`, post-LinearizationTable),
+    subtracts the per-channel black and scales by (white − black) — matching the
+    LINEAR path's normalisation on in-range values — then runs RCD. Unlike the libraw
+    LINEAR path it does NOT clip the top, so highlight headroom (>1.0) is PRESERVED
+    (the trunk/master wants it; Stage 7/9 clamp it on the faithful branch). Floors at
+    0 to match libraw's black clip. Returns float32 (H, W, 3) linear camera RGB.
+
+    Falls back to a ValueError-free None-check upstream for non-Bayer sensors.
+    """
+    pattern = _bayer_pattern_str(raw.raw_pattern, raw.color_desc)
+    if pattern is None:
+        raise ValueError("RCD demosaic requires a 2×2 Bayer CFA; this sensor is not.")
+    from lrt_cinema._rcd_demosaic import rcd_demosaic
+
+    cfa = raw.raw_image_visible.astype(np.float32)
+    colors = raw.raw_colors_visible
+    black = np.asarray(raw.black_level_per_channel, dtype=np.float32)[colors]
+    white = np.float32(raw.white_level)
+    cfa_norm = np.maximum((cfa - black) / (white - black), 0.0)  # floor 0; NO top clip
+    # rcd_demosaic needs even dims (the 2×2 phase); Bayer visible areas are even, but
+    # crop defensively so an odd-sized sensor can't raise.
+    h, w = cfa_norm.shape
+    cfa_norm = cfa_norm[: h - (h % 2), : w - (w % 2)]
+    return rcd_demosaic(cfa_norm, pattern)
+
+
+def _demosaic_rgb(raw, rawpy_mod, half_size: bool, demosaic: str) -> np.ndarray:
+    """Linear camera RGB (H, W, 3) float32 from an OPEN rawpy `raw`. `demosaic=='rcd'`
+    (full-res only) uses the clean-room RCD-family demosaic (headroom-preserving),
+    falling back to libraw 'linear' on a non-Bayer sensor or any error; every other
+    value goes through libraw `postprocess` (/65535). Shared by `demosaic_camera_rgb`
+    + `_decode_raw` so they cannot drift."""
+    if demosaic == "rcd" and not half_size:
+        try:
+            return _rcd_decode(raw)
+        except Exception as exc:  # noqa: BLE001 — any RCD failure → safe libraw fallback
+            import sys
+            sys.stderr.write(
+                f"warning: RCD demosaic unavailable ({exc}); falling back to 'linear'.\n",
+            )
+            return raw.postprocess(
+                **_postprocess_kwargs(rawpy_mod, half_size, "linear"),
+            ).astype(np.float32) / 65535.0
+    return raw.postprocess(
+        **_postprocess_kwargs(rawpy_mod, half_size, demosaic),
+    ).astype(np.float32) / 65535.0
+
+
 def _asn_from_wb(camera_whitebalance) -> np.ndarray:
     """libraw `camera_whitebalance` → AsShotNeutral, float32 (3,), G-normalised.
     Shared by `read_as_shot_neutral` and `_decode_raw` so both agree exactly."""
@@ -497,8 +562,7 @@ def demosaic_camera_rgb(
     import rawpy
 
     with rawpy.imread(str(raw_path)) as raw:
-        rgb = raw.postprocess(**_postprocess_kwargs(rawpy, half_size, demosaic))
-    return rgb.astype(np.float32) / 65535.0
+        return _demosaic_rgb(raw, rawpy, half_size, demosaic)
 
 
 def _decode_raw(
@@ -516,8 +580,8 @@ def _decode_raw(
 
     with rawpy.imread(str(raw_path)) as raw:
         asn = _asn_from_wb(raw.camera_whitebalance)
-        rgb = raw.postprocess(**_postprocess_kwargs(rawpy, half_size, demosaic))
-    return rgb.astype(np.float32) / 65535.0, asn
+        rgb = _demosaic_rgb(raw, rawpy, half_size, demosaic)
+    return rgb, asn
 
 
 def _block_downsample(img: np.ndarray, k: int) -> np.ndarray:
