@@ -58,7 +58,7 @@ lives only on the faithful branch. This is correct, not a defect.
 
 ---
 
-## Phase A — locally-verifiable, byte-exact-by-default (IMPLEMENTING NOW)
+## Phase A — locally-verifiable, byte-exact-by-default — SHIPPED (commit f65d674)
 
 | # | Change | Files | Default-preserving? | Local gate |
 |---|---|---|---|---|
@@ -86,7 +86,17 @@ on the default path.
   exposure-ramped LRT-JPG experiment (DECISIONS §10). Must defuse the THREE clamps
   (ramp/LookTable/curve) and solve the LookTable `[0,1]` domain — hard; stays a
   proposal until the experiment runs.
-- **B4 — clean-room RCD demosaic** (Q2 Phase-2) — MIT-clean numba port; pairs with B1.
+- **B4 — clean-room RCD demosaic — SHIPPED** (commit 947f86d; `--demosaic rcd`).
+  CLEAN-ROOM RCD-*family* (Hamilton-Adams directional green + Malvar colour-difference
+  R/B from non-GPL papers — RCD's exact internals are GPL-locked, so the defensible
+  equivalent shipped, NOT bit-RCD). `_rcd_demosaic.py` (pure numpy) + a fixture-free
+  PSNR oracle (+4.7–10.4 dB vs bilinear). Integrated by extracting the linearised
+  Bayer CFA from rawpy → normalise → RCD, which **also preserves highlight headroom**
+  (the B1 foundation). Verified on DSC_4053: normalisation matches LINEAR within
+  0.03%, 3.6× more detail, headroom max 1.296. **numba acceleration** (3.3 s/frame
+  pure-numpy) + the **fixture battery** (docs/research/demosaic-test-fixtures.md) are
+  the remaining follow-ups. Default stays `linear` (byte-exact) — owner validates edge
+  quality vs the LRT-JPG.
 
 ## Phase C — new subsystems (specs; scope later)
 - Temporal NR (motion-compensated, master-first); chromatic deflicker; E_warp gate.
