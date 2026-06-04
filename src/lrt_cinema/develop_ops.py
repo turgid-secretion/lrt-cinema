@@ -877,6 +877,7 @@ def apply_stage_12_perceptual(
 def apply_develop_ops(
     prophoto: np.ndarray, ops: DevelopOps,
     intent: RenderIntent = RenderIntent.FAITHFUL,
+    master_look: str = "bake",
 ) -> np.ndarray:
     """Entry point: apply all develop ops (stages 11 + 12) to linear
     ProPhoto. Returns linear ProPhoto post-LR-ops, ready for stage 13
@@ -885,8 +886,27 @@ def apply_develop_ops(
     `intent` (DECISIONS.md §7) picks the Stage-12 grading applicator — FAITHFUL
     (default, Adobe-hexcone, sRGB TIFF) or PERCEPTUAL (modern primitives, ACEScg
     master). Stage 11 is intent-independent.
+
+    `master_look` (trunk/branch model — docs/research/pipeline-overhaul-plan.md):
+      - ``"bake"`` (default): apply Stage 11 + Stage 12 — the full develop chain.
+        Every existing caller gets this → byte-exact, unchanged.
+      - ``"defer"``: apply **Stage 11 only** (Exposure2012 / Blacks2012 — the
+        per-frame, temporally-varying corrections, where the deflicker + Holy-Grail
+        exposure ramp ride) and DEFER the **static creative look** (Stage 12) to the
+        downstream colorist. Rationale: per-frame intent has **no transport** across
+        an NLE handoff (DECISIONS §4 — keyframes don't survive Resolve import), so it
+        MUST bake; a static sequence-wide look survives a single clip grade, so it can
+        be left out for maximum grading latitude on the scene-linear master. The CLI
+        sets ``"defer"`` only on the PERCEPTUAL tap-7 master; faithful always bakes.
+        NB: a v1 split — Stage-12 ops keyframed across the sequence are also deferred;
+        a per-op "animated?" detector is the documented refinement (use ``"bake"`` if
+        the master must carry an animated Stage-12 grade).
     """
+    if master_look not in ("bake", "defer"):
+        raise ValueError(f"master_look must be 'bake' or 'defer', got {master_look!r}")
     out = apply_stage_11_linear(prophoto, ops)
+    if master_look == "defer":
+        return out
     return apply_stage_12_perceptual(out, ops, intent)
 
 

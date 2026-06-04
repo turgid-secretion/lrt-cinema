@@ -403,14 +403,54 @@ def kelvin_to_neutral(profile: DCPProfile, kelvin: float, tint: float = 0.0) -> 
 
 
 # ---------------------------------------------------------------------------
-# Demosaic (LINEAR — matches Adobe SDK internal)
+# Demosaic
 # ---------------------------------------------------------------------------
+#
+# Default = LINEAR (libraw bilinear) — the byte-exact match to the dng_validate
+# regression tripwire, but the QUALITY floor (~5 dB below modern algorithms;
+# softens edges + leaves false colour that the appearance audit reads as "edge
+# residual"). Higher-quality delivery algorithms are selectable via `demosaic`
+# (DCB recommended). AMaZE/LMMSE need GPL demosaic packs and RCD is absent in the
+# installed libraw, so they are not offered here (a clean-room RCD port is the
+# follow-up — docs/research/pipeline-overhaul-plan.md B4). A non-LINEAR choice
+# CHANGES output and must be validated against the gym/rose gate + LRT-JPG north-
+# star before relying on it.
+
+# Public CLI demosaic name → libraw DemosaicAlgorithm member name.
+_DEMOSAIC_ALGOS = {
+    "linear": "LINEAR", "dcb": "DCB", "ahd": "AHD", "dht": "DHT",
+    "vng": "VNG", "ppg": "PPG", "aahd": "AAHD",
+}
 
 
-def _postprocess_kwargs(rawpy_mod, half_size: bool) -> dict:
+def _resolve_demosaic(rawpy_mod, demosaic: str):
+    """Map a CLI demosaic name to a libraw `DemosaicAlgorithm`, falling back to
+    LINEAR (with a stderr warning) if the chosen algorithm is missing or needs a
+    GPL pack not compiled into this libraw build. Keeps a render robust instead of
+    crashing on an unavailable algorithm."""
+    name = _DEMOSAIC_ALGOS.get(demosaic, "LINEAR")
+    algo = getattr(rawpy_mod.DemosaicAlgorithm, name, None)
+    if algo is None:
+        algo = rawpy_mod.DemosaicAlgorithm.LINEAR
+    try:  # libraw raises here if the algorithm needs an absent GPL demosaic pack.
+        if hasattr(algo, "checkSupported"):
+            algo.checkSupported()
+    except Exception as exc:  # noqa: BLE001 — any libraw support error → safe fallback
+        import sys
+        sys.stderr.write(
+            f"warning: demosaic '{demosaic}' unavailable in this libraw "
+            f"({exc}); falling back to 'linear'.\n",
+        )
+        return rawpy_mod.DemosaicAlgorithm.LINEAR
+    return algo
+
+
+def _postprocess_kwargs(rawpy_mod, half_size: bool, demosaic: str = "linear") -> dict:
     """The maximally-neutral libraw postprocess args (shared by the demosaic
-    entry points so they cannot drift). LINEAR demosaic, no auto-bright, unit
-    WB, raw output colour — Adobe-SDK-matching; see `demosaic_camera_rgb`."""
+    entry points so they cannot drift). No auto-bright, unit WB, raw output
+    colour, `demosaic` algorithm (default LINEAR = byte-exact / Adobe-SDK-matching;
+    see `demosaic_camera_rgb`). `half_size` (preview) uses libraw's 2×2-bin and
+    ignores the algorithm choice."""
     return dict(
         output_bps=16,
         gamma=(1, 1),
@@ -419,7 +459,7 @@ def _postprocess_kwargs(rawpy_mod, half_size: bool) -> dict:
         use_auto_wb=False,
         user_wb=[1.0, 1.0, 1.0, 1.0],
         output_color=rawpy_mod.ColorSpace.raw,
-        demosaic_algorithm=rawpy_mod.DemosaicAlgorithm.LINEAR,
+        demosaic_algorithm=_resolve_demosaic(rawpy_mod, demosaic),
         half_size=half_size,
         four_color_rgb=False,
         highlight_mode=rawpy_mod.HighlightMode.Clip,
@@ -434,7 +474,9 @@ def _asn_from_wb(camera_whitebalance) -> np.ndarray:
     return (asn / asn[1]).astype(np.float32)
 
 
-def demosaic_camera_rgb(raw_path: str | Path, half_size: bool = False) -> np.ndarray:
+def demosaic_camera_rgb(
+    raw_path: str | Path, half_size: bool = False, demosaic: str = "linear",
+) -> np.ndarray:
     """Demosaic via libraw with maximally-neutral postprocess settings.
 
     Accepts NEF or DNG. DNG strongly preferred — libraw honors the embedded
@@ -455,12 +497,12 @@ def demosaic_camera_rgb(raw_path: str | Path, half_size: bool = False) -> np.nda
     import rawpy
 
     with rawpy.imread(str(raw_path)) as raw:
-        rgb = raw.postprocess(**_postprocess_kwargs(rawpy, half_size))
+        rgb = raw.postprocess(**_postprocess_kwargs(rawpy, half_size, demosaic))
     return rgb.astype(np.float32) / 65535.0
 
 
 def _decode_raw(
-    raw_path: str | Path, half_size: bool = False,
+    raw_path: str | Path, half_size: bool = False, demosaic: str = "linear",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Open the raw ONCE; return (linear camera RGB, AsShotNeutral).
 
@@ -474,7 +516,7 @@ def _decode_raw(
 
     with rawpy.imread(str(raw_path)) as raw:
         asn = _asn_from_wb(raw.camera_whitebalance)
-        rgb = raw.postprocess(**_postprocess_kwargs(rawpy, half_size))
+        rgb = raw.postprocess(**_postprocess_kwargs(rawpy, half_size, demosaic))
     return rgb.astype(np.float32) / 65535.0, asn
 
 
@@ -718,6 +760,7 @@ def render_frame(
     stop_after_stage: int = 9,
     preview_scale: int = 1,
     highlight_recovery: bool = False,
+    demosaic: str = "linear",
 ) -> FrameRenderResult:
     """End-to-end render of a single RAW frame through pipeline stages 1
     through `stop_after_stage`.
@@ -769,7 +812,9 @@ def render_frame(
 
     # One raw open yields both the demosaiced pixels and AsShotNeutral (the
     # separate read wasted a full decode — costly at high preview_scale).
-    camera_rgb, asn = _decode_raw(raw_path, half_size=(preview_scale >= 2))
+    camera_rgb, asn = _decode_raw(
+        raw_path, half_size=(preview_scale >= 2), demosaic=demosaic,
+    )
     if preview_scale >= 2:
         camera_rgb = _block_downsample(camera_rgb, preview_scale // 2)
 

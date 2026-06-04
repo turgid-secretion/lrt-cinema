@@ -394,6 +394,38 @@ def test_apply_develop_ops_all_default_is_no_op():
     np.testing.assert_array_equal(apply_develop_ops(x, DevelopOps()), x)
 
 
+def test_master_look_defer_bakes_stage11_defers_stage12():
+    """`master_look='defer'` (trunk/branch model) bakes ONLY the per-frame Stage-11
+    corrections and defers the static Stage-12 look. Default 'bake' is byte-exact to
+    the prior behaviour; 'defer' == Stage-11-only; the two agree when Stage-12 is
+    identity (so a no-grade master render is unchanged)."""
+    x = np.random.RandomState(1).rand(4, 5, 3).astype(np.float32)
+    # Default param == bake == the full chain (existing callers unaffected).
+    ops_full = DevelopOps(exposure_ev=0.3, blacks=8.0, saturation=40.0)
+    np.testing.assert_array_equal(
+        apply_develop_ops(x, ops_full, RenderIntent.PERCEPTUAL),
+        apply_develop_ops(x, ops_full, RenderIntent.PERCEPTUAL, master_look="bake"),
+    )
+    # defer == Stage-11 only (drops the Stage-12 saturation).
+    np.testing.assert_array_equal(
+        apply_develop_ops(x, ops_full, RenderIntent.PERCEPTUAL, master_look="defer"),
+        apply_stage_11_linear(x, ops_full),
+    )
+    # defer != bake when a Stage-12 op is set (the look is genuinely deferred).
+    assert not np.array_equal(
+        apply_develop_ops(x, ops_full, RenderIntent.PERCEPTUAL, master_look="defer"),
+        apply_develop_ops(x, ops_full, RenderIntent.PERCEPTUAL, master_look="bake"),
+    )
+    # With NO Stage-12 ops, defer and bake are byte-identical (no-grade master).
+    ops_pf = DevelopOps(exposure_ev=0.3, blacks=8.0)
+    np.testing.assert_array_equal(
+        apply_develop_ops(x, ops_pf, RenderIntent.PERCEPTUAL, master_look="defer"),
+        apply_develop_ops(x, ops_pf, RenderIntent.PERCEPTUAL, master_look="bake"),
+    )
+    with pytest.raises(ValueError, match="master_look"):
+        apply_develop_ops(x, ops_pf, master_look="nonsense")
+
+
 # ---------------------------------------------------------------------------
 # Dual-mode render intent (DECISIONS.md §7) — the Stage-12 applicator seam
 # ---------------------------------------------------------------------------

@@ -59,13 +59,19 @@ _TARGET_TO_PRESET = {
     "master": "cinema-linear-master",      # ACEScg EXR at Stage 7 (HDR headroom)
 }
 
-# Default render-intent per emission target (DECISIONS.md §7): the sRGB TIFF
-# (LRT round-trip) defaults to FAITHFUL (match the Lightroom look); the ACEScg
-# EXR masters default to PERCEPTUAL (our better math — the path with no Adobe
-# fidelity obligation, where the DR-compression / OKLCh / CDL ops live).
-# `--render-intent` overrides. Revisit the EXR→perceptual default only if a
-# control-loop mismatch in the LR-edit→render→review loop proves untameable.
-_PERCEPTUAL_DEFAULT_PRESETS = frozenset({"cinema-linear-finished", "cinema-linear-master"})
+# Default render-intent per emission target (DECISIONS.md §7; trunk/branch model
+# — docs/research/pipeline-overhaul-plan.md). The PERCEPTUAL (scene-referred)
+# applicators — DR-compression's fixed scene-linear 0.18 anchor, OKLCh, CDL,
+# Texture/Clarity, all "no top clamp" for the downstream RGC — are only coherent
+# on **scene-linear** input. So PERCEPTUAL defaults ONLY on the tap-7 trunk master
+# (`cinema-linear-master`), which is scene-linear (pre-LookTable/pre-ProfileToneCurve).
+# `cinema-linear-finished` is **tap-9** (the full Adobe look already baked + clamped
+# to display range), so it defaults to FAITHFUL — running scene-referred ops on
+# tone-curved/clamped data is a domain mismatch (the audited "F2b" defect:
+# docs/research/pipeline-order-audit.md §F2b). The sRGB TIFF (LRT round-trip) also
+# defaults FAITHFUL (match the Lightroom look). `--render-intent` overrides either
+# way (perceptual-on-finished is still reachable explicitly, with the caveat above).
+_PERCEPTUAL_DEFAULT_PRESETS = frozenset({"cinema-linear-master"})
 
 
 def _default_intent_for_preset(preset: str) -> RenderIntent:
@@ -238,6 +244,38 @@ def _build_parser() -> argparse.ArgumentParser:
             "fast path). See docs/DECISIONS.md §'Highlight recovery'."
         ),
     )
+    render.add_argument(
+        "--master-look", dest="master_look", default="defer",
+        choices=("bake", "defer"),
+        help=(
+            "Scene-linear MASTER (PERCEPTUAL tap-7 EXR) only: whether to bake the "
+            "STATIC creative look (Stage-12 grade) into the master, or defer it to "
+            "the colorist (trunk/branch model). 'defer' (default) = clean negative: "
+            "bake ONLY the per-frame corrections (exposure/deflicker/Holy-Grail ramp, "
+            "which have no transport across the NLE handoff) and leave the static look "
+            "for Resolve. 'bake' = the full perceptual look baked in (the "
+            "'better-primitives demo' master). No effect on the faithful sRGB/TIFF "
+            "path (which always bakes the Lightroom look) or on a render with no "
+            "Stage-12 ops (byte-identical either way). See "
+            "docs/research/pipeline-overhaul-plan.md."
+        ),
+    )
+    render.add_argument(
+        "--demosaic", dest="demosaic", default="linear",
+        choices=("linear", "dcb", "ahd", "dht", "vng", "ppg", "aahd"),
+        help=(
+            "Demosaic algorithm (default: linear). 'linear' = libraw bilinear, the "
+            "byte-exact match to the dng_validate regression tripwire (LOW quality — "
+            "~5 dB below modern algorithms). 'dcb'/'ahd'/'dht' = higher-quality "
+            "delivery demosaics (DCB recommended) that reduce edge/false-colour "
+            "residual vs the Lightroom JPG north-star. NB: AMaZE/RCD are GPL-blocked/"
+            "absent in this libraw (a clean-room RCD port is a follow-up). A "
+            "non-'linear' choice changes output → validate against the gym/rose gate + "
+            "LRT-JPG A/B before relying on it (it also forces the CPU path off MLX). "
+            "Ignored under --preview-scale>1 (fast 2x2-bin). See "
+            "docs/research/pipeline-overhaul-plan.md."
+        ),
+    )
 
     return parser
 
@@ -263,6 +301,8 @@ class _RenderJob:
     threads_per_worker: int = 1   # numba intra-frame thread cap (oversubscription guard)
     preview_scale: int = 1        # 1 = full res; 2/4/8 = preview
     highlight_recovery: bool = True  # Tier-1 raw highlight reconstruction (pre-WB)
+    master_look: str = "bake"     # "bake"|"defer" (perceptual master static-look gate)
+    demosaic: str = "linear"      # libraw demosaic algorithm ("linear" = byte-exact)
 
 
 @dataclass
@@ -317,6 +357,7 @@ def _render_one_frame(job: _RenderJob) -> _RenderResult:
         # silently dropping the recovery). `--no-highlight-recovery` keeps MLX.
         if (job.backend == "mlx" and job.preset == "lrtimelapse"
                 and job.intent is RenderIntent.FAITHFUL
+                and job.demosaic == "linear"
                 and not job.highlight_recovery):
             try:
                 from lrt_cinema.output import write_tiff_display
@@ -352,9 +393,11 @@ def _render_one_frame(job: _RenderJob) -> _RenderResult:
         result = render_frame(
             dng_path, profile, dcp_path=job.dcp_path, develop_ops=job.ops,
             stop_after_stage=stop_after_stage, preview_scale=job.preview_scale,
-            highlight_recovery=job.highlight_recovery,
+            highlight_recovery=job.highlight_recovery, demosaic=job.demosaic,
         )
-        with_dev_ops = apply_develop_ops(result.prophoto, job.ops, job.intent)
+        with_dev_ops = apply_develop_ops(
+            result.prophoto, job.ops, job.intent, master_look=job.master_look,
+        )
         write_preset_output(
             with_dev_ops, job.dst_stem, job.preset, provenance=provenance,
         )
@@ -407,9 +450,27 @@ def _warn_dropped_ops(per_frame: list[DevelopOps], intent: RenderIntent) -> None
     drive the ops and are not dropped. Emits one stderr line per set-but-dropped
     field, with the frame count and the perceptual op that honours it.
     """
+    n = len(per_frame)
+
+    # Sharpness is a deliberate no-op stub (`develop_ops.apply_sharpness`) on
+    # BOTH intents (DECISIONS §5: sharpening belongs at the grade, not baked into
+    # an intermediate) — so it is a *silent* drop unless surfaced here, regardless
+    # of render-intent (the honesty invariant, DECISIONS §9). Warn before the
+    # faithful-only block below.
+    sharp_count = sum(1 for ops in per_frame if getattr(ops, "sharpness", 0.0))
+    if sharp_count:
+        sys.stderr.write(
+            f"warning: crs:Sharpness set on {sharp_count}/{n} frame(s) but NOT "
+            f"applied — apply_sharpness is an intentional no-op stub on both intents "
+            f"(sharpening belongs at the grade, not baked into a deliverable; "
+            f"DECISIONS §5). ACR bakes default capture sharpening into its preview, so "
+            f"these frames will look softer than your Lightroom preview at the pixel "
+            f"level (a known north-star edge-residual source). Not yet implemented "
+            f"(docs/research/pipeline-overhaul-plan.md D2).\n",
+        )
+
     if intent is not RenderIntent.FAITHFUL:
         return
-    n = len(per_frame)
     for field in _DROPPED_AT_EMIT_FIELDS:
         count = sum(1 for ops in per_frame if getattr(ops, field) != 0.0)
         if count:
@@ -618,6 +679,11 @@ def _cmd_render(args: argparse.Namespace) -> int:
     intent = (RenderIntent(args.render_intent) if args.render_intent
               else _default_intent_for_preset(preset))
 
+    # --master-look defers the static Stage-12 creative look ONLY on the
+    # scene-linear PERCEPTUAL master (trunk/branch model). The faithful path always
+    # bakes the Lightroom look (that IS its job), so it is forced to "bake".
+    master_look = args.master_look if intent is RenderIntent.PERCEPTUAL else "bake"
+
     _warn_dropped_ops(per_frame, intent)
 
     # Resolve the compute backend once (so all workers agree) and cap each
@@ -663,6 +729,8 @@ def _cmd_render(args: argparse.Namespace) -> int:
             threads_per_worker=threads_per_worker,
             preview_scale=args.preview_scale,
             highlight_recovery=highlight_recovery,
+            master_look=master_look,
+            demosaic=args.demosaic,
         ))
 
     if args.dry_run:
@@ -670,6 +738,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
             f"dry-run: would render {len(jobs)} frame(s) "
             f"[{args.from_frame}..{to_frame}) → {args.output} "
             f"(target={args.target}, preset={preset}, intent={intent.value}, "
+            f"master_look={master_look}, demosaic={args.demosaic}, "
             f"backend={backend}, preview_scale={args.preview_scale}, "
             f"highlight_recovery={highlight_recovery}, "
             f"workers={args.workers}).\n",

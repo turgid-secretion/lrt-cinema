@@ -184,12 +184,17 @@ def _seq_input(tmp_path):
 
 
 def test_render_intent_default_is_per_target(tmp_path, capsys):
-    """Default intent is per emission target (DECISIONS §7): sRGB TIFF
-    (lrtimelapse) → faithful; ACEScg EXR (resolve/master) → perceptual."""
+    """Default intent is per emission target (DECISIONS §7; trunk/branch F2b fix —
+    docs/research/pipeline-order-audit.md §F2b). PERCEPTUAL is only coherent on
+    SCENE-LINEAR input, so it defaults ONLY on the tap-7 trunk master
+    (`master` → cinema-linear-master). The sRGB TIFF (`lrtimelapse`) AND the tap-9
+    `resolve` (cinema-linear-finished — the full Adobe look already baked + clamped)
+    both default to FAITHFUL: running scene-referred ops on tone-curved/clamped data
+    is a domain mismatch. `--render-intent` overrides either way."""
     src = _seq_input(tmp_path)
     out = tmp_path / "out"
     for target, want in (("lrtimelapse", "faithful"),
-                         ("resolve", "perceptual"), ("master", "perceptual")):
+                         ("resolve", "faithful"), ("master", "perceptual")):
         rc = main(["render", "--input", str(src), "--output", str(out),
                    "--target", target, "--dry-run", "--quiet"])
         assert rc == 0
@@ -197,12 +202,79 @@ def test_render_intent_default_is_per_target(tmp_path, capsys):
 
 
 def test_render_intent_overrides_target_default(tmp_path, capsys):
-    """--render-intent overrides the per-target default (EXR target forced faithful)."""
+    """--render-intent overrides the per-target default. `master` (tap-7
+    cinema-linear-master) defaults PERCEPTUAL; forcing faithful proves the override
+    (resolve already defaults faithful post-F2b, so it would no longer demonstrate one)."""
     src = _seq_input(tmp_path)
     rc = main(["render", "--input", str(src), "--output", str(tmp_path / "out"),
-               "--target", "resolve", "--render-intent", "faithful", "--dry-run", "--quiet"])
+               "--target", "master", "--render-intent", "faithful", "--dry-run", "--quiet"])
     assert rc == 0
     assert "intent=faithful" in capsys.readouterr().err
+
+
+def _sharpness_seq_input(tmp_path):
+    """One-frame KEYFRAME sequence carrying crs:Sharpness above LR's default.
+    Sharpness alone is not a keyframe trigger (LR writes a default everywhere), so it
+    rides a meaningful op (Exposure2012) — the realistic case the drop-warning targets."""
+    src = tmp_path / "input"
+    src.mkdir()
+    (src / "f0001.CR3").write_bytes(b"raw-stub")
+    (src / "f0001.CR3.xmp").write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<x:xmpmeta xmlns:x="adobe:ns:meta/">\n'
+        ' <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">\n'
+        '  <rdf:Description rdf:about=""\n'
+        '    xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"\n'
+        '    crs:Exposure2012="0.50" crs:Sharpness="80"/>\n'
+        ' </rdf:RDF>\n'
+        '</x:xmpmeta>\n'
+    )
+    return src
+
+
+def test_sharpness_silent_drop_warns_both_intents(tmp_path, capsys):
+    """crs:Sharpness is a no-op stub on BOTH intents (apply_sharpness returns input);
+    it must be surfaced, not silently dropped (the honesty invariant — Phase A1,
+    docs/research/pipeline-overhaul-plan.md). Unlike H/S/W/Texture/Clarity it is
+    intent-INDEPENDENT, so the warning fires under perceptual too."""
+    src = _sharpness_seq_input(tmp_path)
+    for intent in ("faithful", "perceptual"):
+        rc = main(["render", "--input", str(src), "--output", str(tmp_path / f"o_{intent}"),
+                   "--render-intent", intent, "--dry-run", "--quiet"])
+        assert rc == 0
+        err = capsys.readouterr().err
+        assert "Sharpness set on 1/1" in err, intent
+        assert "no-op stub" in err, intent
+
+
+def test_master_look_dry_run_default_and_override(tmp_path, capsys):
+    """--master-look: default 'defer' on the PERCEPTUAL master (target=master),
+    overridable to 'bake'; forced 'bake' on the faithful sRGB path regardless."""
+    src = _seq_input(tmp_path)
+    out = tmp_path / "out"
+    # master (perceptual tap-7) → default defer
+    main(["render", "--input", str(src), "--output", str(out),
+          "--target", "master", "--dry-run", "--quiet"])
+    assert "master_look=defer" in capsys.readouterr().err
+    # master + explicit bake
+    main(["render", "--input", str(src), "--output", str(out),
+          "--target", "master", "--master-look", "bake", "--dry-run", "--quiet"])
+    assert "master_look=bake" in capsys.readouterr().err
+    # faithful sRGB always bakes the look, even if --master-look defer is passed
+    main(["render", "--input", str(src), "--output", str(out),
+          "--target", "lrtimelapse", "--master-look", "defer", "--dry-run", "--quiet"])
+    assert "master_look=bake" in capsys.readouterr().err
+
+
+def test_demosaic_flag_dry_run(tmp_path, capsys):
+    """--demosaic threads to the job; default 'linear' (byte-exact tripwire), dcb opt-in."""
+    src = _seq_input(tmp_path)
+    out = tmp_path / "out"
+    main(["render", "--input", str(src), "--output", str(out), "--dry-run", "--quiet"])
+    assert "demosaic=linear" in capsys.readouterr().err
+    main(["render", "--input", str(src), "--output", str(out),
+          "--demosaic", "dcb", "--dry-run", "--quiet"])
+    assert "demosaic=dcb" in capsys.readouterr().err
 
 
 def test_dropped_basic_tone_warns_at_render(tmp_path, capsys):
