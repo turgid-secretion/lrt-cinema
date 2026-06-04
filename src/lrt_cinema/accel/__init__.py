@@ -180,6 +180,62 @@ def apply_rgb_tone(rgb: np.ndarray, curve: Any, *,
     return _np_tone(rgb, eval_fn)
 
 
+# --- Stage 1: RCD-family demosaic ------------------------------------------
+
+
+def rcd_demosaic(cfa: np.ndarray, pattern: str, *,
+                 backend: str | None = None) -> np.ndarray:
+    """RCD-family Bayer demosaic (Stage 1), backend-dispatched.
+
+    `cfa` (H, W) single-channel mosaic; `pattern` the 2×2 phase. Returns
+    (H, W, 3) float, finite + non-negative (highlights uncapped). The cheap
+    wrapper — validate / flip-to-RGGB / reflect-pad / crop / unflip / non-negative
+    clamp — is the numpy reference's, run identically on both backends; only the
+    expensive `_rcd_rggb` core is dispatched. numpy → the literal
+    `_rcd_demosaic.rcd_demosaic` reference (unchanged); numba → the fused float64
+    `rcd_rggb` kernel on the padded mosaic. numpy stays the reference."""
+    be = resolve_backend(backend)
+    from lrt_cinema import _rcd_demosaic as ref
+    if be != "numba":
+        return ref.rcd_demosaic(cfa, pattern)
+
+    # numba: reuse the reference's exact wrapper, swapping only the core.
+    if pattern not in ref._VALID_PATTERNS:
+        raise ValueError(
+            f"pattern must be one of {ref._VALID_PATTERNS}, got {pattern!r}"
+        )
+    cfa = np.asarray(cfa)
+    if cfa.ndim != 2:
+        raise ValueError(f"cfa must be 2-D (H, W), got shape {cfa.shape}")
+    if cfa.shape[0] % 2 or cfa.shape[1] % 2:
+        raise ValueError(
+            f"cfa dimensions must be even for Bayer phase mapping, got {cfa.shape}"
+        )
+
+    out_float32 = cfa.dtype == np.float32
+    work = cfa.astype(np.float64, copy=False)
+
+    flip_rows, flip_cols = ref._PHASE_FLIP[pattern]
+    if flip_rows:
+        work = work[::-1, :]
+    if flip_cols:
+        work = work[:, ::-1]
+
+    padded = np.pad(work, ref._PAD, mode="reflect")
+    padded = np.ascontiguousarray(padded, dtype=np.float64)
+    rgb_padded = _kernels().rcd_rggb(padded)
+    rgb = rgb_padded[ref._PAD:-ref._PAD, ref._PAD:-ref._PAD, :]
+
+    if flip_cols:
+        rgb = rgb[:, ::-1, :]
+    if flip_rows:
+        rgb = rgb[::-1, :, :]
+
+    rgb = np.ascontiguousarray(rgb)
+    np.clip(rgb, 0.0, None, out=rgb)
+    return rgb.astype(np.float32) if out_float32 else rgb
+
+
 # --- Whole-frame MLX (Metal GPU) render path -------------------------------
 
 

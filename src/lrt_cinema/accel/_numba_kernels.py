@@ -544,3 +544,210 @@ def color_grade(rgb, tint_sh, tint_mid, tint_hi, tint_glob, lum_row,
         out[i, 1] = max(og, 0.0)
         out[i, 2] = max(ob, 0.0)
     return out
+
+
+# ---------------------------------------------------------------------------
+# RCD-family directional color-difference demosaic (Stage 1 core)
+# ---------------------------------------------------------------------------
+#
+# Fused float64 port of `_rcd_demosaic._rcd_rggb` (the RGGB core; the cheap
+# validate/flip/pad/crop/unflip/clip wrapper stays in numpy — see
+# `accel.rcd_demosaic`). The reference materialises ~30 full-frame float64
+# `_shift`/`np.where` temporaries; this keeps each pixel's scratch in registers
+# and writes the padded (H, W, 3) result once.
+#
+# PRECISION: float64 (the reference does `cfa.astype(np.float64)`); no fastmath
+# (reassociation would change the masked-average reduction order). The reference
+# is a *comparison* + *subtraction* method (no divide on pixel data), so it is
+# structurally finite — preserved here.
+#
+# The color-difference fill has a data dependency (`_bilinear_fill_diff` pass 2
+# reads pass 1's output), so it is split into sequential `prange` passes:
+#   A — directional green at every pixel (Hamilton-Adams), kept at green sites.
+#   B — color-difference K_R/K_B at the *opposite-color* sites (K_R at blue,
+#       K_B at red) from the 4 *diagonal* same-difference neighbours.
+#   C — K_R/K_B at the *green* sites from the 4 *cardinal* neighbours (all known
+#       after B). Then R = G + K_R, B = G + K_B, with known CFA samples exact.
+# Each pass writes a full padded buffer that the next reads, so the per-pass
+# `prange` over pixels is embarrassingly parallel with no cross-pixel races.
+#
+# Masked-average semantics (`diag_cnt`/`card_cnt` in the reference) are matched
+# exactly: a neighbour contributes only when it carries a real difference, and
+# the average divides by the *count* of contributors. On the interior (the only
+# region that survives the 2-px crop) every interior site has the full 4
+# neighbours, so this is a plain /4; the count logic only differs on the outer
+# pad ring, which is cropped away. Replicated anyway for an exact match.
+
+
+@njit(cache=True, fastmath=False, inline="always")
+def _diag_diff_avg(diff, filled, y, x, h, w):
+    """Masked average of a difference plane over the 4 *diagonal* neighbours of
+    (y, x) that carry a real value (`filled`). Returns (have, value): `have` is
+    True iff ≥1 diagonal neighbour was known (the reference's `diag_cnt > 0`)."""
+    s = 0.0
+    cnt = 0.0
+    if y - 1 >= 0 and x - 1 >= 0 and filled[y - 1, x - 1]:
+        s += diff[y - 1, x - 1]
+        cnt += 1.0
+    if y - 1 >= 0 and x + 1 < w and filled[y - 1, x + 1]:
+        s += diff[y - 1, x + 1]
+        cnt += 1.0
+    if y + 1 < h and x - 1 >= 0 and filled[y + 1, x - 1]:
+        s += diff[y + 1, x - 1]
+        cnt += 1.0
+    if y + 1 < h and x + 1 < w and filled[y + 1, x + 1]:
+        s += diff[y + 1, x + 1]
+        cnt += 1.0
+    if cnt > 0.0:
+        return True, s / cnt
+    return False, 0.0
+
+
+@njit(cache=True, fastmath=False, inline="always")
+def _card_diff_avg(diff, filled, y, x, h, w):
+    """Masked average of a difference plane over the 4 *cardinal* neighbours of
+    (y, x) that carry a real value (`filled`). Returns (have, value)."""
+    s = 0.0
+    cnt = 0.0
+    if x + 1 < w and filled[y, x + 1]:
+        s += diff[y, x + 1]
+        cnt += 1.0
+    if x - 1 >= 0 and filled[y, x - 1]:
+        s += diff[y, x - 1]
+        cnt += 1.0
+    if y + 1 < h and filled[y + 1, x]:
+        s += diff[y + 1, x]
+        cnt += 1.0
+    if y - 1 >= 0 and filled[y - 1, x]:
+        s += diff[y - 1, x]
+        cnt += 1.0
+    if cnt > 0.0:
+        return True, s / cnt
+    return False, 0.0
+
+
+@njit(parallel=True, cache=True, fastmath=False)
+def rcd_rggb(cfa):
+    """Fused RGGB-phase RCD core: padded float64 CFA (H, W) → padded (H, W, 3).
+
+    1:1 port of `_rcd_demosaic._rcd_rggb`. `cfa` is a reflect-padded 2-D mosaic
+    whose interior top-left pixel (``[2, 2]``) is RED (RGGB phase). Returns the
+    padded float64 RGB; the caller crops the 2-px ring and unflips. Same maths,
+    same operation order, float64, no `fastmath`."""
+    h, w = cfa.shape
+    green = np.empty((h, w), dtype=np.float64)
+    kr = np.zeros((h, w), dtype=np.float64)   # K_R = R - G plane (built in A→C)
+    kb = np.zeros((h, w), dtype=np.float64)   # K_B = B - G plane
+    # `filled_*` track which sites carry a real difference at each stage — the
+    # reference's `known` (pass 1) then `filled = known | diag_known` (pass 2)
+    # masks. Tracking them makes the masked averages an EXACT match even on the
+    # outer pad ring (cropped away), not just the interior.
+    f_kr = np.zeros((h, w), dtype=np.bool_)   # K_R known: red sites, then + blue
+    f_kb = np.zeros((h, w), dtype=np.bool_)   # K_B known: blue sites, then + red
+    out = np.empty((h, w, 3), dtype=np.float64)
+
+    # --- Pass A: Hamilton-Adams directional green at every site ---------------
+    # On the RGGB padded grid (pad is even, so padded parity == original parity):
+    #   R at (even, even); B at (odd, odd); G at (even, odd) and (odd, even).
+    # Green neighbours are cardinal ±1; same-channel neighbours ±2. The reference
+    # reads zero-filled shifts past the true edge; the bounds guards below do the
+    # same (out-of-range → 0.0), so the cropped interior is identical. K_R/K_B at
+    # the known R/B sites (= f − green) are recorded here so pass B can read them.
+    for y in prange(h):
+        for x in range(w):
+            is_r = (y % 2 == 0) and (x % 2 == 0)
+            is_b = (y % 2 == 1) and (x % 2 == 1)
+            if not (is_r or is_b):
+                green[y, x] = cfa[y, x]          # known green: keep exactly
+                continue
+            c = cfa[y, x]
+            # green neighbours (cardinal ±1), zero past the array edge
+            g_l = cfa[y, x + 1] if x + 1 < w else 0.0   # col +1 (ref _shift(f,0,-1))
+            g_r = cfa[y, x - 1] if x - 1 >= 0 else 0.0   # col -1
+            g_u = cfa[y + 1, x] if y + 1 < h else 0.0    # row +1
+            g_d = cfa[y - 1, x] if y - 1 >= 0 else 0.0   # row -1
+            # same-channel neighbours (±2)
+            c_l2 = cfa[y, x + 2] if x + 2 < w else 0.0
+            c_r2 = cfa[y, x - 2] if x - 2 >= 0 else 0.0
+            c_u2 = cfa[y + 2, x] if y + 2 < h else 0.0
+            c_d2 = cfa[y - 2, x] if y - 2 >= 0 else 0.0
+
+            lap_h = 2.0 * c - c_l2 - c_r2
+            lap_v = 2.0 * c - c_u2 - c_d2
+            grad_h = abs(g_l - g_r) + abs(lap_h)
+            grad_v = abs(g_u - g_d) + abs(lap_v)
+
+            if grad_h > grad_v:
+                g_est = 0.5 * (g_u + g_d) + 0.25 * lap_v        # interp vertical
+            elif grad_h < grad_v:
+                g_est = 0.5 * (g_l + g_r) + 0.25 * lap_h        # interp horizontal
+            else:
+                g_est = 0.25 * (g_u + g_d + g_l + g_r) + 0.125 * (lap_h + lap_v)
+            green[y, x] = g_est
+            if is_r:
+                kr[y, x] = c - g_est            # K_R real at red site
+                f_kr[y, x] = True
+            else:
+                kb[y, x] = c - g_est            # K_B real at blue site
+                f_kb[y, x] = True
+
+    # --- Pass B: diagonal fill of BOTH difference planes ----------------------
+    # `_bilinear_fill_diff` pass 1, transcribed literally and independently for
+    # K_R and K_B: at every site NOT already known, average the (up to 4) diagonal
+    # neighbours that ARE known; mark it filled where any existed. K_R becomes
+    # known at blue sites (diagonal red neighbours), K_B at red sites — and, on the
+    # outer pad ring, wherever a diagonal neighbour happens to be in range. Reads
+    # only pass-A `f_*`, writes only the freshly-diag-known sites, so the two
+    # planes never read each other → race-free under `prange`.
+    for y in prange(h):
+        for x in range(w):
+            if not f_kr[y, x]:
+                have, val = _diag_diff_avg(kr, f_kr, y, x, h, w)
+                if have:
+                    kr[y, x] = val
+                    f_kr[y, x] = True
+            if not f_kb[y, x]:
+                have, val = _diag_diff_avg(kb, f_kb, y, x, h, w)
+                if have:
+                    kb[y, x] = val
+                    f_kb[y, x] = True
+
+    # --- Pass C: cardinal fill of the remaining (green) sites -----------------
+    # `_bilinear_fill_diff` pass 2: at every site STILL not filled after B (the
+    # green sites; on the pad ring, any straggler), average the cardinal neighbours
+    # that are filled. After this every site carries both differences. Reads the
+    # post-B `f_*`; the `_was` snapshot makes the "filled after B" test independent
+    # of this pass's own writes (so a freshly cardinal-filled site is NOT treated
+    # as a source for its neighbour in the same pass — matching the reference,
+    # which computes `card_known` from the pre-pass-2 `filled` mask).
+    f_kr_was = f_kr.copy()
+    f_kb_was = f_kb.copy()
+    for y in prange(h):
+        for x in range(w):
+            if not f_kr_was[y, x]:
+                have, val = _card_diff_avg(kr, f_kr_was, y, x, h, w)
+                if have:
+                    kr[y, x] = val
+                    f_kr[y, x] = True
+            if not f_kb_was[y, x]:
+                have, val = _card_diff_avg(kb, f_kb_was, y, x, h, w)
+                if have:
+                    kb[y, x] = val
+                    f_kb[y, x] = True
+
+    # --- Pass D: assemble RGB (known CFA samples exact) -----------------------
+    # red = green + K_R, blue = green + K_B, then restore the exact CFA sample at
+    # its own site (reference `np.where(r_site, f, red)` / `np.where(b_site, f,
+    # blue)`). Green is already exact at green sites (pass A) / the estimate
+    # elsewhere.
+    for y in prange(h):
+        for x in range(w):
+            is_r = (y % 2 == 0) and (x % 2 == 0)
+            is_b = (y % 2 == 1) and (x % 2 == 1)
+            g = green[y, x]
+            r = cfa[y, x] if is_r else g + kr[y, x]
+            b = cfa[y, x] if is_b else g + kb[y, x]
+            out[y, x, 0] = r
+            out[y, x, 1] = g
+            out[y, x, 2] = b
+    return out

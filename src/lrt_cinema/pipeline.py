@@ -495,7 +495,7 @@ def _rcd_decode(raw) -> np.ndarray:
     pattern = _bayer_pattern_str(raw.raw_pattern, raw.color_desc)
     if pattern is None:
         raise ValueError("RCD demosaic requires a 2×2 Bayer CFA; this sensor is not.")
-    from lrt_cinema._rcd_demosaic import rcd_demosaic
+    from lrt_cinema import accel
 
     cfa = raw.raw_image_visible.astype(np.float32)
     colors = raw.raw_colors_visible
@@ -506,7 +506,7 @@ def _rcd_decode(raw) -> np.ndarray:
     # crop defensively so an odd-sized sensor can't raise.
     h, w = cfa_norm.shape
     cfa_norm = cfa_norm[: h - (h % 2), : w - (w % 2)]
-    return rcd_demosaic(cfa_norm, pattern)
+    return accel.rcd_demosaic(cfa_norm, pattern)
 
 
 def _demosaic_rgb(raw, rawpy_mod, half_size: bool, demosaic: str) -> np.ndarray:
