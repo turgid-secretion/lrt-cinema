@@ -479,49 +479,79 @@ def _bayer_pattern_str(raw_pattern, color_desc) -> str | None:
     return letters if letters in ("RGGB", "BGGR", "GRBG", "GBRG") else None
 
 
-def _rcd_decode(raw) -> np.ndarray:
-    """Demosaic an open rawpy `raw` with the clean-room RCD-family demosaic
-    (`_rcd_demosaic.rcd_demosaic`) instead of libraw.
+# CFA-domain demosaics (vs libraw postprocess): these run on the linearised Bayer
+# mosaic we extract ourselves (`_extract_cfa`) — full-res, headroom-preserving, and
+# the shared insertion point for the future B1 mosaic-domain highlight-recon pre-pass
+# (extract CFA → [B1] → demosaic). 'rcd'/'mlri' are clean-room (ours); 'menon' is
+# colour_demosaicing's BSD-3 Menon2007 (DDFAPD) — the measured-best on the demosaic
+# battery (docs/research/demosaic-test-fixtures.md), the recommended quality/master
+# demosaic. All three preserve over-range (>1) input (verified), so B1's recovered
+# highlights survive any of them.
+_CFA_DEMOSAICS = ("rcd", "mlri", "menon")
 
-    Extracts the linearised Bayer mosaic (`raw_image_visible`, post-LinearizationTable),
-    subtracts the per-channel black and scales by (white − black) — matching the
-    LINEAR path's normalisation on in-range values — then runs RCD. Unlike the libraw
-    LINEAR path it does NOT clip the top, so highlight headroom (>1.0) is PRESERVED
-    (the trunk/master wants it; Stage 7/9 clamp it on the faithful branch). Floors at
-    0 to match libraw's black clip. Returns float32 (H, W, 3) linear camera RGB.
 
-    Falls back to a ValueError-free None-check upstream for non-Bayer sensors.
+def _extract_cfa(raw) -> tuple[np.ndarray, str]:
+    """Open rawpy `raw` → (linearised Bayer CFA, phase string).
+
+    The CFA is `raw_image_visible` (post-LinearizationTable), per-channel
+    black-subtracted and scaled by (white − black) to match the LINEAR path on
+    in-range values, floored at 0 (libraw's black clip) with **NO top clip** so
+    highlight headroom (>1.0) is PRESERVED. Cropped to even dims (the 2×2 Bayer
+    phase). Raises ValueError on a non-2×2-Bayer sensor.
+
+    Shared by every CFA-domain demosaic AND the future **B1 mosaic-domain
+    highlight-recovery pre-pass**, which slots in between this extraction and the
+    demosaic call (extract CFA → B1(CFA) → demosaic). B1 is therefore
+    demosaic-independent: it operates here, on the mosaic, before any reconstruction.
     """
     pattern = _bayer_pattern_str(raw.raw_pattern, raw.color_desc)
     if pattern is None:
-        raise ValueError("RCD demosaic requires a 2×2 Bayer CFA; this sensor is not.")
-    from lrt_cinema import accel
-
+        raise ValueError("CFA-domain demosaic requires a 2×2 Bayer sensor; this is not.")
     cfa = raw.raw_image_visible.astype(np.float32)
     colors = raw.raw_colors_visible
     black = np.asarray(raw.black_level_per_channel, dtype=np.float32)[colors]
     white = np.float32(raw.white_level)
     cfa_norm = np.maximum((cfa - black) / (white - black), 0.0)  # floor 0; NO top clip
-    # rcd_demosaic needs even dims (the 2×2 phase); Bayer visible areas are even, but
-    # crop defensively so an odd-sized sensor can't raise.
     h, w = cfa_norm.shape
-    cfa_norm = cfa_norm[: h - (h % 2), : w - (w % 2)]
-    return accel.rcd_demosaic(cfa_norm, pattern)
+    return cfa_norm[: h - (h % 2), : w - (w % 2)], pattern
+
+
+def _cfa_demosaic(raw, method: str) -> np.ndarray:
+    """Demosaic an open rawpy `raw` on the extracted CFA with a CFA-domain `method`
+    ('rcd'|'mlri'|'menon'), headroom-preserving. Returns float32 (H, W, 3)."""
+    cfa, pattern = _extract_cfa(raw)
+    if method == "rcd":
+        from lrt_cinema import accel
+        return accel.rcd_demosaic(cfa, pattern)
+    if method == "mlri":
+        from lrt_cinema._mlri_demosaic import mlri_demosaic
+        return mlri_demosaic(cfa, pattern).astype(np.float32)
+    if method == "menon":  # colour_demosaicing BSD-3 Menon2007 (DDFAPD) — quality default
+        from colour_demosaicing import demosaicing_CFA_Bayer_Menon2007
+        out = np.asarray(
+            demosaicing_CFA_Bayer_Menon2007(cfa, pattern), dtype=np.float32,
+        )
+        # Floor ≥0 to match the RCD/MLRI convention (directional demosaics can ring
+        # slightly negative at edges); NO top clip — preserve highlight headroom.
+        return np.maximum(out, np.float32(0.0))
+    raise ValueError(f"unknown CFA demosaic method {method!r}")
 
 
 def _demosaic_rgb(raw, rawpy_mod, half_size: bool, demosaic: str) -> np.ndarray:
-    """Linear camera RGB (H, W, 3) float32 from an OPEN rawpy `raw`. `demosaic=='rcd'`
-    (full-res only) uses the clean-room RCD-family demosaic (headroom-preserving),
-    falling back to libraw 'linear' on a non-Bayer sensor or any error; every other
-    value goes through libraw `postprocess` (/65535). Shared by `demosaic_camera_rgb`
-    + `_decode_raw` so they cannot drift."""
-    if demosaic == "rcd" and not half_size:
+    """Linear camera RGB (H, W, 3) float32 from an OPEN rawpy `raw`. A CFA-domain
+    method ('rcd'/'mlri'/'menon', full-res only) runs on the extracted CFA
+    (headroom-preserving), falling back to libraw 'linear' on a non-Bayer sensor, a
+    missing optional dep (e.g. colour_demosaicing for 'menon'), or ANY error; preview
+    (half_size) and libraw algos go through `postprocess` (/65535). Shared by
+    `demosaic_camera_rgb` + `_decode_raw` so they cannot drift."""
+    if demosaic in _CFA_DEMOSAICS and not half_size:
         try:
-            return _rcd_decode(raw)
-        except Exception as exc:  # noqa: BLE001 — any RCD failure → safe libraw fallback
+            return _cfa_demosaic(raw, demosaic)
+        except Exception as exc:  # noqa: BLE001 — any failure → safe libraw fallback
             import sys
             sys.stderr.write(
-                f"warning: RCD demosaic unavailable ({exc}); falling back to 'linear'.\n",
+                f"warning: demosaic '{demosaic}' unavailable ({exc}); "
+                f"falling back to 'linear'.\n",
             )
             return raw.postprocess(
                 **_postprocess_kwargs(rawpy_mod, half_size, "linear"),

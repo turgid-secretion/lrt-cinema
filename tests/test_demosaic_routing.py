@@ -44,3 +44,37 @@ def test_demosaic_algos_table_excludes_rcd():
     assert "rcd" not in _DEMOSAIC_ALGOS
     assert _DEMOSAIC_ALGOS["linear"] == "LINEAR"
     assert "dcb" in _DEMOSAIC_ALGOS
+
+
+def test_cfa_demosaics_table():
+    """The CFA-domain methods (run on our extracted mosaic, not libraw postprocess)
+    are rcd/mlri/menon — disjoint from the libraw-algo table, routed via _cfa_demosaic."""
+    from lrt_cinema.pipeline import _CFA_DEMOSAICS
+
+    assert _CFA_DEMOSAICS == ("rcd", "mlri", "menon")
+    for m in _CFA_DEMOSAICS:
+        assert m not in _DEMOSAIC_ALGOS
+
+
+def test_cfa_demosaics_preserve_overrange():
+    """B1-critical regression: every CFA-domain demosaic must PRESERVE recovered >1
+    highlights — else the future mosaic-domain highlight-recon (B1), which extracts
+    headroom above the clip, would have its work crushed by the demosaic. Verified on
+    a CFA with a >1 blob (the shape B1 produces)."""
+    from lrt_cinema import accel
+    from lrt_cinema._mlri_demosaic import mlri_demosaic
+
+    cfa = np.full((32, 32), 0.3, dtype=np.float64)
+    cfa[8:24, 8:24] = 1.6  # a B1-recovered highlight region (>1)
+    cases = [("rcd", lambda c: accel.rcd_demosaic(c, "RGGB")),
+             ("mlri", lambda c: mlri_demosaic(c, "RGGB"))]
+    try:  # menon is the external BSD-3 quality path (optional dep)
+        from colour_demosaicing import demosaicing_CFA_Bayer_Menon2007 as _menon
+        cases.append(("menon", lambda c: np.asarray(_menon(c, "RGGB"))))
+    except ImportError:
+        pass
+    for name, fn in cases:
+        out = fn(cfa.copy())
+        assert np.isfinite(out).all(), name
+        assert out.min() >= 0.0, name
+        assert out[12:20, 12:20].max() > 1.0, f"{name}: >1 highlight did not survive"

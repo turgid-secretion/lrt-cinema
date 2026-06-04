@@ -262,18 +262,22 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     render.add_argument(
         "--demosaic", dest="demosaic", default="linear",
-        choices=("linear", "rcd", "dcb", "ahd", "dht", "vng", "ppg", "aahd"),
+        choices=("linear", "menon", "rcd", "mlri", "dcb", "ahd", "dht", "vng", "ppg", "aahd"),
         help=(
             "Demosaic algorithm (default: linear). 'linear' = libraw bilinear, the "
-            "byte-exact match to the dng_validate regression tripwire (LOW quality — "
-            "~5 dB below modern algorithms). 'rcd' = the clean-room RCD-family demosaic "
-            "(Hamilton-Adams directional green + Malvar colour-difference R/B; "
-            "highlight-headroom-preserving) — best edge/detail quality, recommended for "
-            "delivery (+5–10 dB vs bilinear on realistic content). 'dcb'/'ahd'/'dht' = "
-            "libraw higher-quality alternatives (DCB next-best). A non-'linear' choice "
-            "changes output → validate against the gym/rose gate + LRT-JPG A/B before "
-            "relying on it (it also forces the CPU path off MLX). Ignored under "
-            "--preview-scale>1 (fast 2x2-bin). See docs/research/pipeline-overhaul-plan.md."
+            "byte-exact match to the dng_validate regression tripwire (LOW quality). "
+            "'menon' = colour_demosaicing Menon2007/DDFAPD (BSD-3) — the RECOMMENDED "
+            "quality/delivery demosaic: measured-best on the demosaic battery (CPSNR + "
+            "lowest false-colour, ties on resolution; needs `pip install .[demosaic]`). "
+            "'rcd' = our clean-room RCD-family (numba-fast, headroom-preserving, "
+            "white-box) — sharp (ties Menon on MTF) but more chroma-aliasing; the fast/"
+            "preview path. 'mlri' = clean-room MLRI (measured ≈ rcd; experiment). "
+            "'dcb'/'ahd'/'dht' = libraw alternatives. Any non-'linear' choice changes "
+            "output → validate vs the gym/rose gate + LRT-JPG before relying on it "
+            "(also forces the CPU path off MLX; menon/rcd/mlri preserve highlight "
+            "headroom for the master). Falls back to 'linear' if the choice is "
+            "unavailable. Ignored under --preview-scale>1. See "
+            "docs/research/{pipeline-overhaul-plan,demosaic-test-fixtures}.md."
         ),
     )
 

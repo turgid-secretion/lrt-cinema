@@ -69,6 +69,14 @@ gpu = [
 detect = [
     "colour-checker-detection>=0.2",
 ]
+# Optional extra for the highest-quality demosaic (--demosaic menon): the BSD-3
+# colour-demosaicing Menon2007 (DDFAPD), the measured-best on the demosaic battery
+# (docs/research/demosaic-test-fixtures.md). NOT required — the renderer falls back
+# to the clean-room RCD / libraw 'linear' when it is absent. Sibling of the
+# colour-science dep already pinned above.
+demosaic = [
+    "colour-demosaicing>=0.2",
+]
 
 [project.scripts]
 lrt-cinema = "lrt_cinema.cli:main"
