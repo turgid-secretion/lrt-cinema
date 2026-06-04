@@ -13,9 +13,11 @@ and fixes the audited bugs ([pipeline-order-audit.md](pipeline-order-audit.md)).
 - **D-master:** per-frame corrections ALWAYS bake into the scene-linear trunk; a
   `--master-look {bake,defer}` flag (**default defer** = clean master) controls
   whether the *static* creative look is also baked. Perceptual ops stay, optional.
-- **D-demosaic:** switch delivery to **DCB** (LGPL, available, ~5 dB > bilinear)
+- **D-demosaic:** switch delivery to **DCB** (BSD-3, available, ~5 dB > bilinear)
   behind a flag; **clean-room RCD** numba port is a Phase-2 follow-up. (AMaZE=GPL3,
-  LMMSE=GPL2, RCD=absent in the installed libraw 0.22.1 → blocked.)
+  LMMSE=GPL2, RCD=absent in the installed libraw 0.22.1 → blocked. DCB's file is
+  BSD-3 — Jacek Gozdz, verified vs the LibRaw source header — so DCB *source* is
+  readable/clean-room-safe; LGPL is the LibRaw *library*, not the DCB file.)
 - **D-validation:** flag-gated; defaults preserve current bytes; I verify
   byte-exact identity + the 202 Axis-1 oracles + the synthetic-chromatic ΔE
   harness + unit tests locally; **owner runs gym/rose + LRT-JPG before flipping

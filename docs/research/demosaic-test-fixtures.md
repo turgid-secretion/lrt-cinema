@@ -15,6 +15,14 @@ band-limited reference, restrictive licence, or measuring *port fidelity* instea
 anchored to primary-sourced metrics and to published performance numbers so the
 "world-class" claim becomes **falsifiable**. The plan is in §8.
 
+**Scope.** The brief said "demosaic (and the render pipeline in general)." The pipeline's
+*colour/tone* correctness is already covered by the existing three-axis validation triad
+([docs/VALIDATION.md](../VALIDATION.md): implementation correctness, absolute colorimetric
+accuracy, appearance-vs-LRT). This deliverable deliberately targets the **one uncovered
+dimension — spatial reconstruction / demosaic** (the documented "demosaic EDGE quality cannot
+be validated locally" gap, [pipeline-overhaul-plan.md](pipeline-overhaul-plan.md) §"Local
+validation surface"). It does not re-survey colour, which is not the hole.
+
 > Method note: every technical spec, dataset fact, metric definition and performance number
 > below is attributed to a peer-reviewed paper, an ISO standard, or a primary author/tooling
 > source, gathered by four parallel research passes that cross-referenced for agreement and
@@ -352,7 +360,9 @@ substitute. Licence: ICVL CC BY-NC-ND (cite, don't redistribute); CAVE research-
 this is the *sRGB-domain* protocol (matches the literature, **not** our linear production
 path), so it is a **competitiveness sanity check**, not the production verification (which is
 Layers A/B/C). Datasets **downloaded on demand, not checked in** (licences §2); skip-gate when
-absent.
+absent. **Implementation requirement:** each bar number in the §6 table must be re-read
+directly from its source paper's table at the time the gate is coded (the numbers here are
+research-pass transcriptions); an unverified number must never become the pass/fail gate.
 
 ### Layer E — Port-fidelity regression (Axis D1, strictly separate from D2)
 
