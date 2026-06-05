@@ -177,6 +177,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Render keyframe-only ops; ignore LRT-authored per-frame deltas.",
     )
     render.add_argument(
+        "--deflicker-scale", dest="deflicker_scale", type=float, default=1.0,
+        help=(
+            "Multiply the per-frame DEFLICKER EV delta (LocalExposure2012) by this "
+            "factor before applying it (HG/Global untouched). Default 1.0 = the "
+            "LRT-authored value (byte-exact). The 250-frame north-star comparison "
+            "(docs/research/sequence-comparison-findings.md) shows the LRT brightness "
+            "ramp is UNDER-tracked at 1.0 — the per-frame gain drifts 0.94→1.08 across "
+            "the sequence (a LocalExposure2012-vs-global units mismatch). A scale >1 "
+            "(empirically ~3) flattens it toward 1.0 and collapses the north-star gap "
+            "toward the ~0.85 JPEG floor. EXACT factor is owner-calibrated (uncited "
+            "basis) — validate vs the LRT JPGs before relying on a non-1.0 value."
+        ),
+    )
+    render.add_argument(
         "--dcp", type=Path, default=None,
         help=(
             "Explicit DCP path. Accepts a `.dcp` (clean-room reader) or "
@@ -662,8 +676,9 @@ def _cmd_render(args: argparse.Namespace) -> int:
     if args.apply_lrt_offsets:
         per_frame = apply_lrt_mask_offsets(
             per_frame, seq, kinds=("hg", "deflicker", "global"),
+            deflicker_scale=args.deflicker_scale,
         )
-        per_frame = apply_deflicker(per_frame, seq)
+        per_frame = apply_deflicker(per_frame, seq, scale=args.deflicker_scale)
 
     args.output.mkdir(parents=True, exist_ok=True)
     dng_cache_dir = args.output / ".dng-cache"

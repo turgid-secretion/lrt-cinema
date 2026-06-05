@@ -189,6 +189,33 @@ def test_apply_lrt_mask_offsets_sums_kinds_per_frame():
     assert applied[3].exposure_ev == 1.0
 
 
+def test_deflicker_scale_b2():
+    """B2: deflicker_scale multiplies ONLY the deflicker delta (HG/Global untouched);
+    default 1.0 is byte-exact (the LRT-authored value)."""
+    # apply_deflicker (synthetic offsets): scale multiplies the delta.
+    seq = _seq(3, [Keyframe(frame_index=0, ops=DevelopOps(exposure_ev=1.0))],
+               deflicker=[DeflickerOffset(frame_index=1, exposure_delta_ev=0.1)])
+    assert apply_deflicker(materialize_all_frames(seq), seq, scale=1.0)[1].exposure_ev \
+        == pytest.approx(1.1)               # default unchanged
+    assert apply_deflicker(materialize_all_frames(seq), seq, scale=3.0)[1].exposure_ev \
+        == pytest.approx(1.3)               # 1.0 + 3*0.1
+
+    # apply_lrt_mask_offsets: deflicker_scale hits ONLY the deflicker kind.
+    seq2 = _seq(2, [Keyframe(frame_index=0, ops=DevelopOps(exposure_ev=0.0))])
+    seq2.lrt_mask_offsets = [
+        LRTMaskOffset(frame_index=1, kind="hg",        exposure_delta_ev=0.30),
+        LRTMaskOffset(frame_index=1, kind="deflicker", exposure_delta_ev=0.10),
+        LRTMaskOffset(frame_index=1, kind="global",    exposure_delta_ev=0.20),
+    ]
+    # default 1.0: 0.30 + 0.10 + 0.20 = 0.60 (byte-exact)
+    assert apply_lrt_mask_offsets(
+        materialize_all_frames(seq2), seq2)[1].exposure_ev == pytest.approx(0.60)
+    # scale 3.0: hg 0.30 + deflicker 0.10*3 + global 0.20 = 0.80 (only deflicker scaled)
+    assert apply_lrt_mask_offsets(
+        materialize_all_frames(seq2), seq2, deflicker_scale=3.0)[1].exposure_ev \
+        == pytest.approx(0.80)
+
+
 def test_apply_lrt_mask_offsets_kinds_filter():
     # Only the requested kinds apply.
     seq = _seq(2, [Keyframe(frame_index=0, ops=DevelopOps(exposure_ev=0.0))])

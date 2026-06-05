@@ -72,23 +72,28 @@ def materialize_all_frames(seq: LRTSequence) -> list[DevelopOps]:
 
 
 def apply_deflicker(
-    per_frame_ops: list[DevelopOps], seq: LRTSequence,
+    per_frame_ops: list[DevelopOps], seq: LRTSequence, scale: float = 1.0,
 ) -> list[DevelopOps]:
     """Apply LRT-written per-frame deflicker exposure deltas in place.
 
-    Each `DeflickerOffset(frame_index, exposure_delta_ev)` adds its
+    Each `DeflickerOffset(frame_index, exposure_delta_ev)` adds its (scaled)
     delta onto that frame's exposure_ev. Frames without a recorded
     offset are unchanged.
 
-    Returns the mutated list (also mutates `per_frame_ops` for
-    in-place callers). The compute-the-deltas pass — `darktable-cli`
-    export → measure luminance via OIIO → write deltas back — is
-    out of scope for v0.1 (see SCOPE.md). This function applies
-    deltas the LRT user already authored.
+    `scale` (B2) multiplies the deflicker EV delta before it is applied. Default
+    1.0 = byte-exact (the LRT-authored value). The 250-frame north-star comparison
+    (docs/research/sequence-comparison-findings.md) shows the LRT JPG's brightness
+    ramp is under-tracked at scale 1.0 (a units mismatch between LrC's local-mask
+    Exposure2012 and the global Exposure2012 our `apply_exposure_2012` applies); a
+    `scale > 1` flattens the per-frame gain drift toward 1.0. The exact factor is
+    OWNER-CALIBRATED against the LRT JPGs and not yet hard-coded as the default
+    (uncited basis — see the findings doc + memory).
+
+    Returns the mutated list (also mutates `per_frame_ops` for in-place callers).
     """
     delta_by_frame = {d.frame_index: d.exposure_delta_ev for d in seq.deflicker_offsets}
     for i, ops in enumerate(per_frame_ops):
-        delta = delta_by_frame.get(i, 0.0)
+        delta = delta_by_frame.get(i, 0.0) * scale
         if delta != 0.0:
             per_frame_ops[i] = replace(ops, exposure_ev=ops.exposure_ev + delta)
     return per_frame_ops
@@ -97,6 +102,7 @@ def apply_deflicker(
 def apply_lrt_mask_offsets(
     per_frame_ops: list[DevelopOps], seq: LRTSequence,
     kinds: tuple[str, ...] = ("hg", "deflicker", "global"),
+    deflicker_scale: float = 1.0,
 ) -> list[DevelopOps]:
     """Apply real-LRT mask-correction per-frame exposure deltas in place.
 
@@ -110,6 +116,13 @@ def apply_lrt_mask_offsets(
     `("deflicker",)` to apply only Deflicker corrections, etc. Matches
     the CLI's per-source toggle semantics.
 
+    `deflicker_scale` (B2) multiplies ONLY the **deflicker**-kind delta (HG/Global
+    untouched). Default 1.0 = byte-exact. The 250-frame north-star comparison shows
+    the LRT brightness ramp is under-tracked at 1.0 (a LocalExposure2012-vs-global
+    units mismatch); a `scale > 1` flattens the per-frame gain drift. The exact
+    factor is owner-calibrated (uncited basis) — see
+    docs/research/sequence-comparison-findings.md.
+
     Mutates `per_frame_ops` in place and returns it. See
     ADVERSARIAL_AUDIT_2026-05-23 HIGH-2 for context.
     """
@@ -118,9 +131,10 @@ def apply_lrt_mask_offsets(
     for off in seq.lrt_mask_offsets:
         if off.kind not in kinds_set:
             continue
-        sum_by_frame[off.frame_index] = (
-            sum_by_frame.get(off.frame_index, 0.0) + off.exposure_delta_ev
-        )
+        ev = off.exposure_delta_ev
+        if off.kind == "deflicker":
+            ev *= deflicker_scale
+        sum_by_frame[off.frame_index] = sum_by_frame.get(off.frame_index, 0.0) + ev
     for i, ops in enumerate(per_frame_ops):
         delta = sum_by_frame.get(i, 0.0)
         if delta != 0.0:
