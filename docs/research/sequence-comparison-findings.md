@@ -8,6 +8,17 @@ pipeline (faithful sRGB, deflicker applied) and compared to the LRT JPG export
 `tools/seq_demosaic_matrix.py` (cross-variant). Demosaic A/B done **full-res** (see
 §3 — downsampling invalidates the demosaic comparison).
 
+> **⚠️ CORRECTION (2026-06-05, B2 root-cause audit — `deflicker-rootcause-audit.md`).**
+> The "deflicker ~3× under-application = #1 lever" claim below (§1, §5) is **REFUTED**.
+> The gain table here was fit on **8-bit sRGB JPEGs** — a *gamma-domain* quantity;
+> read as a linear-EV factor it inflates by ~the encoding slope. A no-render test on
+> LRT's pre-deflicker developed-luminance previews shows the deflicker is correct at
+> **1:1 in the linear domain** (scaling to ≥2× provably *worsens* flicker, every
+> high-pass window); the ~3× only appears in the display/gamma domain. **Keep
+> `--deflicker-scale 1.0`.** The real #1 lever is **PV2012 tone emulation** (§11), not
+> the deflicker. The entire gain table (0.941→1.081) is a gamma-domain measurement and
+> must be re-derived in **linear** before driving any decision.
+
 ## 1. North-star: current vs LRT JPG — mean ΔE2000 **1.20** (0.61–2.45)
 Colour cast negligible (R/B gain Δ 0.006) → the gap is **brightness/tone, not colour**.
 Temporal shape is a **U** (best mid-sequence), driven by the affine gain:
@@ -18,11 +29,13 @@ Temporal shape is a **U** (best mid-sequence), driven by the affine gain:
 | gain (LRT≈g·ours) | 0.941 | 0.963 | 0.984 | 1.010 | 1.042 | **1.081** |
 
 The gain **crosses 1.0 at ~frame 110** — ours starts *brighter* than LRT, matches
-mid-run, ends *darker*. **Root cause = the deflicker under-application (~3×)**, now
-confirmed across all 250 frames (prior finding was a 5-frame estimate). The deflicker
-EV ramps neg→pos; applying it 1:1 (under by ~3×) over/under-shoots brightness at the
-ends. **Fixing the deflicker scale (B2) flattens gain→1.0 across the whole sequence →
-collapses the gap to the ~0.85 JPEG floor.** The #1 deliverable lever.
+mid-run, ends *darker*. ~~Root cause = deflicker under-application (~3×).~~
+**SUPERSEDED — see the correction banner + `deflicker-rootcause-audit.md`.** This gain
+was measured in the **gamma/display domain** (8-bit JPEGs); in linear the deflicker is
+correct at 1:1 and the drift is consistent with the **PV2012 tone-curve-shape gap**
+(§11), which is *correlated with the deflicker ramp by construction* (Visual Deflicker
+is computed from the scene-brightness trend) — so the correlation never proved
+causation. Keep `--deflicker-scale 1.0`; re-derive this gain in linear before using it.
 
 ## 2. Regression: current vs OLD pipeline — ~constant **3.66 ΔE** (NOT an overhaul regression)
 ~Constant across all 250 (3.46→3.84) with a blue-axis WB shift (B gain 0.904 vs R/G
@@ -63,13 +76,19 @@ cross-variant edge ΔE: menon↔rcd 0.78 · rcd↔linear 2.16 · menon↔linear 
   multi-worker throughput — NOT the +7.4 s single-frame latency. rcd is ~free
   (numba, +0.05 s single-frame). menon is pure-numpy DDFAPD (no accel kernel).
 
-## 5. Leverage ranking for matching LRT
-**deflicker (tone) ≫ sharpening (edges) > demosaic.**
-1. **Deflicker (B2, ~3×)** — dominates the north-star (the U-shape); cheapest fix.
-2. **Sharpening (D2)** — the bulk of the *edge* gap; un-stubbing `apply_sharpness`
-   closes more edge ΔE than any demosaic.
-3. **Demosaic** — a small spatial refinement (−0.2 edge); real value is *absolute*
-   quality (the battery). For the LRT match, **rcd is the value pick** (free, ≈menon).
+## 5. Leverage ranking for matching LRT (CORRECTED 2026-06-05)
+**PV2012 tone-shape (§11) ≫ sharpening (edges) > demosaic.** ~~deflicker ≫ …~~ —
+the deflicker is NOT a lever (it's correct at 1:1; the "~3×" was a gamma-domain
+artifact — `deflicker-rootcause-audit.md`).
+1. **PV2012 tone emulation (§11)** — the U-shaped brightness/tone drift vs LRT is a
+   tone-curve-SHAPE difference (ours≈dng_validate≠LRT), NOT the deflicker. The real
+   #1 lever. (Confirm the deflicker-vs-tone split with the linear, per-frame
+   jitter-vs-smooth test against the LRT JPGs.)
+2. **Sharpening (D2 — SHIPPED 2026-06-05)** — the bulk of the *edge* gap;
+   `apply_sharpness` is now a clean-room capture USM (`--capture-sharpen`,
+   `capture-sharpening-d2`). Owner tunes its constants vs the LRT JPG.
+3. **Demosaic (DONE)** — a small spatial refinement (−0.2 edge); real value is
+   *absolute* quality (the battery). rcd is the value pick (Menon-tier, 4× numba).
 
 ## Caveats
 - The demosaic A/B is on 69 intact + 5 full-res frames (I overfilled /tmp rendering

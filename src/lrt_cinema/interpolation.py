@@ -81,13 +81,14 @@ def apply_deflicker(
     offset are unchanged.
 
     `scale` (B2) multiplies the deflicker EV delta before it is applied. Default
-    1.0 = byte-exact (the LRT-authored value). The 250-frame north-star comparison
-    (docs/research/sequence-comparison-findings.md) shows the LRT JPG's brightness
-    ramp is under-tracked at scale 1.0 (a units mismatch between LrC's local-mask
-    Exposure2012 and the global Exposure2012 our `apply_exposure_2012` applies); a
-    `scale > 1` flattens the per-frame gain drift toward 1.0. The exact factor is
-    OWNER-CALIBRATED against the LRT JPGs and not yet hard-coded as the default
-    (uncited basis — see the findings doc + memory).
+    1.0 = byte-exact AND **correct** — the B2 root-cause audit
+    (docs/research/deflicker-rootcause-audit.md) confirmed the deflicker is correctly
+    scaled at 1:1 in the **linear** domain (scaling up ≥2× provably *worsens* flicker,
+    every high-pass window). The earlier "~3× under-application" was a **gamma-domain
+    measurement artifact** (per-frame gain fit on 8-bit sRGB JPEGs inflates a linear-EV
+    factor by ~the encoding slope); the residual LRT-vs-ours drift is the PV2012
+    tone-curve-shape gap (DECISIONS §11), not the deflicker. The knob stays only as an
+    owner escape hatch; **leave it at 1.0**.
 
     Returns the mutated list (also mutates `per_frame_ops` for in-place callers).
     """
@@ -117,11 +118,11 @@ def apply_lrt_mask_offsets(
     the CLI's per-source toggle semantics.
 
     `deflicker_scale` (B2) multiplies ONLY the **deflicker**-kind delta (HG/Global
-    untouched). Default 1.0 = byte-exact. The 250-frame north-star comparison shows
-    the LRT brightness ramp is under-tracked at 1.0 (a LocalExposure2012-vs-global
-    units mismatch); a `scale > 1` flattens the per-frame gain drift. The exact
-    factor is owner-calibrated (uncited basis) — see
-    docs/research/sequence-comparison-findings.md.
+    untouched). Default 1.0 = byte-exact AND correct — the B2 audit
+    (docs/research/deflicker-rootcause-audit.md) found the deflicker is correctly
+    scaled at 1:1 in the linear domain; the "~3×" was a gamma-domain artifact (8-bit
+    JPEG gain) and the residual drift is the PV2012 tone-shape gap, not the deflicker.
+    Owner escape hatch only; **leave at 1.0**.
 
     Mutates `per_frame_ops` in place and returns it. See
     ADVERSARIAL_AUDIT_2026-05-23 HIGH-2 for context.

@@ -181,13 +181,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Multiply the per-frame DEFLICKER EV delta (LocalExposure2012) by this "
             "factor before applying it (HG/Global untouched). Default 1.0 = the "
-            "LRT-authored value (byte-exact). The 250-frame north-star comparison "
-            "(docs/research/sequence-comparison-findings.md) shows the LRT brightness "
-            "ramp is UNDER-tracked at 1.0 — the per-frame gain drifts 0.94→1.08 across "
-            "the sequence (a LocalExposure2012-vs-global units mismatch). A scale >1 "
-            "(empirically ~3) flattens it toward 1.0 and collapses the north-star gap "
-            "toward the ~0.85 JPEG floor. EXACT factor is owner-calibrated (uncited "
-            "basis) — validate vs the LRT JPGs before relying on a non-1.0 value."
+            "LRT-authored value (byte-exact) AND correct — leave it there. The B2 "
+            "root-cause audit (docs/research/deflicker-rootcause-audit.md) confirmed "
+            "the deflicker is correctly scaled at 1:1 in the LINEAR domain (scaling up "
+            "≥2× provably worsens flicker). The earlier '~3× under-application' was a "
+            "GAMMA-DOMAIN ARTIFACT (per-frame gain fit on 8-bit sRGB JPEGs inflates a "
+            "linear-EV factor by ~the encoding slope); the residual LRT drift is the "
+            "PV2012 tone-curve-shape gap, not the deflicker. This knob is an owner "
+            "escape hatch only."
         ),
     )
     render.add_argument(
