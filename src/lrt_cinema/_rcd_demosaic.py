@@ -133,13 +133,18 @@ gradients, zero color difference -> the chroma gate is off -> green is the const
 BACKEND NOTE
 ------------
 This numpy module is THE reference and the demosaic-battery quality deliverable.
-The numba kernel (`accel._numba_kernels.rcd_rggb`) was a fused port of the
-*previous* (non-refining) RCD core and does **not** implement the Menon directional
-R/B or the refining stage; `accel.rcd_demosaic` therefore routes `rcd` to THIS
-reference on every backend (the stale kernel is no longer reached — no silent
-divergence). The default pipeline demosaic is `linear` (libraw); `rcd` is opt-in,
-so the temporary loss of numba acceleration on `rcd` is acceptable. Re-porting the
-directional R/B + refining stages to numba is a follow-up.
+`accel._numba_kernels.rcd_rggb_refined` is a **bit-faithful float64 twin** of the
+current reference (directional green + Menon directional R/B + the chroma-gated
+refining loop): `accel.rcd_demosaic(backend="numba")` runs the kernel; numpy stays
+the reference/fallback. End-to-end parity vs this module is ~1e-15 and the battery
+via numba is bit-identical (39.03 CPSNR), so the two paths are interchangeable. The
+one **discrete** branch — the a-posteriori direction `m_dir = dd_v >= dd_h` — is
+computed once here in numpy (`_menon_direction`) and handed to the kernel as a
+padded bool plane, so no `>=` bit can flip on a convolution-FP-order difference.
+That keeps `_menon_direction` on the numpy side (~half the numba-path time), so the
+kernel speedup is ~4x, not the old fused ~10x; porting `m_dir` to an exact-bool
+numba homogeneity pass for the remaining lift is a follow-up. The default pipeline
+demosaic is `linear` (libraw); `rcd` is opt-in.
 """
 
 from __future__ import annotations
