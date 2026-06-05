@@ -630,10 +630,19 @@ def _card_diff_avg(diff, filled, y, x, h, w):
 def rcd_rggb(cfa):
     """Fused RGGB-phase RCD core: padded float64 CFA (H, W) → padded (H, W, 3).
 
-    1:1 port of `_rcd_demosaic._rcd_rggb`. `cfa` is a reflect-padded 2-D mosaic
-    whose interior top-left pixel (``[2, 2]``) is RED (RGGB phase). Returns the
-    padded float64 RGB; the caller crops the 2-px ring and unflips. Same maths,
-    same operation order, float64, no `fastmath`."""
+    STALE — DO NOT RE-WIRE WITHOUT RE-PORTING. This kernel is a port of the
+    *previous* (non-refining) RCD core. The numpy reference `_rcd_demosaic._rcd_rggb`
+    has since gained the Menon directional R/B reconstruction + the chroma-gated
+    a-posteriori refining stages (the quality win that takes RCD past the Menon2007
+    anchor), so this kernel is NO LONGER equivalent to the reference. It is
+    deliberately left UNREACHABLE: `accel.rcd_demosaic` routes `rcd` to the numpy
+    reference on every backend (see its docstring). Re-enabling this kernel would
+    silently diverge the demosaic battery — re-port the new algorithm (directional
+    R/B + refining) here first, then re-wire the dispatcher and the
+    `tests/test_accel_rcd.py` parity assertion. Kept (not deleted) as the starting
+    point for that re-port. (Original note: 1:1 port of the old `_rcd_rggb`; padded
+    2-D mosaic whose interior top-left pixel ``[2, 2]`` is RED; returns padded
+    float64 RGB, caller crops the 2-px ring and unflips; float64, no `fastmath`.)"""
     h, w = cfa.shape
     green = np.empty((h, w), dtype=np.float64)
     kr = np.zeros((h, w), dtype=np.float64)   # K_R = R - G plane (built in A→C)

@@ -1,18 +1,28 @@
-"""Backend equivalence: the numba RCD demosaic kernel vs the numpy reference.
+"""Backend equivalence: `accel.rcd_demosaic(..., backend="numba")` vs the numpy
+reference.
 
-The numba RCD core (`accel._numba_kernels.rcd_rggb`, dispatched by
-`accel.rcd_demosaic`) is a fused float64 port of `_rcd_demosaic._rcd_rggb`. Its
-contract is that it is **colour-identical to the numpy reference** (which is the
-Stage-1 demosaic the rest of the pipeline + the ΔE ship gate assume). This is the
-fixture-free guard for that contract: it mosaics synthetic structure (a slanted
-edge, a radial chirp, a luma gradient) AND random CFAs to a single-channel Bayer
-plane for every one of the 4 phases, demosaics on both backends, and asserts a
-near-exact match (float64 → float64, so `max|Δ| < 1e-9`), plus the reference's
-finite / non-negative / shape contract. No `/tmp/dng_out` fixtures, no system DCP;
-skips cleanly when numba is absent.
+CONTRACT (and why it now holds by construction): the numpy reference
+(`_rcd_demosaic.rcd_demosaic`) gained the Menon directional R/B + chroma-gated
+a-posteriori refining stages (the quality win that takes RCD past the Menon2007
+anchor on the demosaic battery). The fused numba kernel
+(`accel._numba_kernels.rcd_rggb`) is a port of the *previous*, non-refining core
+and is therefore no longer equivalent — so `accel.rcd_demosaic` now routes `rcd`
+to the numpy reference on EVERY backend (the stale kernel is intentionally
+unreachable; re-porting it is a documented follow-up). The contract these tests
+guard is unchanged in spirit — `backend="numba"` must return the SAME result as
+the numpy reference — and that contract is now satisfied by the dispatch fallback
+rather than by a bit-identical kernel. The equality below is therefore exact by
+construction (numpy == numpy); the tests still earn their keep as the regression
+tripwire that the dispatcher keeps routing `rcd` to the reference (a future
+re-port that re-enables a divergent kernel would fail them) and that the
+finite / non-negative / shape / dtype / over-range contract is preserved. They
+mosaic synthetic structure (a slanted edge, a radial chirp, a luma gradient) AND
+random CFAs for every one of the 4 phases. No `/tmp/dng_out` fixtures, no system
+DCP; skip cleanly when numba is absent.
 
-The reconstruction-QUALITY proof (RCD beats bilinear by a PSNR margin) lives in
-`tests/test_rcd_demosaic.py`; this isolates the numpy↔numba equivalence.
+The reconstruction-QUALITY proof (RCD beats bilinear by a PSNR margin, and the
+full multi-metric battery vs Menon) lives in `tests/test_rcd_demosaic.py` +
+`tools/demosaic_bench/`; this isolates the backend-dispatch equivalence.
 """
 
 from __future__ import annotations
