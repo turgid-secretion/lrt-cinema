@@ -185,29 +185,80 @@ def apply_rgb_tone(rgb: np.ndarray, curve: Any, *,
 
 def rcd_demosaic(cfa: np.ndarray, pattern: str, *,
                  backend: str | None = None) -> np.ndarray:
-    """RCD-family Bayer demosaic (Stage 1) — always the numpy reference.
+    """RCD-family Bayer demosaic (Stage 1) — backend-dispatched.
 
     `cfa` (H, W) single-channel mosaic; `pattern` the 2×2 phase. Returns
     (H, W, 3) float, finite + non-negative (highlights uncapped).
 
-    NUMBA STATUS (read before re-enabling the kernel): the numpy reference
-    (`_rcd_demosaic.rcd_demosaic`) gained the Menon directional R/B reconstruction
-    + the chroma-gated a-posteriori refining stages (the quality win that takes RCD
-    past the Menon2007 anchor on the demosaic battery). The fused numba kernel
-    (`_numba_kernels.rcd_rggb`) is a port of the *previous* (non-refining) core and
-    is therefore NO LONGER equivalent. To avoid a silent backend divergence (the
-    one thing the demosaic battery must never hide), `rcd` is routed to the numpy
-    reference on EVERY backend — the stale kernel is intentionally unreachable from
-    here. `rcd` is an opt-in demosaic (the pipeline default is `linear`/libraw), so
-    losing its numba acceleration is acceptable until the kernel is re-ported to the
-    new algorithm (the follow-up). `backend` is accepted for call-site
-    compatibility but does not change the result.
+    NUMBA PATH: the bit-faithful numba twin (`_numba_kernels.rcd_rggb_refined`)
+    reproduces the CURRENT numpy reference (`_rcd_demosaic._rcd_rggb`: RCD green +
+    Menon directional R/B + chroma-gated a-posteriori refining — the quality path
+    that carries the demosaic battery's 39.03 CPSNR). The one convolution-fed
+    branch, the a-posteriori direction `m_dir = (dd_v >= dd_h)`, is computed HERE in
+    numpy by the reference `_menon_direction` and handed to the kernel as a padded
+    bool plane — so the only discrete decision is bit-identical by construction and
+    no branch in the kernel can flip; everything the kernel computes downstream is
+    continuous (contractive averaging FIRs), so end-to-end parity vs the reference
+    is ~1e-14 (under the test's 1e-9 tolerance). See the kernel's design note.
 
-    The numpy reference owns its own validate / flip / pad / crop / clamp wrapper,
-    so this is a thin, behaviour-preserving delegation."""
-    del backend  # accepted for signature compatibility; rcd is numpy-only for now
+    Both branches share the reference's validate / flip / pad / crop / clamp
+    wrapper: `backend="numpy"` (the default / fallback) IS the literal reference;
+    `backend="numba"` reuses the reference's guards, phase flips, reflect-pad and
+    `_menon_direction`, swaps only the padded RGGB core for the kernel, then crops /
+    unflips / clamps identically. `"mlx"` falls back to the reference (no GPU RCD)."""
     from lrt_cinema import _rcd_demosaic as ref
-    return ref.rcd_demosaic(cfa, pattern)
+    if resolve_backend(backend) != "numba":
+        return ref.rcd_demosaic(cfa, pattern)
+
+    # --- numba path: the reference wrapper with the kernel as the core ---
+    from lrt_cinema.accel._numba_kernels import rcd_rggb_refined
+
+    if pattern not in ref._VALID_PATTERNS:
+        raise ValueError(
+            f"pattern must be one of {ref._VALID_PATTERNS}, got {pattern!r}"
+        )
+    cfa = np.asarray(cfa)
+    if cfa.ndim != 2:
+        raise ValueError(f"cfa must be 2-D (H, W), got shape {cfa.shape}")
+    if cfa.shape[0] % 2 or cfa.shape[1] % 2:
+        raise ValueError(
+            f"cfa dimensions must be even for Bayer phase mapping, got {cfa.shape}"
+        )
+
+    out_float32 = cfa.dtype == np.float32
+    work = cfa.astype(np.float64, copy=False)
+
+    flip_rows, flip_cols = ref._PHASE_FLIP[pattern]
+    if flip_rows:
+        work = work[::-1, :]
+    if flip_cols:
+        work = work[:, ::-1]
+
+    padded = np.pad(work, ref._PAD, mode="reflect")
+    h, w = padded.shape
+    yy, xx = np.indices((h, w))
+    r_site = (yy % 2 == 0) & (xx % 2 == 0)
+    b_site = (yy % 2 == 1) & (xx % 2 == 1)
+    g_site = ~(r_site | b_site)
+    # The single convolution-fed branch, computed by the numpy reference so it is
+    # bit-identical (the kernel reads it, never recomputes it).
+    m_dir = np.ascontiguousarray(
+        ref._menon_direction(padded, r_site, b_site, g_site)
+    )
+    rgb_padded = rcd_rggb_refined(
+        np.ascontiguousarray(padded), m_dir,
+        ref._REFINE_ITERS, ref._CHROMA_THR, ref._CHROMA_SOFT,
+    )
+    rgb = rgb_padded[ref._PAD:-ref._PAD, ref._PAD:-ref._PAD, :]
+
+    if flip_cols:
+        rgb = rgb[:, ::-1, :]
+    if flip_rows:
+        rgb = rgb[::-1, :, :]
+
+    rgb = np.ascontiguousarray(rgb)
+    np.clip(rgb, 0.0, None, out=rgb)
+    return rgb.astype(np.float32) if out_float32 else rgb
 
 
 # --- Whole-frame MLX (Metal GPU) render path -------------------------------

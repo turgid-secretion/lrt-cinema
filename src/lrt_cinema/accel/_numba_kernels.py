@@ -547,216 +547,423 @@ def color_grade(rgb, tint_sh, tint_mid, tint_hi, tint_glob, lum_row,
 
 
 # ---------------------------------------------------------------------------
-# RCD-family directional color-difference demosaic (Stage 1 core)
+# RCD green + Menon directional R/B + chroma-gated refining (current core)
 # ---------------------------------------------------------------------------
 #
-# Fused float64 port of `_rcd_demosaic._rcd_rggb` (the RGGB core; the cheap
-# validate/flip/pad/crop/unflip/clip wrapper stays in numpy — see
-# `accel.rcd_demosaic`). The reference materialises ~30 full-frame float64
-# `_shift`/`np.where` temporaries; this keeps each pixel's scratch in registers
-# and writes the padded (H, W, 3) result once.
+# Bit-faithful float64 port of the CURRENT `_rcd_demosaic._rcd_rggb` (RCD green +
+# Menon directional R/B reconstruction + the iterated chroma-gated a-posteriori
+# refining — the quality path that carries the demosaic battery's 39.03 CPSNR).
+# Replaces the stale `rcd_rggb` above (a port of the pre-refining core).
 #
-# PRECISION: float64 (the reference does `cfa.astype(np.float64)`); no fastmath
-# (reassociation would change the masked-average reduction order). The reference
-# is a *comparison* + *subtraction* method (no divide on pixel data), so it is
-# structurally finite — preserved here.
+# DESIGN — why m_dir is passed in (the parity-critical decision)
+# --------------------------------------------------------------
+# The whole pipeline has exactly TWO discrete branches on computed floats:
+#   (1) the green H/V/diagonal pick (`grad_h` vs `grad_v`) — pure per-pixel
+#       arithmetic, no convolution, so it is matched bit-for-bit by keeping the
+#       reference's operand order (Pass A below, identical to `_green_directional`);
+#   (2) the a-posteriori direction `M = (dd_v >= dd_h)` in `_menon_direction`,
+#       which IS convolution-fed. scipy's `convolve1d`/`convolve` float
+#       accumulation order is intractable to reproduce bit-for-bit, and a single
+#       flipped `M` bit selects the *other* (H vs V) reconstruction — a large,
+#       battery-moving divergence. So `m_dir` is computed ONCE in numpy by the
+#       reference `_menon_direction` (in `accel.rcd_demosaic`) and passed in as a
+#       padded bool plane: it is bit-identical by construction, and no branch in
+#       this kernel can flip. `_menon_direction` runs once per frame (not in the
+#       refine loop), so keeping it in numpy costs ~nothing.
 #
-# The color-difference fill has a data dependency (`_bilinear_fill_diff` pass 2
-# reads pass 1's output), so it is split into sequential `prange` passes:
-#   A — directional green at every pixel (Hamilton-Adams), kept at green sites.
-#   B — color-difference K_R/K_B at the *opposite-color* sites (K_R at blue,
-#       K_B at red) from the 4 *diagonal* same-difference neighbours.
-#   C — K_R/K_B at the *green* sites from the 4 *cardinal* neighbours (all known
-#       after B). Then R = G + K_R, B = G + K_B, with known CFA samples exact.
-# Each pass writes a full padded buffer that the next reads, so the per-pass
-# `prange` over pixels is embarrassingly parallel with no cross-pixel races.
+# Everything ELSE this kernel computes is continuous: the R/B reconstruction and
+# the refining are contractive averaging FIRs (`_KB3`, `_FIR3`) plus the
+# chroma-gate box mean (`uniform_filter`, size 5). Their summation order only
+# perturbs the result by ~1e-15 and that perturbation stays ~1e-15 (it never
+# crosses a discrete branch), so a faithful — not necessarily scipy-bit-exact —
+# tap order is sufficient. End-to-end parity vs the numpy reference is therefore
+# ~1e-14 (well under the 1e-9 test tolerance), with `m_dir` and green exact.
 #
-# Masked-average semantics (`diag_cnt`/`card_cnt` in the reference) are matched
-# exactly: a neighbour contributes only when it carries a real difference, and
-# the average divides by the *count* of contributors. On the interior (the only
-# region that survives the 2-px crop) every interior site has the full 4
-# neighbours, so this is a plain /4; the count logic only differs on the outer
-# pad ring, which is cropped away. Replicated anyway for an exact match.
+# The convolutions are applied to FULL padded planes with the reference's
+# boundary modes (`convolve1d mode="mirror"` == reflect-no-edge-repeat;
+# `uniform_filter mode="reflect"` == reflect-WITH-edge-repeat), then the 2-px ring
+# is cropped by the caller. Each reconstruction / refining sub-step re-reads the
+# fully-updated plane the previous sub-step wrote (the numpy `np.where` chain has
+# this exact data dependency), so the kernel is a SEQUENCE of full-plane passes,
+# not one fused per-pixel loop. Each pass is embarrassingly parallel over rows.
+#
+# Mask note: on the padded RGGB grid (even pad → padded parity == real parity)
+# the reference's `r_row/b_row/r_col/b_col` reduce to pure parity — a red row is
+# every even row (`y % 2 == 0`), a blue row every odd row, etc. — so they are
+# tested inline as parity rather than materialised.
 
 
 @njit(cache=True, fastmath=False, inline="always")
-def _diag_diff_avg(diff, filled, y, x, h, w):
-    """Masked average of a difference plane over the 4 *diagonal* neighbours of
-    (y, x) that carry a real value (`filled`). Returns (have, value): `have` is
-    True iff ≥1 diagonal neighbour was known (the reference's `diag_cnt > 0`)."""
-    s = 0.0
-    cnt = 0.0
-    if y - 1 >= 0 and x - 1 >= 0 and filled[y - 1, x - 1]:
-        s += diff[y - 1, x - 1]
-        cnt += 1.0
-    if y - 1 >= 0 and x + 1 < w and filled[y - 1, x + 1]:
-        s += diff[y - 1, x + 1]
-        cnt += 1.0
-    if y + 1 < h and x - 1 >= 0 and filled[y + 1, x - 1]:
-        s += diff[y + 1, x - 1]
-        cnt += 1.0
-    if y + 1 < h and x + 1 < w and filled[y + 1, x + 1]:
-        s += diff[y + 1, x + 1]
-        cnt += 1.0
-    if cnt > 0.0:
-        return True, s / cnt
-    return False, 0.0
+def _mir(i, n):
+    """scipy `mode='mirror'` / `np.pad(mode='reflect')` index map (reflect WITHOUT
+    repeating the edge sample): -1→1, n→n-2, …"""
+    if n == 1:
+        return 0
+    while i < 0 or i >= n:
+        if i < 0:
+            i = -i
+        if i >= n:
+            i = 2 * (n - 1) - i
+    return i
 
 
 @njit(cache=True, fastmath=False, inline="always")
-def _card_diff_avg(diff, filled, y, x, h, w):
-    """Masked average of a difference plane over the 4 *cardinal* neighbours of
-    (y, x) that carry a real value (`filled`). Returns (have, value)."""
-    s = 0.0
-    cnt = 0.0
-    if x + 1 < w and filled[y, x + 1]:
-        s += diff[y, x + 1]
-        cnt += 1.0
-    if x - 1 >= 0 and filled[y, x - 1]:
-        s += diff[y, x - 1]
-        cnt += 1.0
-    if y + 1 < h and filled[y + 1, x]:
-        s += diff[y + 1, x]
-        cnt += 1.0
-    if y - 1 >= 0 and filled[y - 1, x]:
-        s += diff[y - 1, x]
-        cnt += 1.0
-    if cnt > 0.0:
-        return True, s / cnt
-    return False, 0.0
+def _refl(i, n):
+    """scipy `mode='reflect'` index map (reflect WITH the edge sample repeated, as
+    `uniform_filter` defaults to): -1→0, n→n-1, …"""
+    if n == 1:
+        return 0
+    while i < 0 or i >= n:
+        if i < 0:
+            i = -i - 1
+        if i >= n:
+            i = 2 * n - 1 - i
+    return i
 
 
 @njit(parallel=True, cache=True, fastmath=False)
-def rcd_rggb(cfa):
-    """Fused RGGB-phase RCD core: padded float64 CFA (H, W) → padded (H, W, 3).
+def _conv_kb3_h(a):
+    """Horizontal `convolve1d(a, [0.5, 0, 0.5], mode='mirror')` (the `_KB3`
+    directional fill). Zero centre tap → order-exact regardless of summation."""
+    h, w = a.shape
+    out = np.empty((h, w), dtype=np.float64)
+    for y in prange(h):
+        for x in range(w):
+            out[y, x] = 0.5 * a[y, _mir(x + 1, w)] + 0.5 * a[y, _mir(x - 1, w)]
+    return out
 
-    STALE — DO NOT RE-WIRE WITHOUT RE-PORTING. This kernel is a port of the
-    *previous* (non-refining) RCD core. The numpy reference `_rcd_demosaic._rcd_rggb`
-    has since gained the Menon directional R/B reconstruction + the chroma-gated
-    a-posteriori refining stages (the quality win that takes RCD past the Menon2007
-    anchor), so this kernel is NO LONGER equivalent to the reference. It is
-    deliberately left UNREACHABLE: `accel.rcd_demosaic` routes `rcd` to the numpy
-    reference on every backend (see its docstring). Re-enabling this kernel would
-    silently diverge the demosaic battery — re-port the new algorithm (directional
-    R/B + refining) here first, then re-wire the dispatcher and the
-    `tests/test_accel_rcd.py` parity assertion. Kept (not deleted) as the starting
-    point for that re-port. (Original note: 1:1 port of the old `_rcd_rggb`; padded
-    2-D mosaic whose interior top-left pixel ``[2, 2]`` is RED; returns padded
-    float64 RGB, caller crops the 2-px ring and unflips; float64, no `fastmath`.)"""
+
+@njit(parallel=True, cache=True, fastmath=False)
+def _conv_kb3_v(a):
+    """Vertical `_KB3` mirror convolution."""
+    h, w = a.shape
+    out = np.empty((h, w), dtype=np.float64)
+    for y in prange(h):
+        for x in range(w):
+            out[y, x] = 0.5 * a[_mir(y + 1, h), x] + 0.5 * a[_mir(y - 1, h), x]
+    return out
+
+
+@njit(parallel=True, cache=True, fastmath=False)
+def _conv_fir3_h(a):
+    """Horizontal `convolve1d(a, [1,1,1]/3, mode='mirror')` (the `_FIR3` colour-
+    difference low-pass of the refining step)."""
+    h, w = a.shape
+    out = np.empty((h, w), dtype=np.float64)
+    third = 1.0 / 3.0
+    for y in prange(h):
+        for x in range(w):
+            out[y, x] = (a[y, _mir(x - 1, w)] + a[y, x] + a[y, _mir(x + 1, w)]) * third
+    return out
+
+
+@njit(parallel=True, cache=True, fastmath=False)
+def _conv_fir3_v(a):
+    """Vertical `_FIR3` mirror convolution."""
+    h, w = a.shape
+    out = np.empty((h, w), dtype=np.float64)
+    third = 1.0 / 3.0
+    for y in prange(h):
+        for x in range(w):
+            out[y, x] = (a[_mir(y - 1, h), x] + a[y, x] + a[_mir(y + 1, h), x]) * third
+    return out
+
+
+@njit(parallel=True, cache=True, fastmath=False)
+def _uniform5(a):
+    """`uniform_filter(a, size=5, mode='reflect')` — separable 5-box mean. Done as
+    two passes (rows then cols), each a length-5 mean with the reflect-edge-repeat
+    boundary, matching scipy's separable `uniform_filter1d` composition."""
+    h, w = a.shape
+    tmp = np.empty((h, w), dtype=np.float64)
+    fifth = 1.0 / 5.0
+    for y in prange(h):
+        for x in range(w):
+            tmp[y, x] = (
+                a[y, _refl(x - 2, w)] + a[y, _refl(x - 1, w)] + a[y, x]
+                + a[y, _refl(x + 1, w)] + a[y, _refl(x + 2, w)]
+            ) * fifth
+    out = np.empty((h, w), dtype=np.float64)
+    for y in prange(h):
+        for x in range(w):
+            out[y, x] = (
+                tmp[_refl(y - 2, h), x] + tmp[_refl(y - 1, h), x] + tmp[y, x]
+                + tmp[_refl(y + 1, h), x] + tmp[_refl(y + 2, h), x]
+            ) * fifth
+    return out
+
+
+@njit(parallel=True, cache=True, fastmath=False)
+def _rcd_green_refined(cfa):
+    """Pass A — Hamilton-Adams directional green at every R/B site, known greens
+    kept exactly (a 1:1 port of `_green_directional` on the padded RGGB grid).
+    Returns the full padded green plane. Bit-identical to the reference (pure
+    per-pixel arithmetic; the H/V/diagonal branch keeps the reference's order)."""
     h, w = cfa.shape
     green = np.empty((h, w), dtype=np.float64)
-    kr = np.zeros((h, w), dtype=np.float64)   # K_R = R - G plane (built in A→C)
-    kb = np.zeros((h, w), dtype=np.float64)   # K_B = B - G plane
-    # `filled_*` track which sites carry a real difference at each stage — the
-    # reference's `known` (pass 1) then `filled = known | diag_known` (pass 2)
-    # masks. Tracking them makes the masked averages an EXACT match even on the
-    # outer pad ring (cropped away), not just the interior.
-    f_kr = np.zeros((h, w), dtype=np.bool_)   # K_R known: red sites, then + blue
-    f_kb = np.zeros((h, w), dtype=np.bool_)   # K_B known: blue sites, then + red
-    out = np.empty((h, w, 3), dtype=np.float64)
-
-    # --- Pass A: Hamilton-Adams directional green at every site ---------------
-    # On the RGGB padded grid (pad is even, so padded parity == original parity):
-    #   R at (even, even); B at (odd, odd); G at (even, odd) and (odd, even).
-    # Green neighbours are cardinal ±1; same-channel neighbours ±2. The reference
-    # reads zero-filled shifts past the true edge; the bounds guards below do the
-    # same (out-of-range → 0.0), so the cropped interior is identical. K_R/K_B at
-    # the known R/B sites (= f − green) are recorded here so pass B can read them.
     for y in prange(h):
         for x in range(w):
             is_r = (y % 2 == 0) and (x % 2 == 0)
             is_b = (y % 2 == 1) and (x % 2 == 1)
             if not (is_r or is_b):
-                green[y, x] = cfa[y, x]          # known green: keep exactly
+                green[y, x] = cfa[y, x]
                 continue
             c = cfa[y, x]
-            # green neighbours (cardinal ±1), zero past the array edge
-            g_l = cfa[y, x + 1] if x + 1 < w else 0.0   # col +1 (ref _shift(f,0,-1))
-            g_r = cfa[y, x - 1] if x - 1 >= 0 else 0.0   # col -1
-            g_u = cfa[y + 1, x] if y + 1 < h else 0.0    # row +1
-            g_d = cfa[y - 1, x] if y - 1 >= 0 else 0.0   # row -1
-            # same-channel neighbours (±2)
+            # _shift fills 0 past the edge; the reference reads the zero-padded
+            # shift, so out-of-range neighbours are 0.0 here too. (On the kept
+            # interior every neighbour is in range; the ring is cropped.)
+            g_l = cfa[y, x + 1] if x + 1 < w else 0.0
+            g_r = cfa[y, x - 1] if x - 1 >= 0 else 0.0
+            g_u = cfa[y + 1, x] if y + 1 < h else 0.0
+            g_d = cfa[y - 1, x] if y - 1 >= 0 else 0.0
             c_l2 = cfa[y, x + 2] if x + 2 < w else 0.0
             c_r2 = cfa[y, x - 2] if x - 2 >= 0 else 0.0
             c_u2 = cfa[y + 2, x] if y + 2 < h else 0.0
             c_d2 = cfa[y - 2, x] if y - 2 >= 0 else 0.0
-
             lap_h = 2.0 * c - c_l2 - c_r2
             lap_v = 2.0 * c - c_u2 - c_d2
             grad_h = abs(g_l - g_r) + abs(lap_h)
             grad_v = abs(g_u - g_d) + abs(lap_v)
-
             if grad_h > grad_v:
-                g_est = 0.5 * (g_u + g_d) + 0.25 * lap_v        # interp vertical
+                green[y, x] = 0.5 * (g_u + g_d) + 0.25 * lap_v
             elif grad_h < grad_v:
-                g_est = 0.5 * (g_l + g_r) + 0.25 * lap_h        # interp horizontal
+                green[y, x] = 0.5 * (g_l + g_r) + 0.25 * lap_h
             else:
-                g_est = 0.25 * (g_u + g_d + g_l + g_r) + 0.125 * (lap_h + lap_v)
-            green[y, x] = g_est
-            if is_r:
-                kr[y, x] = c - g_est            # K_R real at red site
-                f_kr[y, x] = True
-            else:
-                kb[y, x] = c - g_est            # K_B real at blue site
-                f_kb[y, x] = True
+                green[y, x] = 0.25 * (g_u + g_d + g_l + g_r) + 0.125 * (lap_h + lap_v)
+    return green
 
-    # --- Pass B: diagonal fill of BOTH difference planes ----------------------
-    # `_bilinear_fill_diff` pass 1, transcribed literally and independently for
-    # K_R and K_B: at every site NOT already known, average the (up to 4) diagonal
-    # neighbours that ARE known; mark it filled where any existed. K_R becomes
-    # known at blue sites (diagonal red neighbours), K_B at red sites — and, on the
-    # outer pad ring, wherever a diagonal neighbour happens to be in range. Reads
-    # only pass-A `f_*`, writes only the freshly-diag-known sites, so the two
-    # planes never read each other → race-free under `prange`.
-    for y in prange(h):
-        for x in range(w):
-            if not f_kr[y, x]:
-                have, val = _diag_diff_avg(kr, f_kr, y, x, h, w)
-                if have:
-                    kr[y, x] = val
-                    f_kr[y, x] = True
-            if not f_kb[y, x]:
-                have, val = _diag_diff_avg(kb, f_kb, y, x, h, w)
-                if have:
-                    kb[y, x] = val
-                    f_kb[y, x] = True
 
-    # --- Pass C: cardinal fill of the remaining (green) sites -----------------
-    # `_bilinear_fill_diff` pass 2: at every site STILL not filled after B (the
-    # green sites; on the pad ring, any straggler), average the cardinal neighbours
-    # that are filled. After this every site carries both differences. Reads the
-    # post-B `f_*`; the `_was` snapshot makes the "filled after B" test independent
-    # of this pass's own writes (so a freshly cardinal-filled site is NOT treated
-    # as a source for its neighbour in the same pass — matching the reference,
-    # which computes `card_known` from the pre-pass-2 `filled` mask).
-    f_kr_was = f_kr.copy()
-    f_kb_was = f_kb.copy()
-    for y in prange(h):
-        for x in range(w):
-            if not f_kr_was[y, x]:
-                have, val = _card_diff_avg(kr, f_kr_was, y, x, h, w)
-                if have:
-                    kr[y, x] = val
-                    f_kr[y, x] = True
-            if not f_kb_was[y, x]:
-                have, val = _card_diff_avg(kb, f_kb_was, y, x, h, w)
-                if have:
-                    kb[y, x] = val
-                    f_kb[y, x] = True
+@njit(parallel=True, cache=True, fastmath=False)
+def _apply_reconstruct_green_sites(r, b, g, ch_r, cv_r, ch_g, cv_g, ch_b, cv_b):
+    """`_reconstruct_rb` lines for the GREEN sites.
 
-    # --- Pass D: assemble RGB (known CFA samples exact) -----------------------
-    # red = green + K_R, blue = green + K_B, then restore the exact CFA sample at
-    # its own site (reference `np.where(r_site, f, red)` / `np.where(b_site, f,
-    # blue)`). Green is already exact at green sites (pass A) / the estimate
-    # elsewhere.
+    Mirrors, in order:
+        r = where(g & r_row, g + ch(r) - ch(g), r)   # red row  → horiz
+        r = where(g & b_row, g + cv(r) - cv(g), r)    # blue row → vert
+        b = where(g & b_row, g + ch(b) - ch(g), b)
+        b = where(g & r_row, g + cv(b) - cv(g), b)
+    where r_row == (y even), b_row == (y odd) on the RGGB grid. `ch_*/cv_*` are the
+    convolutions of the planes AS THEY WERE AT FUNCTION ENTRY — the reference
+    re-reads the *updated* r between the r-lines, but the two r-updates use disjoint
+    masks (green&even vs green&odd) and never overlap, so the entry-snapshot
+    convolutions are correct for these masks. (Verified by the per-stage harness.)
+    Mutates r, b in place at green sites."""
+    h, w = r.shape
     for y in prange(h):
         for x in range(w):
             is_r = (y % 2 == 0) and (x % 2 == 0)
             is_b = (y % 2 == 1) and (x % 2 == 1)
-            g = green[y, x]
-            r = cfa[y, x] if is_r else g + kr[y, x]
-            b = cfa[y, x] if is_b else g + kb[y, x]
-            out[y, x, 0] = r
-            out[y, x, 1] = g
-            out[y, x, 2] = b
+            if is_r or is_b:
+                continue
+            if y % 2 == 0:                      # red row
+                r[y, x] = g[y, x] + ch_r[y, x] - ch_g[y, x]
+                b[y, x] = g[y, x] + cv_b[y, x] - cv_g[y, x]
+            else:                               # blue row
+                r[y, x] = g[y, x] + cv_r[y, x] - cv_g[y, x]
+                b[y, x] = g[y, x] + ch_b[y, x] - ch_g[y, x]
+
+
+@njit(parallel=True, cache=True, fastmath=False)
+def _apply_reconstruct_opp_sites(r, b, m_dir, ch_r, cv_r, ch_b, cv_b):
+    """`_reconstruct_rb` lines for the OPPOSITE-colour sites (R at blue, B at red),
+    directional by `m_dir`:
+        r = where(b_row & b_m, where(M, b+ch(r)-ch(b), b+cv(r)-cv(b)), r)
+        b = where(r_row & r_m, where(M, r+ch(b)-ch(r), r+cv(b)-cv(r)), b)
+    `ch_r/cv_r` are conv of r AFTER the green-site updates; `ch_b/cv_b` of b after.
+    r at blue sites and b at red sites are disjoint, so order is immaterial."""
+    h, w = r.shape
+    for y in prange(h):
+        for x in range(w):
+            is_r = (y % 2 == 0) and (x % 2 == 0)
+            is_b = (y % 2 == 1) and (x % 2 == 1)
+            if is_b:                            # R at blue site
+                if m_dir[y, x]:
+                    r[y, x] = b[y, x] + ch_r[y, x] - ch_b[y, x]
+                else:
+                    r[y, x] = b[y, x] + cv_r[y, x] - cv_b[y, x]
+            elif is_r:                          # B at red site
+                if m_dir[y, x]:
+                    b[y, x] = r[y, x] + ch_b[y, x] - ch_r[y, x]
+                else:
+                    b[y, x] = r[y, x] + cv_b[y, x] - cv_r[y, x]
+
+
+@njit(parallel=True, cache=True, fastmath=False)
+def _apply_refine_green(r, g, b, m_dir, alpha, ch_bg, cv_bg, ch_rg, cv_rg):
+    """`_refine_once` chroma-gated green update:
+        b_g_m = where(b_m, where(M, ch(b_g), cv(b_g)), 0)
+        r_g_m = where(r_m, where(M, ch(r_g), cv(r_g)), 0)
+        g = where(r_m, (1-α)·g + α·(r - r_g_m), g)
+        g = where(b_m, (1-α)·g + α·(b - b_g_m), g)
+    `ch_rg/cv_rg` are conv of (r-g); `ch_bg/cv_bg` of (b-g), computed on entry."""
+    h, w = g.shape
+    for y in prange(h):
+        for x in range(w):
+            is_r = (y % 2 == 0) and (x % 2 == 0)
+            is_b = (y % 2 == 1) and (x % 2 == 1)
+            a = alpha[y, x]
+            if is_r:
+                rgm = ch_rg[y, x] if m_dir[y, x] else cv_rg[y, x]
+                g[y, x] = (1.0 - a) * g[y, x] + a * (r[y, x] - rgm)
+            elif is_b:
+                bgm = ch_bg[y, x] if m_dir[y, x] else cv_bg[y, x]
+                g[y, x] = (1.0 - a) * g[y, x] + a * (b[y, x] - bgm)
+
+
+@njit(parallel=True, cache=True, fastmath=False)
+def _apply_refine_rb_green_sites(r, b, g, cvk_rg, chk_rg, cvk_bg, chk_bg):
+    """`_refine_once` R/B at the GREEN sites (directional by row/column geometry):
+        r = where(g & b_row, g + cvk(r_g), r);  r = where(g & b_col, g + chk(r_g), r)
+        b = where(g & r_row, g + cvk(b_g), b);  b = where(g & r_col, g + chk(b_g), b)
+    b_row==(y odd), b_col==(x odd), r_row==(y even), r_col==(x even). At a green
+    site (one of y/x even, the other odd) exactly one of the row/col tests fires
+    per channel, so the two sequential `np.where`s reduce to one assignment each.
+    `*_rg`=conv of (r-g), `*_bg`=conv of (b-g), both on the POST-green-update r-g/
+    b-g (the reference recomputes r_g/b_g right before this block)."""
+    h, w = g.shape
+    for y in prange(h):
+        for x in range(w):
+            is_r = (y % 2 == 0) and (x % 2 == 0)
+            is_b = (y % 2 == 1) and (x % 2 == 1)
+            if is_r or is_b:
+                continue
+            # green site: y, x parities differ → exactly one row + one col test hits.
+            if y % 2 == 1:                      # b_row → R vertical KB3
+                r[y, x] = g[y, x] + cvk_rg[y, x]
+            if x % 2 == 1:                      # b_col → R horizontal KB3
+                r[y, x] = g[y, x] + chk_rg[y, x]
+            if y % 2 == 0:                      # r_row → B vertical KB3
+                b[y, x] = g[y, x] + cvk_bg[y, x]
+            if x % 2 == 0:                      # r_col → B horizontal KB3
+                b[y, x] = g[y, x] + chk_bg[y, x]
+
+
+@njit(parallel=True, cache=True, fastmath=False)
+def _apply_refine_opp_sites(r, b, m_dir, ch_rb, cv_rb):
+    """`_refine_once` R at blue / B at red (directional by M), the final block:
+        r_b = r - b
+        r = where(b_m, b + (M? ch(r_b):cv(r_b)), r)
+        b = where(r_m, r - (M? ch(r_b):cv(r_b)), b)
+    Both read the SAME `r_b = r - b` snapshot (conv computed once on entry). r at
+    blue and b at red are disjoint; the `b` update reads the *updated* r — but only
+    at red sites, where r is NOT touched by this block (r changes at blue sites),
+    so the entry r equals the updated r there. Hence one pass suffices."""
+    h, w = r.shape
+    for y in prange(h):
+        for x in range(w):
+            is_r = (y % 2 == 0) and (x % 2 == 0)
+            is_b = (y % 2 == 1) and (x % 2 == 1)
+            if is_b:
+                r[y, x] = b[y, x] + (ch_rb[y, x] if m_dir[y, x] else cv_rb[y, x])
+            elif is_r:
+                b[y, x] = r[y, x] - (ch_rb[y, x] if m_dir[y, x] else cv_rb[y, x])
+
+
+@njit(cache=True, fastmath=False)
+def _sub(a, b):
+    """Element-wise a - b into a fresh float64 plane (njit helper for the staged
+    colour-difference inputs)."""
+    h, w = a.shape
+    out = np.empty((h, w), dtype=np.float64)
+    for y in range(h):
+        for x in range(w):
+            out[y, x] = a[y, x] - b[y, x]
     return out
+
+
+@njit(cache=True, fastmath=False)
+def _abs_chroma(r, g, b):
+    """|r-g| + |b-g| into a fresh plane (the chroma-gate magnitude input)."""
+    h, w = r.shape
+    out = np.empty((h, w), dtype=np.float64)
+    for y in range(h):
+        for x in range(w):
+            out[y, x] = abs(r[y, x] - g[y, x]) + abs(b[y, x] - g[y, x])
+    return out
+
+
+@njit(parallel=True, cache=True, fastmath=False)
+def _assemble_rcd_refined(cfa, r, g, b):
+    """Restore the exact CFA sample at its own site (red at red, green at green,
+    blue at blue — the reference's post-loop `np.where(*_site, f, …)`) and stack
+    into a padded (H, W, 3) plane. R/B at their own sites and G at green sites are
+    pinned to `cfa`; everything else keeps the reconstructed value."""
+    h, w = cfa.shape
+    out = np.empty((h, w, 3), dtype=np.float64)
+    for y in prange(h):
+        for x in range(w):
+            is_r = (y % 2 == 0) and (x % 2 == 0)
+            is_b = (y % 2 == 1) and (x % 2 == 1)
+            is_g = not (is_r or is_b)
+            out[y, x, 0] = cfa[y, x] if is_r else r[y, x]
+            out[y, x, 1] = cfa[y, x] if is_g else g[y, x]
+            out[y, x, 2] = cfa[y, x] if is_b else b[y, x]
+    return out
+
+
+def rcd_rggb_refined(cfa, m_dir, refine_iters, chroma_thr, chroma_soft):
+    """Padded float64 RGGB CFA + padded bool `m_dir` → padded (H, W, 3) RGB.
+
+    The bit-faithful numba twin of `_rcd_demosaic._rcd_rggb`. `m_dir` is the
+    a-posteriori direction plane from the numpy reference `_menon_direction` (so
+    the only convolution-fed branch is exact by construction); `refine_iters`,
+    `chroma_thr`, `chroma_soft` are the reference tunables (`_REFINE_ITERS`,
+    `_CHROMA_THR`, `_CHROMA_SOFT`). Orchestrates the staged passes; each conv /
+    apply helper is itself `prange`-parallel. Not `@njit` itself (it allocates the
+    `np.where`/`np.clip` masks in numpy — cheap, once-per-frame); the per-pixel
+    work is all in the jitted helpers it calls."""
+    h, w = cfa.shape
+    yy, xx = np.indices((h, w))
+    r_site = (yy % 2 == 0) & (xx % 2 == 0)
+    b_site = (yy % 2 == 1) & (xx % 2 == 1)
+
+    # --- Pass A: directional green (exact) ---
+    green = _rcd_green_refined(cfa)
+
+    # --- _reconstruct_rb ---
+    r = np.where(r_site, cfa, 0.0)
+    b = np.where(b_site, cfa, 0.0)
+    # green-site updates read entry-snapshot convolutions of r, b, g.
+    ch_r = _conv_kb3_h(r)
+    cv_r = _conv_kb3_v(r)
+    ch_g = _conv_kb3_h(green)
+    cv_g = _conv_kb3_v(green)
+    ch_b = _conv_kb3_h(b)
+    cv_b = _conv_kb3_v(b)
+    _apply_reconstruct_green_sites(r, b, green, ch_r, cv_r, ch_g, cv_g, ch_b, cv_b)
+    # opposite-colour sites read convolutions of the post-green-update r, b.
+    ch_r = _conv_kb3_h(r)
+    cv_r = _conv_kb3_v(r)
+    ch_b = _conv_kb3_h(b)
+    cv_b = _conv_kb3_v(b)
+    _apply_reconstruct_opp_sites(r, b, m_dir, ch_r, cv_r, ch_b, cv_b)
+
+    # --- chroma-gated refining, `refine_iters` times ---
+    for _ in range(int(refine_iters)):
+        # chroma gate α (uniform_filter box mean of |r-g|+|b-g|).
+        chroma = _uniform5(_abs_chroma(r, green, b))
+        alpha = np.clip((chroma - chroma_thr) / chroma_soft, 0.0, 1.0)
+        # green update: convolutions of (r-g) and (b-g) on entry.
+        r_g = _sub(r, green)
+        b_g = _sub(b, green)
+        ch_rg = _conv_fir3_h(r_g)
+        cv_rg = _conv_fir3_v(r_g)
+        ch_bg = _conv_fir3_h(b_g)
+        cv_bg = _conv_fir3_v(b_g)
+        _apply_refine_green(r, green, b, m_dir, alpha, ch_bg, cv_bg, ch_rg, cv_rg)
+        # R/B at green sites: recompute (r-g)/(b-g) AFTER the green update, KB3.
+        r_g = _sub(r, green)
+        b_g = _sub(b, green)
+        cvk_rg = _conv_kb3_v(r_g)
+        chk_rg = _conv_kb3_h(r_g)
+        cvk_bg = _conv_kb3_v(b_g)
+        chk_bg = _conv_kb3_h(b_g)
+        _apply_refine_rb_green_sites(r, b, green, cvk_rg, chk_rg, cvk_bg, chk_bg)
+        # R at blue / B at red: FIR3 of (r-b) snapshot.
+        r_b = _sub(r, b)
+        ch_rb = _conv_fir3_h(r_b)
+        cv_rb = _conv_fir3_v(r_b)
+        _apply_refine_opp_sites(r, b, m_dir, ch_rb, cv_rb)
+
+    # --- restore exact known CFA samples, assemble RGB ---
+    return _assemble_rcd_refined(cfa, r, green, b)
