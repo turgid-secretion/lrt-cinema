@@ -561,15 +561,16 @@ def color_grade(rgb, tint_sh, tint_mid, tint_hi, tint_glob, lum_row,
 #   (1) the green H/V/diagonal pick (`grad_h` vs `grad_v`) — pure per-pixel
 #       arithmetic, no convolution, so it is matched bit-for-bit by keeping the
 #       reference's operand order (Pass A below, identical to `_green_directional`);
-#   (2) the a-posteriori direction `M = (dd_v >= dd_h)` in `_menon_direction`,
-#       which IS convolution-fed. scipy's `convolve1d`/`convolve` float
-#       accumulation order is intractable to reproduce bit-for-bit, and a single
-#       flipped `M` bit selects the *other* (H vs V) reconstruction — a large,
-#       battery-moving divergence. So `m_dir` is computed ONCE in numpy by the
-#       reference `_menon_direction` (in `accel.rcd_demosaic`) and passed in as a
-#       padded bool plane: it is bit-identical by construction, and no branch in
-#       this kernel can flip. `_menon_direction` runs once per frame (not in the
-#       refine loop), so keeping it in numpy costs ~nothing.
+#   (2) the a-posteriori direction `M = (dd_v >= dd_h)`, which is convolution-fed.
+#       Its CONTINUOUS d-planes ARE ported (the 1-D symmetric folds, `menon_dplanes`
+#       above), but its discrete `>=` rides scipy's 5x5 homogeneity `convolve`, whose
+#       SIMD-vectorised FP reduction is not reproducible bit-for-bit in a scalar
+#       kernel — and a single flipped `M` bit selects the *other* (H vs V)
+#       reconstruction, a large battery-moving divergence. So `m_dir` is computed
+#       OUTSIDE this kernel (in `accel.rcd_demosaic`: numba d-planes → the shared
+#       scipy `_menon_decide`) and passed in as a padded bool plane: bit-identical to
+#       the numpy reference by construction, and no branch in this kernel can flip.
+#       It runs once per frame (not in the refine loop).
 #
 # Everything ELSE this kernel computes is continuous: the R/B reconstruction and
 # the refining are contractive averaging FIRs (`_KB3`, `_FIR3`) plus the
@@ -691,6 +692,86 @@ def _uniform5(a):
                 + tmp[_refl(y + 1, h), x] + tmp[_refl(y + 2, h), x]
             ) * fifth
     return out
+
+
+# ---------------------------------------------------------------------------
+# Menon a-posteriori direction — d-planes (the bit-exact front half)
+# ---------------------------------------------------------------------------
+#
+# `_rcd_demosaic._menon_direction` splits into a CONTINUOUS front half
+# (`_menon_dplanes`: the colour-difference directional gradients d_h/d_v) and ONE
+# discrete branch (`_menon_decide`: the 5x5 homogeneity convolve + `dd_v >= dd_h`).
+# ONLY the front half is ported here. The decision stays in scipy on both backends:
+# scipy's n-D `convolve` is SIMD-FP-reduced (not a scalar fold), so no per-pixel
+# summation order reproduces it bit-for-bit, and a 1-ULP flip of the `>=` selects the
+# opposite H/V reconstruction (battery-moving). `menon_dplanes` is bit-identical to
+# the numpy `_menon_dplanes`, so routing its output through the SHARED scipy
+# `_menon_decide` yields a bit-identical `m_dir` by construction.
+#
+# Bit-exactness of the green hypotheses: the reference forms g_h/g_v as
+# `convolve1d(f,_H0,'mirror') + convolve1d(f,_H1,'mirror')` — TWO separate symmetric
+# folds, then added. scipy's symmetric-fold accumulation for an odd len-5 palindrome
+# is `centre*w2 + (x[+1]+x[-1])*w3 + (x[+2]+x[-2])*w4`, so with the zero taps elided:
+#   A (=_H0) = 0.5*(x[+1]+x[-1])            # w2=0, w3=0.5, w4=0
+#   B (=_H1) = 0.5*x[0] + (-0.25)*(x[+2]+x[-2])   # w2=0.5, w3=0, w4=-0.25
+# and g = A + B. Keeping A and B as separate sub-expressions (NOT a merged 5-tap)
+# reproduces the reference's float grouping exactly (verified bit-for-bit). `_mir` is
+# scipy's `mode='mirror'` index map; the d-shift's `np.pad(mode='reflect')` is the
+# same map. `fastmath=False` ⇒ no FMA contraction (which would perturb the bits).
+
+
+@njit(parallel=True, cache=True, fastmath=False)
+def _menon_cdiff(f):
+    """Colour difference under the H/V green hypotheses (c_h, c_v): `f - g` at R/B
+    sites, 0 at green sites — the first stage of `_menon_dplanes`. Bit-identical to
+    `np.where(rb, f - (conv1d(f,_H0)+conv1d(f,_H1)), 0.0)` for each axis."""
+    h, w = f.shape
+    c_h = np.empty((h, w), dtype=np.float64)
+    c_v = np.empty((h, w), dtype=np.float64)
+    for y in prange(h):
+        for x in range(w):
+            is_r = (y % 2 == 0) and (x % 2 == 0)
+            is_b = (y % 2 == 1) and (x % 2 == 1)
+            if not (is_r or is_b):
+                c_h[y, x] = 0.0
+                c_v[y, x] = 0.0
+                continue
+            fc = f[y, x]
+            # horizontal green hypothesis g_h = A_h + B_h (scipy fold grouping)
+            a_h = 0.5 * (f[y, _mir(x + 1, w)] + f[y, _mir(x - 1, w)])
+            b_h = 0.5 * fc + (-0.25) * (f[y, _mir(x + 2, w)] + f[y, _mir(x - 2, w)])
+            c_h[y, x] = fc - (a_h + b_h)
+            # vertical green hypothesis g_v = A_v + B_v
+            a_v = 0.5 * (f[_mir(y + 1, h), x] + f[_mir(y - 1, h), x])
+            b_v = 0.5 * fc + (-0.25) * (f[_mir(y + 2, h), x] + f[_mir(y - 2, h), x])
+            c_v[y, x] = fc - (a_v + b_v)
+    return c_h, c_v
+
+
+@njit(parallel=True, cache=True, fastmath=False)
+def _menon_dgrad(c_h, c_v):
+    """Directional colour-difference gradient |c - c(+2)| along each axis (d_h, d_v) —
+    the second stage of `_menon_dplanes` (the reference's reflect-shift-and-abs, with
+    the +2 shift via `_mir`). Bit-identical to the numpy reference."""
+    h, w = c_h.shape
+    d_h = np.empty((h, w), dtype=np.float64)
+    d_v = np.empty((h, w), dtype=np.float64)
+    for y in prange(h):
+        for x in range(w):
+            d_h[y, x] = abs(c_h[y, x] - c_h[y, _mir(x + 2, w)])
+            d_v[y, x] = abs(c_v[y, x] - c_v[_mir(y + 2, h), x])
+    return d_h, d_v
+
+
+def menon_dplanes(f):
+    """Padded float64 CFA → (d_h, d_v): the bit-exact numba twin of
+    `_rcd_demosaic._menon_dplanes` (colour-difference directional gradients). The
+    discrete `dd_v >= dd_h` homogeneity decision is deliberately NOT here — it stays
+    in scipy (`_rcd_demosaic._menon_decide`) on both backends (see the section note
+    above). Two `prange` passes (per-pixel green hypotheses → c_h/c_v, then the +2
+    gradient → d_h/d_v); not `@njit` itself (just chains the jitted helpers)."""
+    c_h, c_v = _menon_cdiff(f)
+    return _menon_dgrad(c_h, c_v)
 
 
 @njit(parallel=True, cache=True, fastmath=False)

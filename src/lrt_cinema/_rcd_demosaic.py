@@ -137,14 +137,23 @@ This numpy module is THE reference and the demosaic-battery quality deliverable.
 current reference (directional green + Menon directional R/B + the chroma-gated
 refining loop): `accel.rcd_demosaic(backend="numba")` runs the kernel; numpy stays
 the reference/fallback. End-to-end parity vs this module is ~1e-15 and the battery
-via numba is bit-identical (39.03 CPSNR), so the two paths are interchangeable. The
-one **discrete** branch — the a-posteriori direction `m_dir = dd_v >= dd_h` — is
-computed once here in numpy (`_menon_direction`) and handed to the kernel as a
-padded bool plane, so no `>=` bit can flip on a convolution-FP-order difference.
-That keeps `_menon_direction` on the numpy side (~half the numba-path time), so the
-kernel speedup is ~4x, not the old fused ~10x; porting `m_dir` to an exact-bool
-numba homogeneity pass for the remaining lift is a follow-up. The default pipeline
-demosaic is `linear` (libraw); `rcd` is opt-in.
+via numba is bit-identical (39.03 CPSNR), so the two paths are interchangeable.
+
+The a-posteriori direction `m_dir` is split (`_menon_direction = _menon_decide ∘
+_menon_dplanes`): its CONTINUOUS front half — the colour-difference directional
+gradient planes `d_h/d_v` (separable 1-D FIR + abs) — is ported **bit-for-bit** to
+numba (`accel._numba_kernels.menon_dplanes`), while its ONE **discrete** branch
+(`m_dir = dd_v >= dd_h`, the 5x5 homogeneity convolve + compare, `_menon_decide`)
+stays in scipy on BOTH backends. scipy's n-D `convolve` is SIMD-FP-reduced, not a
+scalar fold — verified empirically that NO per-pixel summation order reproduces it
+(a clean-room scalar port flips ~3 `m_dir` bits / 8 Kodak frames), and a 1-ULP flip
+selects the opposite H/V reconstruction. Because the numba d-planes are bit-identical
+to numpy's, feeding them through the same scipy `_menon_decide` yields a bit-identical
+`m_dir` by construction. Porting the d-planes lifts the kernel speedup past the old
+~4x (the bulk — the 1-D folds, incl. the slow axis-0 conv — leaves the numpy
+critical path); the residual scipy homogeneity convolve (~a quarter of the old
+`m_dir` cost) is the bit-exactness floor. The default pipeline demosaic is `linear`
+(libraw); `rcd` is opt-in.
 """
 
 from __future__ import annotations
@@ -248,13 +257,16 @@ def _green_directional(f: np.ndarray, g_site: np.ndarray) -> np.ndarray:
     return np.where(g_site, f, green_est)  # keep known greens exactly
 
 
-def _menon_direction(f: np.ndarray, r_site, b_site, g_site) -> np.ndarray:
-    """A-posteriori per-pixel best direction `M` (True = horizontal) [Menon2007].
+def _menon_dplanes(f: np.ndarray, r_site, b_site, g_site) -> tuple:
+    """Colour-difference directional-gradient planes (d_h, d_v) — the CONTINUOUS
+    front half of the a-posteriori decision [Menon2007].
 
-    Clean-room transcription of the directional-decision math from the BSD-3
-    `colour_demosaicing` Menon2007 reference: build the color difference under each
-    green hypothesis (G_H, G_V), take its directional gradient, low-pass each with
-    the 5x5 homogeneity kernel, and compare. Operates on the reflect-padded mosaic.
+    Build the colour difference under each green hypothesis (G_H, G_V), then take its
+    +2 directional gradient along each axis. Every op here is a separable 1-D FIR
+    (`_H0`+`_H1` symmetric fold) + subtraction + abs, so it is reproducible
+    **bit-for-bit** in a scalar kernel — which is why the numba accel path
+    (`accel._numba_kernels.menon_dplanes`) ports exactly THIS half and shares the
+    discrete tail (`_menon_decide`). Operates on the reflect-padded mosaic.
     """
     g_known = g_site
     g_h = np.where(
@@ -270,9 +282,40 @@ def _menon_direction(f: np.ndarray, r_site, b_site, g_site) -> np.ndarray:
     c_v = np.where(rb, f - g_v, 0.0)
     d_h = np.abs(c_h - np.pad(c_h, ((0, 0), (0, 2)), mode="reflect")[:, 2:])
     d_v = np.abs(c_v - np.pad(c_v, ((0, 2), (0, 0)), mode="reflect")[2:, :])
+    return d_h, d_v
+
+
+def _menon_decide(d_h: np.ndarray, d_v: np.ndarray) -> np.ndarray:
+    """The ONE discrete branch of the a-posteriori decision [Menon2007]: low-pass each
+    colour-difference gradient with the 5x5 homogeneity kernel and pick the
+    more-homogeneous axis (`M = dd_v >= dd_h`, True = horizontal/row reconstruction).
+
+    Stays in scipy on BOTH backends **by design**. scipy's n-D ``convolve`` uses a
+    SIMD-vectorised (lane-partitioned) FP reduction, not a scalar left-fold — verified
+    empirically: NO per-pixel summation order reproduces it bit-for-bit (a clean-room
+    scalar port flips ~3 `M` bits / 8 Kodak frames). Since `M` is a `>=` comparison, a
+    1-ULP difference flips the H vs V reconstruction at ties — a large, battery-moving
+    divergence. The numba accel path computes its d-planes bit-identically to
+    `_menon_dplanes`, then routes them through THIS shared function, so `m_dir` is
+    bit-identical on both backends by construction.
+    """
     dd_h = convolve(d_h, _K_HOMOGENEITY, mode="constant")
     dd_v = convolve(d_v, _K_HOMOGENEITY.T, mode="constant")
     return dd_v >= dd_h
+
+
+def _menon_direction(f: np.ndarray, r_site, b_site, g_site) -> np.ndarray:
+    """A-posteriori per-pixel best direction `M` (True = horizontal) [Menon2007].
+
+    Clean-room transcription of the directional-decision math from the BSD-3
+    `colour_demosaicing` Menon2007 reference: the continuous colour-difference
+    gradient planes (`_menon_dplanes`) feed the discrete homogeneity decision
+    (`_menon_decide`). Split into those two halves so the numba accel path can port
+    the (bit-exact) front half and share the (scipy-only) decision; this wrapper keeps
+    the original single-call contract. Operates on the reflect-padded mosaic.
+    """
+    d_h, d_v = _menon_dplanes(f, r_site, b_site, g_site)
+    return _menon_decide(d_h, d_v)
 
 
 def _reconstruct_rb(green, f, r_site, b_site, g_site, m_dir) -> tuple:

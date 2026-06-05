@@ -5,19 +5,23 @@ CONTRACT: `backend="numba"` must return the SAME result as the numpy reference
 (`_rcd_demosaic.rcd_demosaic`: RCD green + Menon directional R/B + chroma-gated
 a-posteriori refining — the quality path that carries the demosaic battery's
 39.03 CPSNR). This is now satisfied by a REAL bit-faithful kernel
-(`accel._numba_kernels.rcd_rggb_refined`), not a dispatch fallback: the dispatcher
-computes the one convolution-fed branch (the a-posteriori direction
-`m_dir = dd_v >= dd_h`) in numpy via the reference `_menon_direction` and hands it
-to the kernel as a padded bool plane, so the only discrete decision is identical by
-construction and no branch in the kernel can flip; the directional green is matched
-bit-for-bit (pure per-pixel arithmetic); everything downstream is continuous
-(contractive averaging FIRs whose summation order perturbs the result by ~1e-15
-without crossing a branch). So the equality below is a genuine kernel-vs-reference
-parity at ~1e-14 — well under `_TOL` — and these tests are the regression tripwire
-that the kernel STAYS faithful (a divergent edit would push max|Δ| past 1e-9 or
-flip a direction bit and a battery metric). They mosaic synthetic structure (a
-slanted edge, a radial chirp, a luma gradient) AND random CFAs for every one of the
-4 phases, and check the finite / non-negative / shape / dtype / over-range
+(`accel._numba_kernels.rcd_rggb_refined`), not a dispatch fallback. The a-posteriori
+direction `m_dir = dd_v >= dd_h` is computed as a HYBRID: its continuous colour-
+difference d-planes by the numba kernel `menon_dplanes` (bit-identical to the numpy
+reference `_menon_dplanes`), then its ONE discrete branch by the SHARED scipy
+`_menon_decide` (the 5x5 homogeneity convolve + compare, kept in scipy on both
+backends — its n-D-correlate FP reduction is SIMD-vectorised and not reproducible
+bit-for-bit in a scalar kernel; a 1-ULP flip would pick the opposite reconstruction).
+Bit-identical d-planes through the same convolve ⇒ a bit-identical m_dir, so the only
+discrete decision is identical by construction and no branch in the kernel can flip;
+the directional green is matched bit-for-bit (pure per-pixel arithmetic); everything
+downstream is continuous (contractive averaging FIRs whose summation order perturbs
+the result by ~1e-15 without crossing a branch). So the equality below is a genuine
+kernel-vs-reference parity at ~1e-14 — well under `_TOL` — and these tests are the
+regression tripwire that the kernel STAYS faithful (a divergent edit would push
+max|Δ| past 1e-9 or flip a direction bit and a battery metric). They mosaic synthetic
+structure (a slanted edge, a radial chirp, a luma gradient) AND random CFAs for every
+one of the 4 phases, and check the finite / non-negative / shape / dtype / over-range
 contract. No `/tmp/dng_out` fixtures, no system DCP; skip cleanly when numba is
 absent.
 
@@ -194,3 +198,56 @@ def test_rcd_numba_parity_is_tight() -> None:
         got = accel.rcd_demosaic(cfa, pattern, backend="numba")
         max_diff = float(np.max(np.abs(ref - got)))
         assert max_diff < 1e-10, f"{pattern}: parity loosened to {max_diff:.2e}"
+
+
+def test_menon_dplanes_numba_matches_numpy_exactly() -> None:
+    """The numba colour-difference d-planes (`_numba_kernels.menon_dplanes`) are
+    BIT-IDENTICAL to the numpy reference `_rcd_demosaic._menon_dplanes` — structured +
+    random CFAs. This is the load-bearing exactness guarantee of the hybrid m_dir: the
+    discrete `dd_v >= dd_h` decision is made by the SHARED scipy `_menon_decide` on both
+    backends (its n-D-correlate FP reduction is SIMD-vectorised, NOT a scalar fold — no
+    per-pixel order reproduces it, a clean-room scalar port flips ~3 m_dir bits / 8
+    Kodak), so bit-identical d-planes ⇒ a bit-identical m_dir with no tie able to flip.
+    Exact-equality (not a tolerance) also pins that the compiled kernel emits no FMA
+    contraction, which would perturb the bits and reintroduce the flip risk."""
+    from lrt_cinema import _rcd_demosaic as ref
+    from lrt_cinema.accel._numba_kernels import menon_dplanes
+
+    rng = np.random.default_rng(20260605)
+    cfas = [rng.random((96, 80)), _mosaic(_structured_rgb(128), "RGGB")]
+    for cfa in cfas:
+        padded = np.pad(cfa, ref._PAD, mode="reflect")
+        yy, xx = np.indices(padded.shape)
+        r_site = (yy % 2 == 0) & (xx % 2 == 0)
+        b_site = (yy % 2 == 1) & (xx % 2 == 1)
+        g_site = ~(r_site | b_site)
+        dh_ref, dv_ref = ref._menon_dplanes(padded, r_site, b_site, g_site)
+        dh_nb, dv_nb = menon_dplanes(np.ascontiguousarray(padded))
+        np.testing.assert_array_equal(dh_nb, dh_ref)
+        np.testing.assert_array_equal(dv_nb, dv_ref)
+        # the full a-posteriori decision is bit-identical through the shared decide.
+        np.testing.assert_array_equal(
+            ref._menon_decide(dh_nb, dv_nb),
+            ref._menon_direction(padded, r_site, b_site, g_site),
+        )
+
+
+def test_rcd_numba_invokes_menon_dplanes(monkeypatch) -> None:
+    """The numba path must compute m_dir's d-planes via the kernel `menon_dplanes`, not
+    silently fall back to the numpy reference `_menon_direction` (which would still
+    yield an identical — but UNACCELERATED — m_dir, so the parity tests alone can't
+    catch a perf regression here). Makes the kernel call observable, mirroring
+    `test_rcd_numba_actually_invokes_the_kernel` for the core kernel."""
+    from lrt_cinema.accel import _numba_kernels as kmod
+
+    real = kmod.menon_dplanes
+    seen = {"n": 0}
+
+    def spy(*args, **kwargs):
+        seen["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(kmod, "menon_dplanes", spy)
+    rng = np.random.default_rng(101)
+    accel.rcd_demosaic(rng.random((32, 40)), "RGGB", backend="numba")
+    assert seen["n"] == 1, "numba dispatch did not reach menon_dplanes (fell back to numpy m_dir?)"

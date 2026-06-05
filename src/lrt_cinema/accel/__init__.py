@@ -193,25 +193,30 @@ def rcd_demosaic(cfa: np.ndarray, pattern: str, *,
     NUMBA PATH: the bit-faithful numba twin (`_numba_kernels.rcd_rggb_refined`)
     reproduces the CURRENT numpy reference (`_rcd_demosaic._rcd_rggb`: RCD green +
     Menon directional R/B + chroma-gated a-posteriori refining — the quality path
-    that carries the demosaic battery's 39.03 CPSNR). The one convolution-fed
-    branch, the a-posteriori direction `m_dir = (dd_v >= dd_h)`, is computed HERE in
-    numpy by the reference `_menon_direction` and handed to the kernel as a padded
-    bool plane — so the only discrete decision is bit-identical by construction and
-    no branch in the kernel can flip; everything the kernel computes downstream is
-    continuous (contractive averaging FIRs), so end-to-end parity vs the reference
-    is ~1e-14 (under the test's 1e-9 tolerance). See the kernel's design note.
+    that carries the demosaic battery's 39.03 CPSNR). The a-posteriori direction
+    `m_dir = (dd_v >= dd_h)` is split: its continuous front half (the colour-
+    difference directional-gradient planes d_h/d_v) is the numba kernel
+    `menon_dplanes` — bit-identical to the reference's d-planes — and its ONE discrete
+    branch is decided by the shared scipy `_menon_decide`, which stays in scipy on
+    both backends (its n-D-correlate FP reduction is SIMD-vectorised, not
+    scalar-reproducible; a 1-ULP flip would pick the opposite reconstruction).
+    Bit-identical d-planes through the same convolve ⇒ a bit-identical m_dir;
+    everything the kernel computes downstream is continuous (contractive averaging
+    FIRs), so end-to-end parity vs the reference is ~1e-14 (under the test's 1e-9
+    tolerance). See the kernel's design note.
 
     Both branches share the reference's validate / flip / pad / crop / clamp
     wrapper: `backend="numpy"` (the default / fallback) IS the literal reference;
-    `backend="numba"` reuses the reference's guards, phase flips, reflect-pad and
-    `_menon_direction`, swaps only the padded RGGB core for the kernel, then crops /
-    unflips / clamps identically. `"mlx"` falls back to the reference (no GPU RCD)."""
+    `backend="numba"` reuses the reference's guards, phase flips, reflect-pad and the
+    scipy `_menon_decide`, swaps the padded RGGB core for the kernel (and the m_dir
+    d-planes for `menon_dplanes`), then crops / unflips / clamps identically. `"mlx"`
+    falls back to the reference (no GPU RCD)."""
     from lrt_cinema import _rcd_demosaic as ref
     if resolve_backend(backend) != "numba":
         return ref.rcd_demosaic(cfa, pattern)
 
     # --- numba path: the reference wrapper with the kernel as the core ---
-    from lrt_cinema.accel._numba_kernels import rcd_rggb_refined
+    from lrt_cinema.accel._numba_kernels import menon_dplanes, rcd_rggb_refined
 
     if pattern not in ref._VALID_PATTERNS:
         raise ValueError(
@@ -235,18 +240,19 @@ def rcd_demosaic(cfa: np.ndarray, pattern: str, *,
         work = work[:, ::-1]
 
     padded = np.pad(work, ref._PAD, mode="reflect")
-    h, w = padded.shape
-    yy, xx = np.indices((h, w))
-    r_site = (yy % 2 == 0) & (xx % 2 == 0)
-    b_site = (yy % 2 == 1) & (xx % 2 == 1)
-    g_site = ~(r_site | b_site)
-    # The single convolution-fed branch, computed by the numpy reference so it is
-    # bit-identical (the kernel reads it, never recomputes it).
-    m_dir = np.ascontiguousarray(
-        ref._menon_direction(padded, r_site, b_site, g_site)
-    )
+    padded_c = np.ascontiguousarray(padded)
+    # The a-posteriori direction `m_dir`: its continuous front half (the colour-
+    # difference directional-gradient planes d_h/d_v) is the numba kernel
+    # `menon_dplanes` — bit-identical to the numpy reference's d-planes — and its ONE
+    # discrete branch (`dd_v >= dd_h`) is decided by the SHARED scipy homogeneity
+    # convolve `_menon_decide`, which stays in scipy on both backends (its n-D-correlate
+    # FP reduction is SIMD-vectorised and not reproducible bit-for-bit in a scalar
+    # kernel; a 1-ULP flip would pick the opposite H/V reconstruction). Bit-identical
+    # d-planes through the same convolve ⇒ a bit-identical m_dir by construction.
+    d_h, d_v = menon_dplanes(padded_c)
+    m_dir = np.ascontiguousarray(ref._menon_decide(d_h, d_v))
     rgb_padded = rcd_rggb_refined(
-        np.ascontiguousarray(padded), m_dir,
+        padded_c, m_dir,
         ref._REFINE_ITERS, ref._CHROMA_THR, ref._CHROMA_SOFT,
     )
     rgb = rgb_padded[ref._PAD:-ref._PAD, ref._PAD:-ref._PAD, :]
