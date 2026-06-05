@@ -36,7 +36,20 @@ from lrt_cinema.pipeline import render_frame  # noqa: E402
 # --- fixture paths ---------------------------------------------------------
 
 _GYM_DNG = Path("/tmp/dng_out/DSC_4053.dng")
-_GYM_GT_TIF = Path("/tmp/dng_out/DSC_4053_dngvalidate.tif")
+# Gym ground-truth reference: prefer the `dng_validate` render; fall back to the
+# Adobe DNG **Converter** render (`DSC_4053_final.tif`) when it is absent. Both are
+# Adobe DNG-SDK renders of the same DNG + DCP and are empirically equivalent — our
+# stages-1-9 render scores the documented **0.026** mean ΔE2000 against `final.tif`,
+# identical to the historic dng_validate number. The fallback lets the gym ship-gate
+# RUN wherever an Adobe reference is present, instead of silently skipping forever on
+# a filename mismatch (it had been dormant for exactly that reason).
+_GYM_GT_CANDIDATES = (
+    Path("/tmp/dng_out/DSC_4053_dngvalidate.tif"),
+    Path("/tmp/dng_out/DSC_4053_final.tif"),
+)
+_GYM_GT_TIF = next(
+    (p for p in _GYM_GT_CANDIDATES if p.exists()), _GYM_GT_CANDIDATES[0],
+)
 _GYM_DCP = Path(
     "/Library/Application Support/Adobe/CameraRaw/CameraProfiles/"
     "Camera/Nikon D750/Nikon D750 Camera Standard.dcp"
@@ -133,8 +146,9 @@ def _fixture_available(*paths: Path) -> bool:
 @pytest.mark.skipif(
     not _fixture_available(_GYM_DNG, _GYM_GT_TIF, _GYM_DCP),
     reason=(
-        "Gym render fixture missing — needs DSC_4053.dng, dng_validate TIFF, "
-        "and the system Adobe DCP. See test_pipeline.py header."
+        "Gym render fixture missing — needs DSC_4053.dng, an Adobe reference TIFF "
+        "(dng_validate OR DSC_4053_final.tif), and the system Adobe DCP. See "
+        "test_pipeline.py header."
     ),
 )
 def test_ship_gate_gym_de_under_1():
