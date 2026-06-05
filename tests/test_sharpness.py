@@ -36,10 +36,13 @@ from lrt_cinema.ir import DevelopOps, RenderIntent
 # ---------------------------------------------------------------------------
 # Axis-1 independent reimplementation oracle
 # ---------------------------------------------------------------------------
-def _oracle_sharpness(prophoto: np.ndarray, amount: float, radius: float) -> np.ndarray:
-    """Independent USM reimpl. Same Gaussian primitive; everything else from
-    scratch. Valid where luminance > the near-black floor (gate == 1.0), which all
-    callers below respect (inputs ≥ 0.05)."""
+def _oracle_sharpness(prophoto: np.ndarray, amount: float, radius: float,
+                      detail: float = 100.0, masking: float = 0.0) -> np.ndarray:
+    """Independent USM reimpl. Same Gaussian + np.gradient primitives; the whole
+    composition (OETF/EOTF, high-pass, Detail soft-clip, Masking gate, ratio-reapply)
+    from scratch. Valid where luminance > the near-black floor (gate == 1.0), which
+    all callers below respect (inputs ≥ 0.05). The Detail/Masking knees mirror the
+    production constants (_DETAIL_SOFT / _MASK_EDGE)."""
     if amount == 0.0:
         return prophoto.copy()
     from scipy.ndimage import gaussian_filter
@@ -58,8 +61,17 @@ def _oracle_sharpness(prophoto: np.ndarray, amount: float, radius: float) -> np.
 
     perceptual = oetf(lum)
     blurred = gaussian_filter(perceptual, sigma=max(float(radius), 0.0), mode="reflect")
-    perceptual_sharp = perceptual + (amount / 100.0) * (perceptual - blurred)
-    lum_out = eotf(perceptual_sharp)
+    hp = perceptual - blurred
+    if detail < 100.0:                                   # Detail: tanh halo soft-clip
+        knee = 0.08
+        d = detail / 100.0
+        hp = d * hp + (1.0 - d) * knee * np.tanh(hp / knee)
+    if masking > 0.0:                                    # Masking: gradient gate
+        gy, gx = np.gradient(perceptual)
+        tt = np.clip(np.hypot(gx, gy) / 0.06, 0.0, 1.0)
+        gate = tt * tt * (3.0 - 2.0 * tt)
+        hp = hp * (1.0 - (masking / 100.0) * (1.0 - gate))
+    lum_out = eotf(perceptual + (amount / 100.0) * hp)
     ratio = lum_out / np.maximum(lum, 1e-12)
     return np.maximum(pp * ratio[..., None], 0.0)
 
@@ -82,6 +94,15 @@ def test_sharpness_matches_independent_oracle(amount, radius):
     img = _edgy(amount and int(amount))
     got = apply_sharpness(img, amount, radius)
     ref = _oracle_sharpness(img, amount, radius)
+    assert np.max(np.abs(got.astype(np.float64) - ref)) < 1e-6
+
+
+@pytest.mark.parametrize("detail,masking", [
+    (100.0, 0.0), (25.0, 0.0), (0.0, 0.0), (50.0, 50.0), (25.0, 100.0)])
+def test_sharpness_oracle_with_detail_masking(detail, masking):
+    img = _edgy(7)
+    got = apply_sharpness(img, 60.0, 1.0, detail, masking)
+    ref = _oracle_sharpness(img, 60.0, 1.0, detail, masking)
     assert np.max(np.abs(got.astype(np.float64) - ref)) < 1e-6
 
 
@@ -144,17 +165,46 @@ def test_negative_radius_is_safe():
     assert np.isfinite(out).all() and (out >= 0).all()
 
 
+def test_detail_suppresses_halos_monotonically():
+    """Lower Detail soft-clips the overshoot halo at a strong edge; the overshoot
+    grows monotonically with Detail (detail=100 = full halo, detail=0 = clipped)."""
+    edge = np.full((8, 32, 3), 0.2, np.float32)
+    edge[:, 16:, :] = 0.7
+    overshoot = [
+        float(apply_sharpness(edge, 100.0, 1.0, d, 0.0)[:, 16, 0].max())
+        for d in (0.0, 25.0, 60.0, 100.0)
+    ]
+    assert overshoot == sorted(overshoot)              # detail↑ → larger halo
+    assert overshoot[0] < overshoot[-1]                # detail=0 clips it meaningfully
+
+
+def test_masking_protects_flat_low_gradient_areas():
+    """High Masking gates the USM by luminance gradient: a faint low-gradient ripple
+    is spared while a strong edge still sharpens."""
+    img = np.full((16, 48, 3), 0.35, np.float32)
+    img[:, 24:, :] = 0.7                               # strong edge at x=24 (high grad)
+    img[:, :16, :] += (0.02 * np.sin(np.arange(16) * 1.3)).astype(np.float32)[None, :, None]
+    masked = apply_sharpness(img, 80.0, 1.0, 100.0, 100.0)
+    unmasked = apply_sharpness(img, 80.0, 1.0, 100.0, 0.0)
+    flat_masked = float(np.abs(masked[:, 6, 0] - img[:, 6, 0]).mean())
+    flat_unmasked = float(np.abs(unmasked[:, 6, 0] - img[:, 6, 0]).mean())
+    assert flat_masked < flat_unmasked                 # masking spares the low-grad ripple
+    assert not np.allclose(masked[:, 24, 0], img[:, 24, 0])  # strong edge still sharpened
+
+
 # ---------------------------------------------------------------------------
 # Mode resolver
 # ---------------------------------------------------------------------------
 def test_resolve_capture_sharpen_modes():
     silent = DevelopOps()                               # no Amount in the XMP
-    explicit = DevelopOps(sharpness=85.0, sharpen_radius=2.0)
-    assert _resolve_capture_sharpen(explicit, "off") == (0.0, explicit.sharpen_radius)
-    assert _resolve_capture_sharpen(silent, "acr") == (_ACR_DEFAULT_AMOUNT, _ACR_DEFAULT_RADIUS)
-    assert _resolve_capture_sharpen(explicit, "acr") == (85.0, 2.0)   # honour XMP Amount
-    assert _resolve_capture_sharpen(explicit, "xmp") == (85.0, 2.0)
-    assert _resolve_capture_sharpen(silent, "xmp") == (0.0, 1.0)      # Amount 0 → no-op
+    explicit = DevelopOps(sharpness=85.0, sharpen_radius=2.0,
+                          sharpen_detail=60.0, sharpen_edge_masking=30.0)
+    assert _resolve_capture_sharpen(explicit, "off") == (0.0, 2.0, 60.0, 30.0)
+    assert _resolve_capture_sharpen(silent, "acr") == (
+        _ACR_DEFAULT_AMOUNT, _ACR_DEFAULT_RADIUS, 25.0, 0.0)   # ACR raw defaults
+    assert _resolve_capture_sharpen(explicit, "acr") == (85.0, 2.0, 60.0, 30.0)  # honour XMP
+    assert _resolve_capture_sharpen(explicit, "xmp") == (85.0, 2.0, 60.0, 30.0)
+    assert _resolve_capture_sharpen(silent, "xmp") == (0.0, 1.0, 25.0, 0.0)  # Amount 0 → no-op
 
 
 # ---------------------------------------------------------------------------

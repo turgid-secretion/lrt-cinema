@@ -25,11 +25,15 @@ def test_parse_keyframe_a_fields():
     assert ops.vibrance == 10.0
     assert ops.sharpness == 40.0
     assert ops.sharpen_radius == 1.5            # crs:SharpenRadius parsed when present
+    assert ops.sharpen_detail == 55.0          # crs:SharpenDetail parsed when present
+    assert ops.sharpen_edge_masking == 40.0    # crs:SharpenEdgeMasking parsed when present
 
 
 def test_parse_keyframe_b_with_deflicker():
     ops, is_kf, deflicker, _rating, _mask = parse_xmp_file(FIXTURES / "synthetic_keyframe_b.xmp")
-    assert ops.sharpen_radius == 1.0            # absent crs:SharpenRadius → ACR default 1.0
+    assert ops.sharpen_radius == 1.0           # absent crs:SharpenRadius → ACR default 1.0
+    assert ops.sharpen_detail == 25.0          # absent → ACR default 25
+    assert ops.sharpen_edge_masking == 0.0     # absent → ACR default 0
     assert is_kf is True
     assert deflicker == pytest.approx(0.12)
     assert ops.exposure_ev == 2.5

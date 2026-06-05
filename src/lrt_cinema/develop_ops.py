@@ -773,36 +773,82 @@ def apply_contrast_2012(prophoto: np.ndarray, contrast: float) -> np.ndarray:
 _SHARPEN_AMOUNT_K = 1.0
 _ACR_DEFAULT_AMOUNT = 40.0
 _ACR_DEFAULT_RADIUS = 1.0
+_ACR_DEFAULT_DETAIL = 25.0       # ACR raw-default Detail
+_ACR_DEFAULT_MASKING = 0.0       # ACR raw-default Masking (off)
+# Detail / Masking shaping knees (perceptual sRGB units), documented tuning — the
+# ACR curves are closed-source. _DETAIL_SOFT is the tanh halo-clip knee; _MASK_EDGE
+# is the luminance-gradient magnitude treated as a "full" edge.
+_DETAIL_SOFT = 0.08
+_MASK_EDGE = 0.06
 
 
-def _resolve_capture_sharpen(ops: DevelopOps, mode: str) -> tuple[float, float]:
-    """Resolve the effective (Amount, Radius) from the develop ops + CLI mode.
+def _sharpen_detail_limit(highpass: np.ndarray, detail: float) -> np.ndarray:
+    """Detail (0..100) — halo suppression on the high-pass. `detail=100` → the raw
+    high-pass (full halos / maximal fine detail); `detail→0` → a tanh soft-clip that
+    caps the large overshoot/undershoot **rings** (halos) at strong edges while
+    passing small high-pass (fine texture) ≈ unchanged. A documented public
+    approximation of ACR's closed-source Detail (its deconvolution↔USM blend); no
+    fidelity claim, owner-tunable via `_DETAIL_SOFT`. Monotonic in `detail`."""
+    if detail >= 100.0:
+        return highpass
+    d = detail / 100.0
+    soft = _DETAIL_SOFT * np.tanh(highpass / _DETAIL_SOFT)  # caps |hp| ≈ _DETAIL_SOFT
+    return d * highpass + (1.0 - d) * soft
+
+
+def _sharpen_edge_mask(perceptual: np.ndarray, masking: float) -> np.ndarray:
+    """Masking (0..100) — protect flat areas. `masking=0` → mask ≡ 1 (sharpen
+    everywhere); `masking→100` → mask = a smoothstep gate on the luminance gradient
+    magnitude (low-gradient/flat regions → 0, strong edges → 1), so smooth areas
+    (sky / skin / sensor noise) are spared the USM. A documented public approximation
+    of ACR's closed-source edge mask; owner-tunable via `_MASK_EDGE`. Monotonic in
+    `masking`; returns values in [0, 1]."""
+    if masking <= 0.0:
+        return np.ones_like(perceptual)
+    gy, gx = np.gradient(perceptual)
+    t = np.clip(np.hypot(gx, gy) / _MASK_EDGE, 0.0, 1.0)
+    gate = t * t * (3.0 - 2.0 * t)  # smoothstep(0,1)
+    return 1.0 - (masking / 100.0) * (1.0 - gate)
+
+
+def _resolve_capture_sharpen(
+    ops: DevelopOps, mode: str,
+) -> tuple[float, float, float, float]:
+    """Resolve the effective (Amount, Radius, Detail, Masking) from the ops + mode.
 
     - ``"off"`` → Amount 0 (apply_sharpness short-circuits → byte-exact identity).
-    - ``"xmp"`` → the XMP's `crs:Sharpness` / `crs:SharpenRadius` (Amount 0 → no-op).
-    - ``"acr"`` → ACR's raw defaults (40 / 1.0) when the XMP carries **no** Amount,
-      else the XMP's own values — i.e. fall back to the default-on capture
+    - ``"xmp"`` → the XMP's crs:Sharpness / SharpenRadius / SharpenDetail /
+      SharpenEdgeMasking (Amount 0 → no-op).
+    - ``"acr"`` → ACR's raw defaults (40 / 1.0 / 25 / 0) when the XMP carries **no**
+      Amount, else the XMP's own values — fall back to the default-on capture
       sharpening the LRT JPG bakes, but honour an explicit colorist Amount.
     """
     if mode == "off":
-        return 0.0, ops.sharpen_radius
+        return 0.0, ops.sharpen_radius, ops.sharpen_detail, ops.sharpen_edge_masking
     if mode == "acr" and ops.sharpness == 0.0:
-        return _ACR_DEFAULT_AMOUNT, _ACR_DEFAULT_RADIUS
-    return ops.sharpness, ops.sharpen_radius
+        return (_ACR_DEFAULT_AMOUNT, _ACR_DEFAULT_RADIUS,
+                _ACR_DEFAULT_DETAIL, _ACR_DEFAULT_MASKING)
+    return (ops.sharpness, ops.sharpen_radius,
+            ops.sharpen_detail, ops.sharpen_edge_masking)
 
 
 def apply_sharpness(
     prophoto: np.ndarray, amount: float, radius: float = _ACR_DEFAULT_RADIUS,
+    detail: float = 100.0, masking: float = 0.0,
 ) -> np.ndarray:
     """Clean-room ACR/LR **capture sharpening** — a luminance unsharp mask.
 
     `amount` is the ACR Amount (0..150; **0 = byte-exact identity short-circuit**),
-    `radius` the Gaussian radius (ACR 0.5..3.0). FAITHFUL-path only (the CLI gates
-    this via `--capture-sharpen` and never calls it on the perceptual master, which
-    defers detail to the grade — trunk/branch model). A documented public
-    approximation of ACR's closed-source Detail-panel USM; **no Lightroom-fidelity
-    claim** (it is a §9 / §11 "deliberately exceed the LRT-JPG" enhancement, not a
-    dng_validate match — `dng_validate` does no sharpening).
+    `radius` the Gaussian radius (ACR 0.5..3.0), `detail` (0..100) halo suppression,
+    `masking` (0..100) flat-area protection. The function defaults `detail=100`
+    (no halo limit) and `masking=0` (no mask) give the **pure USM**; the pipeline
+    passes the XMP / ACR values (ACR's raw defaults are Detail 25 / Masking 0, via
+    `_resolve_capture_sharpen`). FAITHFUL-path only (the CLI gates this via
+    `--capture-sharpen` and never calls it on the perceptual master, which defers
+    detail to the grade — trunk/branch model). A documented public approximation of
+    ACR's closed-source Detail-panel USM; **no Lightroom-fidelity claim** (it is a
+    §9 / §11 "deliberately exceed the LRT-JPG" enhancement, not a dng_validate match
+    — `dng_validate` does no sharpening).
 
     **Domain — sRGB OETF, by construction.** The op runs at the end of Stage 12 on
     linear ProPhoto, *before* the Stage-13 ProPhoto→sRGB gamut matrix + sRGB OETF.
@@ -818,8 +864,10 @@ def apply_sharpness(
     reapplied to RGB via the §0 hue-preserving `_reapply_luminance_ratio`
     (out/in ratio, near-black-safe, **floor 0, NO top clamp** → overrange survives
     to the downstream encode). So a coloured edge keeps its hue and no chroma
-    fringing is introduced. Detail / Masking (the closed-source halo-suppression
-    and edge-mask curves) are a documented follow-up increment.
+    fringing is introduced. **Detail** soft-clips the high-pass halos
+    (`_sharpen_detail_limit`); **Masking** gates the high-pass by the luminance
+    gradient to spare flat areas (`_sharpen_edge_mask`) — both isolated, documented,
+    owner-tunable approximations of ACR's closed-source curves.
     """
     if amount == 0.0:
         return prophoto  # byte-exact identity — the ship-gate / default-off contract
@@ -833,6 +881,8 @@ def apply_sharpness(
     sigma = max(float(radius), 0.0)
     blurred = gaussian_filter(perceptual, sigma=sigma, mode="reflect")
     highpass = perceptual - blurred  # σ=0 → blurred==perceptual → highpass 0 → no-op
+    highpass = _sharpen_detail_limit(highpass, detail)        # Detail: halo suppression
+    highpass = highpass * _sharpen_edge_mask(perceptual, masking)  # Masking: flat-area gate
     strength = (amount / 100.0) * _SHARPEN_AMOUNT_K
     perceptual_sharp = perceptual + strength * highpass
     lum_out = _srgb_eotf(perceptual_sharp)  # → linear; eotf floors its base ≥0
@@ -941,8 +991,8 @@ def apply_stage_12_perceptual(
     # apply_sharpness short-circuit → byte-exact. Was a no-op stub on both intents,
     # so dropping it from the perceptual branch is byte-identical.
     if intent is RenderIntent.FAITHFUL:
-        amount, radius = _resolve_capture_sharpen(ops, capture_sharpen)
-        out = apply_sharpness(out, amount, radius)
+        amount, radius, detail, masking = _resolve_capture_sharpen(ops, capture_sharpen)
+        out = apply_sharpness(out, amount, radius, detail, masking)
     return out
 
 

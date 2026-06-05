@@ -193,15 +193,18 @@ class DevelopOps:
     texture: float = 0.0              # crs:Texture2012 (-100..100)
     clarity: float = 0.0              # crs:Clarity2012 (-100..100)
 
-    # Sharpening — ACR/LR capture-sharpening Detail panel. Applied as a
-    # clean-room luminance USM (`develop_ops.apply_sharpness`) on the FAITHFUL
+    # Sharpening — the four ACR/LR capture-sharpening Detail-panel knobs. Applied
+    # as a clean-room luminance USM (`develop_ops.apply_sharpness`) on the FAITHFUL
     # path only, gated by the CLI `--capture-sharpen {off,xmp,acr}` flag (default
     # off → byte-exact). `sharpness` is the Amount (0 = no-op short-circuit);
-    # `sharpen_radius` is the Gaussian radius. Defaults are ACR's raw defaults
-    # (Amount 0 here so absent = identity; Radius 1.0). Detail/Masking are a
-    # documented follow-up increment. See DECISIONS §5 amendment (citing §9/§11).
+    # the rest are the Gaussian radius, the Detail halo-suppression, and the
+    # edge-Masking flat-area gate. Defaults are ACR's raw defaults (Amount 0 here so
+    # absent = identity; Radius 1.0 / Detail 25 / Masking 0). See DECISIONS §5
+    # amendment (citing §9/§11).
     sharpness: float = 0.0            # crs:Sharpness (0..150) — Amount
     sharpen_radius: float = 1.0       # crs:SharpenRadius (0.5..3.0)
+    sharpen_detail: float = 25.0      # crs:SharpenDetail (0..100) — halo suppression
+    sharpen_edge_masking: float = 0.0  # crs:SharpenEdgeMasking (0..100) — flat-area gate
 
     # Tone curve (parametric control points, x and y in 0.0–1.0).
     # Empty list = no parametric tone curve override.
@@ -273,6 +276,9 @@ class DevelopOps:
             clarity=lerp_f(self.clarity, other.clarity),
             sharpness=lerp_f(self.sharpness, other.sharpness),
             sharpen_radius=lerp_f(self.sharpen_radius, other.sharpen_radius),
+            sharpen_detail=lerp_f(self.sharpen_detail, other.sharpen_detail),
+            sharpen_edge_masking=lerp_f(
+                self.sharpen_edge_masking, other.sharpen_edge_masking),
             tone_curve=blended_curve,
             hsl=self.hsl.blend(other.hsl, t),
             color_grade=self.color_grade.blend(other.color_grade, t),

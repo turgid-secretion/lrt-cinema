@@ -16,6 +16,8 @@
     crs:Vibrance="+10"
     crs:Sharpness="40"
     crs:SharpenRadius="1.5"
+    crs:SharpenDetail="55"
+    crs:SharpenEdgeMasking="40"
     lrt:keyframe="1"/>
  </rdf:RDF>
 </x:xmpmeta>

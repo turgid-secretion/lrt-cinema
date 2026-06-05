@@ -250,11 +250,13 @@ CLI **`--capture-sharpen {off,xmp,acr}`** (default **off** → byte-exact; `xmp`
 the colorist's `crs:Sharpness`/`crs:SharpenRadius`; `acr` injects ACR's raw defaults
 **Amount 40 / Radius 1.0** when the XMP is silent, reproducing what the LRT JPG
 bakes). **No Lightroom-fidelity claim** (ACR's Detail-panel math is closed-source);
-the Amount→strength and Radius→σ maps are documented public approximations,
-owner-tunable vs the LRT-JPG north-star (validate there — it cannot be checked
-against `dng_validate`, which has no sharpening). Detail / Masking (the closed-source
-halo-suppression + edge-mask curves) are a documented follow-up increment.
-Identity-at-zero keeps the gym/rose stages-1–9 ΔE tripwire untouched.
+the Amount→strength / Radius→σ maps **and the Detail (tanh halo-suppression) /
+Masking (gradient edge-gate) curves** are documented public approximations,
+owner-tunable vs the LRT-JPG north-star (validate there — none can be checked
+against `dng_validate`, which has no sharpening). All four ACR Detail-panel knobs
+ship (Amount/Radius then Detail/Masking, the latter as isolated `_sharpen_detail_
+limit` / `_sharpen_edge_mask` helpers). Identity-at-zero-Amount keeps the gym/rose
+stages-1–9 ΔE tripwire untouched.
 
 ---
 
