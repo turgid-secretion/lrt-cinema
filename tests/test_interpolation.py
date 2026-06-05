@@ -112,6 +112,20 @@ def test_interpolate_threads_color_grade_through_blend():
     assert interpolate(seq, 10).color_grade.is_identity()
 
 
+def test_interpolate_threads_sharpen_radius_through_blend():
+    """sharpen_radius (D2) must survive per-frame interpolation — a field dropped
+    from DevelopOps.blend() would silently snap to a default here."""
+    seq = _seq(11, [
+        Keyframe(frame_index=0, ops=DevelopOps(sharpness=80.0, sharpen_radius=3.0)),
+        Keyframe(frame_index=10, ops=DevelopOps()),  # default: sharpness 0, radius 1.0
+    ])
+    mid = interpolate(seq, 5)
+    assert mid.sharpness == pytest.approx(40.0)
+    assert mid.sharpen_radius == pytest.approx(2.0)   # (3.0 + 1.0)/2
+    assert interpolate(seq, 0).sharpen_radius == pytest.approx(3.0)
+    assert interpolate(seq, 10).sharpen_radius == pytest.approx(1.0)
+
+
 def test_interpolate_exactly_at_keyframe_returns_keyframe_ops():
     seq = _seq(11, [
         Keyframe(frame_index=0, ops=DevelopOps(exposure_ev=0.0)),

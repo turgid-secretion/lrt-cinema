@@ -233,6 +233,29 @@ at full sliders vs a naive single-Gaussian USM at ~580%, while the LLF proto is
 comparable but fragile and costs a non-byte-exact pyramid + its own oracle. So the LLF
 proto remains **unwired** (measured-only); Texture/Clarity ships on the guided engine.
 
+**Amendment (2026-06-05) — Sharpness reopened as a flag-gated FAITHFUL capture USM
+(D2).** The "no-op stub" above was decided when `dng_validate` was the success
+target (it does no sharpening). §9 reframed the north-star to the **LRT JPG**, which
+has ACR's **default-on capture sharpening baked in**, and §9/§11 name sharpening a
+sanctioned "deliberately exceed" enhancement (§11 calls `apply_sharpness` *the*
+"push-past" item for the residual edge gap). So `apply_sharpness` is now a
+**clean-room luminance unsharp mask**: luminance-only (chroma preserved via the §0
+ratio-reapply `_reapply_luminance_ratio`), in the **sRGB-OETF perceptual domain**
+(the Stage-13 gamut matrix + OETF don't move edges, so sharpening sRGB-luminance at
+the Stage-12 tail is spatially ≈ sharpening the display image ACR sharpened, with
+perceptual not linear-light halos), **headroom-preserving** (no top clamp → Tier-1
+> 1 highlights survive), **byte-exact at Amount 0**. It is **FAITHFUL-only** (the
+perceptual master defers detail to the grade — trunk/branch model) and gated by the
+CLI **`--capture-sharpen {off,xmp,acr}`** (default **off** → byte-exact; `xmp` =
+the colorist's `crs:Sharpness`/`crs:SharpenRadius`; `acr` injects ACR's raw defaults
+**Amount 40 / Radius 1.0** when the XMP is silent, reproducing what the LRT JPG
+bakes). **No Lightroom-fidelity claim** (ACR's Detail-panel math is closed-source);
+the Amount→strength and Radius→σ maps are documented public approximations,
+owner-tunable vs the LRT-JPG north-star (validate there — it cannot be checked
+against `dng_validate`, which has no sharpening). Detail / Masking (the closed-source
+halo-suppression + edge-mask curves) are a documented follow-up increment.
+Identity-at-zero keeps the gym/rose stages-1–9 ΔE tripwire untouched.
+
 ---
 
 ## 6. Standalone GUI app (LRT replacement) & vkdt engine fork — NO-GO as currently staffed

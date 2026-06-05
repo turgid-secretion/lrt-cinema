@@ -373,15 +373,19 @@ def test_contrast_perceptual_matches_closed_form():
 
 
 # ---------------------------------------------------------------------------
-# Stage 12 — Sharpness (v0.6 no-op)
+# Stage 12 — Sharpness (capture USM; full battery + Axis-1 oracle in test_sharpness.py)
 # ---------------------------------------------------------------------------
 
 
-def test_sharpness_is_no_op_in_v06():
-    """v0.6 deliberately returns input unchanged — sharpening belongs in
-    the grade stage, not the linear-render stage. v0.6.x may revisit."""
+def test_sharpness_identity_at_zero_but_sharpens_above():
+    """apply_sharpness (D2, DECISIONS §5 amendment) is byte-exact identity at
+    Amount 0 (the default-off / ship-gate contract) and a real luminance USM above
+    it — no longer the v0.6 no-op. Full property/oracle battery: test_sharpness.py."""
     x = np.random.rand(8, 8, 3).astype(np.float32)
-    np.testing.assert_array_equal(apply_sharpness(x, 100.0), x)
+    assert apply_sharpness(x, 0.0) is x
+    edge = np.full((6, 16, 3), 0.3, np.float32)
+    edge[:, 8:, :] = 0.7
+    assert not np.array_equal(apply_sharpness(edge, 100.0, 1.0), edge)
 
 
 # ---------------------------------------------------------------------------

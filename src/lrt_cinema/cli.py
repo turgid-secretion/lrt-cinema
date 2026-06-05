@@ -294,6 +294,23 @@ def _build_parser() -> argparse.ArgumentParser:
             "docs/research/{pipeline-overhaul-plan,demosaic-test-fixtures}.md."
         ),
     )
+    render.add_argument(
+        "--capture-sharpen", dest="capture_sharpen", default="off",
+        choices=("off", "xmp", "acr"),
+        help=(
+            "FAITHFUL sRGB/TIFF path only: bake ACR-style capture sharpening (a "
+            "clean-room luminance unsharp mask, develop_ops.apply_sharpness) to match "
+            "the LRT JPG, which has ACR's default-on capture sharpening baked in. "
+            "'off' (default) = no sharpening, BYTE-EXACT (the no-op the pipeline "
+            "shipped). 'xmp' = apply the colorist's crs:Sharpness / crs:SharpenRadius. "
+            "'acr' = ACR's raw defaults (Amount 40 / Radius 1.0) when the XMP carries "
+            "no Amount, else the XMP's — reproduces the sharpening the LRT JPG bakes. "
+            "NEVER applied to the perceptual master (it defers detail to the grade). "
+            "A §9/§11 'deliberately exceed dng_validate' enhancement (no Lightroom-"
+            "fidelity claim); validate vs the LRT-JPG north-star before relying on it. "
+            "See docs/DECISIONS.md §5 amendment."
+        ),
+    )
 
     return parser
 
@@ -321,6 +338,7 @@ class _RenderJob:
     highlight_recovery: bool = True  # Tier-1 raw highlight reconstruction (pre-WB)
     master_look: str = "bake"     # "bake"|"defer" (perceptual master static-look gate)
     demosaic: str = "linear"      # libraw demosaic algorithm ("linear" = byte-exact)
+    capture_sharpen: str = "off"  # "off"|"xmp"|"acr" (faithful capture sharpening; off=byte-exact)
 
 
 @dataclass
@@ -376,6 +394,7 @@ def _render_one_frame(job: _RenderJob) -> _RenderResult:
         if (job.backend == "mlx" and job.preset == "lrtimelapse"
                 and job.intent is RenderIntent.FAITHFUL
                 and job.demosaic == "linear"
+                and job.capture_sharpen == "off"  # USM is a CPU-only Stage-12 op
                 and not job.highlight_recovery):
             try:
                 from lrt_cinema.output import write_tiff_display
@@ -415,6 +434,7 @@ def _render_one_frame(job: _RenderJob) -> _RenderResult:
         )
         with_dev_ops = apply_develop_ops(
             result.prophoto, job.ops, job.intent, master_look=job.master_look,
+            capture_sharpen=job.capture_sharpen,
         )
         write_preset_output(
             with_dev_ops, job.dst_stem, job.preset, provenance=provenance,
@@ -454,7 +474,9 @@ _FIELD_TO_CRS_TAG = {
 }
 
 
-def _warn_dropped_ops(per_frame: list[DevelopOps], intent: RenderIntent) -> None:
+def _warn_dropped_ops(
+    per_frame: list[DevelopOps], intent: RenderIntent, capture_sharpen: str = "off",
+) -> None:
     """Surface, at RENDER time, any develop op that is SET in the XMP but will
     NOT be applied — so a drop is never silent (DECISIONS.md §5/§7).
 
@@ -470,21 +492,33 @@ def _warn_dropped_ops(per_frame: list[DevelopOps], intent: RenderIntent) -> None
     """
     n = len(per_frame)
 
-    # Sharpness is a deliberate no-op stub (`develop_ops.apply_sharpness`) on
-    # BOTH intents (DECISIONS §5: sharpening belongs at the grade, not baked into
-    # an intermediate) — so it is a *silent* drop unless surfaced here, regardless
-    # of render-intent (the honesty invariant, DECISIONS §9). Warn before the
-    # faithful-only block below.
+    # Capture sharpening (crs:Sharpness → develop_ops.apply_sharpness) is now
+    # IMPLEMENTED (a clean-room luminance USM) but gated by --capture-sharpen,
+    # FAITHFUL-only (the perceptual master defers detail to the grade). Surface its
+    # state so neither the drop nor the bake is silent (DECISIONS §5 amendment / §9).
     sharp_count = sum(1 for ops in per_frame if getattr(ops, "sharpness", 0.0))
-    if sharp_count:
+    if intent is RenderIntent.FAITHFUL and capture_sharpen != "off":
         sys.stderr.write(
-            f"warning: crs:Sharpness set on {sharp_count}/{n} frame(s) but NOT "
-            f"applied — apply_sharpness is an intentional no-op stub on both intents "
-            f"(sharpening belongs at the grade, not baked into a deliverable; "
-            f"DECISIONS §5). ACR bakes default capture sharpening into its preview, so "
-            f"these frames will look softer than your Lightroom preview at the pixel "
-            f"level (a known north-star edge-residual source). Not yet implemented "
-            f"(docs/research/pipeline-overhaul-plan.md D2).\n",
+            f"info: capture sharpening ON (--capture-sharpen {capture_sharpen}) — a "
+            f"clean-room luminance USM baked on the faithful path to match the LRT "
+            f"JPG's ACR sharpening (no Lightroom-fidelity claim; validate vs the "
+            f"LRT-JPG north-star). 'acr' uses ACR's raw defaults (Amount 40 / Radius "
+            f"1.0) when the XMP carries no Amount.\n",
+        )
+    elif sharp_count and intent is RenderIntent.FAITHFUL:
+        sys.stderr.write(
+            f"warning: crs:Sharpness set on {sharp_count}/{n} frame(s) but NOT applied "
+            f"— capture sharpening is OFF by default (byte-exact). Pass --capture-"
+            f"sharpen xmp (the colorist's values) or --capture-sharpen acr (ACR's "
+            f"default capture sharpening) to bake it and match the sharper LRT JPG "
+            f"(DECISIONS §5 amendment / §11).\n",
+        )
+    elif sharp_count:  # PERCEPTUAL master
+        sys.stderr.write(
+            f"warning: crs:Sharpness set on {sharp_count}/{n} frame(s) but NOT applied "
+            f"on the perceptual master — it defers detail/sharpening to the colorist's "
+            f"grade (trunk/branch model). Render the faithful sRGB/TIFF path with "
+            f"--capture-sharpen to bake capture sharpening.\n",
         )
 
     if intent is not RenderIntent.FAITHFUL:
@@ -703,7 +737,13 @@ def _cmd_render(args: argparse.Namespace) -> int:
     # bakes the Lightroom look (that IS its job), so it is forced to "bake".
     master_look = args.master_look if intent is RenderIntent.PERCEPTUAL else "bake"
 
-    _warn_dropped_ops(per_frame, intent)
+    # --capture-sharpen bakes ACR-style capture sharpening on the FAITHFUL path
+    # ONLY (it matches the LRT JPG's baked ACR sharpening); the perceptual master
+    # defers detail to the grade, so it is forced "off". Default "off" = byte-exact.
+    capture_sharpen = (args.capture_sharpen
+                       if intent is RenderIntent.FAITHFUL else "off")
+
+    _warn_dropped_ops(per_frame, intent, capture_sharpen)
 
     # Resolve the compute backend once (so all workers agree) and cap each
     # worker's intra-frame numba threads to cores/workers — N processes each
@@ -750,6 +790,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
             highlight_recovery=highlight_recovery,
             master_look=master_look,
             demosaic=args.demosaic,
+            capture_sharpen=capture_sharpen,
         ))
 
     if args.dry_run:
@@ -758,6 +799,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
             f"[{args.from_frame}..{to_frame}) → {args.output} "
             f"(target={args.target}, preset={preset}, intent={intent.value}, "
             f"master_look={master_look}, demosaic={args.demosaic}, "
+            f"capture_sharpen={capture_sharpen}, "
             f"backend={backend}, preview_scale={args.preview_scale}, "
             f"highlight_recovery={highlight_recovery}, "
             f"workers={args.workers}).\n",

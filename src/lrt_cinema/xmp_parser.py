@@ -246,6 +246,9 @@ def _parse_description(desc: ET.Element) -> DevelopOps:
         texture=_read_crs_float(desc, "Texture", "Texture2012"),
         clarity=_read_crs_float(desc, "Clarity2012", "Clarity"),
         sharpness=_parse_float(_read_attr_or_child(desc, _q("crs", "Sharpness"))),
+        sharpen_radius=_parse_float(
+            _read_attr_or_child(desc, _q("crs", "SharpenRadius")), default=1.0,
+        ),
         tone_curve=_parse_tone_curve(desc),
         hsl=_parse_hsl(desc),
         color_grade=_parse_color_grade(desc),
@@ -297,6 +300,7 @@ def _merge_ops(base: DevelopOps, override: DevelopOps) -> DevelopOps:
         merged.clarity = override.clarity
     if override.sharpness != 0.0:
         merged.sharpness = override.sharpness
+        merged.sharpen_radius = override.sharpen_radius  # radius rides with Amount
     if override.tone_curve:
         merged.tone_curve = list(override.tone_curve)
     if not override.hsl.is_identity():

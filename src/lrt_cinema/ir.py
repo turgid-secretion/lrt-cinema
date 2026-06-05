@@ -193,8 +193,15 @@ class DevelopOps:
     texture: float = 0.0              # crs:Texture2012 (-100..100)
     clarity: float = 0.0              # crs:Clarity2012 (-100..100)
 
-    # Sharpening
-    sharpness: float = 0.0            # crs:Sharpness (0..150)
+    # Sharpening — ACR/LR capture-sharpening Detail panel. Applied as a
+    # clean-room luminance USM (`develop_ops.apply_sharpness`) on the FAITHFUL
+    # path only, gated by the CLI `--capture-sharpen {off,xmp,acr}` flag (default
+    # off → byte-exact). `sharpness` is the Amount (0 = no-op short-circuit);
+    # `sharpen_radius` is the Gaussian radius. Defaults are ACR's raw defaults
+    # (Amount 0 here so absent = identity; Radius 1.0). Detail/Masking are a
+    # documented follow-up increment. See DECISIONS §5 amendment (citing §9/§11).
+    sharpness: float = 0.0            # crs:Sharpness (0..150) — Amount
+    sharpen_radius: float = 1.0       # crs:SharpenRadius (0.5..3.0)
 
     # Tone curve (parametric control points, x and y in 0.0–1.0).
     # Empty list = no parametric tone curve override.
@@ -265,6 +272,7 @@ class DevelopOps:
             texture=lerp_f(self.texture, other.texture),
             clarity=lerp_f(self.clarity, other.clarity),
             sharpness=lerp_f(self.sharpness, other.sharpness),
+            sharpen_radius=lerp_f(self.sharpen_radius, other.sharpen_radius),
             tone_curve=blended_curve,
             hsl=self.hsl.blend(other.hsl, t),
             color_grade=self.color_grade.blend(other.color_grade, t),

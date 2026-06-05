@@ -232,19 +232,26 @@ def _sharpness_seq_input(tmp_path):
     return src
 
 
-def test_sharpness_silent_drop_warns_both_intents(tmp_path, capsys):
-    """crs:Sharpness is a no-op stub on BOTH intents (apply_sharpness returns input);
-    it must be surfaced, not silently dropped (the honesty invariant — Phase A1,
-    docs/research/pipeline-overhaul-plan.md). Unlike H/S/W/Texture/Clarity it is
-    intent-INDEPENDENT, so the warning fires under perceptual too."""
+def test_capture_sharpen_surfaces_state_per_intent(tmp_path, capsys):
+    """crs:Sharpness is now an IMPLEMENTED, flag-gated capture USM (D2, DECISIONS §5
+    amendment). Its state is surfaced, never silent: faithful default-off warns it's
+    set-but-not-applied + how to enable; faithful --capture-sharpen on emits an 'ON'
+    info; the perceptual master warns it defers detail to the grade."""
     src = _sharpness_seq_input(tmp_path)
-    for intent in ("faithful", "perceptual"):
-        rc = main(["render", "--input", str(src), "--output", str(tmp_path / f"o_{intent}"),
-                   "--render-intent", intent, "--dry-run", "--quiet"])
-        assert rc == 0
-        err = capsys.readouterr().err
-        assert "Sharpness set on 1/1" in err, intent
-        assert "no-op stub" in err, intent
+    # faithful, default off → set-but-not-applied warning + how to enable
+    assert main(["render", "--input", str(src), "--output", str(tmp_path / "o_off"),
+                 "--render-intent", "faithful", "--dry-run", "--quiet"]) == 0
+    err = capsys.readouterr().err
+    assert "Sharpness set on 1/1" in err and "OFF by default" in err
+    # faithful, capture sharpening ON → info line
+    assert main(["render", "--input", str(src), "--output", str(tmp_path / "o_on"),
+                 "--render-intent", "faithful", "--capture-sharpen", "acr",
+                 "--dry-run", "--quiet"]) == 0
+    assert "capture sharpening ON" in capsys.readouterr().err
+    # perceptual master defers detail to the grade
+    assert main(["render", "--input", str(src), "--output", str(tmp_path / "o_perc"),
+                 "--render-intent", "perceptual", "--dry-run", "--quiet"]) == 0
+    assert "defers detail" in capsys.readouterr().err
 
 
 def test_master_look_dry_run_default_and_override(tmp_path, capsys):
@@ -275,6 +282,23 @@ def test_demosaic_flag_dry_run(tmp_path, capsys):
     main(["render", "--input", str(src), "--output", str(out),
           "--demosaic", "dcb", "--dry-run", "--quiet"])
     assert "demosaic=dcb" in capsys.readouterr().err
+
+
+def test_capture_sharpen_flag_dry_run(tmp_path, capsys):
+    """--capture-sharpen: default 'off' (byte-exact), faithful bakes the chosen
+    mode, the perceptual master is forced 'off' (defers detail to the grade)."""
+    src = _seq_input(tmp_path)
+    out = tmp_path / "out"
+    main(["render", "--input", str(src), "--output", str(out), "--dry-run", "--quiet"])
+    assert "capture_sharpen=off" in capsys.readouterr().err
+    # faithful sRGB + acr bakes ACR-default capture sharpening
+    main(["render", "--input", str(src), "--output", str(out), "--target", "lrtimelapse",
+          "--capture-sharpen", "acr", "--dry-run", "--quiet"])
+    assert "capture_sharpen=acr" in capsys.readouterr().err
+    # perceptual master forces off even when acr is requested
+    main(["render", "--input", str(src), "--output", str(out), "--target", "master",
+          "--capture-sharpen", "acr", "--dry-run", "--quiet"])
+    assert "capture_sharpen=off" in capsys.readouterr().err
 
 
 def test_dropped_basic_tone_warns_at_render(tmp_path, capsys):

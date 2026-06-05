@@ -763,20 +763,81 @@ def apply_contrast_2012(prophoto: np.ndarray, contrast: float) -> np.ndarray:
     return np.maximum(pivot + (prophoto - pivot) * gain, np.float32(0.0))
 
 
-def apply_sharpness(prophoto: np.ndarray, sharpness: float) -> np.ndarray:
-    """LR Sharpness: 0..150 slider, USM-style. NO-OP in v0.6.
+# Capture-sharpening tuning. The ACR/LR Amount→USM-strength and Radius→σ maps are
+# closed-source; these are documented public approximations (no Lightroom-fidelity
+# claim), owner-tunable against the LRT-JPG north-star. _AMOUNT_K sets the USM gain
+# at Amount=100 (highpass added at 1×); _ACR_DEFAULT_* are ACR's raw-default Detail
+# panel (Amount 40 / Radius 1.0 — Adobe's default capture sharpening on every raw,
+# Amount raised to 40 in ACR 7.3), used by the `--capture-sharpen acr` mode to
+# reproduce the sharpening the LRT JPG actually bakes when the XMP is silent.
+_SHARPEN_AMOUNT_K = 1.0
+_ACR_DEFAULT_AMOUNT = 40.0
+_ACR_DEFAULT_RADIUS = 1.0
 
-    Sharpening for cinema-linear output is conventionally applied at the
-    grade stage, not the render stage — cinema timelines downstream
-    (Resolve, AE) carry their own sharpening primitives that compose with
-    the timelapse motion. Carrying LR's USM amount through to a 16-bit
-    linear TIFF / 32-bit float EXR would bake a non-reversible operation
-    into the deliverable. Returning the input unmodified preserves the
-    grade-stage decision.
 
-    v0.6.x may wire this in if user feedback says otherwise.
+def _resolve_capture_sharpen(ops: DevelopOps, mode: str) -> tuple[float, float]:
+    """Resolve the effective (Amount, Radius) from the develop ops + CLI mode.
+
+    - ``"off"`` → Amount 0 (apply_sharpness short-circuits → byte-exact identity).
+    - ``"xmp"`` → the XMP's `crs:Sharpness` / `crs:SharpenRadius` (Amount 0 → no-op).
+    - ``"acr"`` → ACR's raw defaults (40 / 1.0) when the XMP carries **no** Amount,
+      else the XMP's own values — i.e. fall back to the default-on capture
+      sharpening the LRT JPG bakes, but honour an explicit colorist Amount.
     """
-    return prophoto
+    if mode == "off":
+        return 0.0, ops.sharpen_radius
+    if mode == "acr" and ops.sharpness == 0.0:
+        return _ACR_DEFAULT_AMOUNT, _ACR_DEFAULT_RADIUS
+    return ops.sharpness, ops.sharpen_radius
+
+
+def apply_sharpness(
+    prophoto: np.ndarray, amount: float, radius: float = _ACR_DEFAULT_RADIUS,
+) -> np.ndarray:
+    """Clean-room ACR/LR **capture sharpening** — a luminance unsharp mask.
+
+    `amount` is the ACR Amount (0..150; **0 = byte-exact identity short-circuit**),
+    `radius` the Gaussian radius (ACR 0.5..3.0). FAITHFUL-path only (the CLI gates
+    this via `--capture-sharpen` and never calls it on the perceptual master, which
+    defers detail to the grade — trunk/branch model). A documented public
+    approximation of ACR's closed-source Detail-panel USM; **no Lightroom-fidelity
+    claim** (it is a §9 / §11 "deliberately exceed the LRT-JPG" enhancement, not a
+    dng_validate match — `dng_validate` does no sharpening).
+
+    **Domain — sRGB OETF, by construction.** The op runs at the end of Stage 12 on
+    linear ProPhoto, *before* the Stage-13 ProPhoto→sRGB gamut matrix + sRGB OETF.
+    A 3×3 gamut matrix and a per-pixel monotonic OETF **do not move edges**, so
+    sharpening the **sRGB-encoded** luminance here is spatially equivalent to
+    sharpening the display image ACR/LRT actually sharpened — and the perceptual
+    encode gives ACR-like (not linear-light, highlight-biased) halos. `_srgb_oetf`
+    is applied with **no [0,1] clip**, so it extends monotonically above 1 →
+    **highlight headroom (`highlight_recovery` Tier-1, lum > 1) survives**; the
+    inverse `_srgb_eotf` floors its base at 0 (no NaN on an undershoot).
+
+    **Luminance-only, chroma-preserving.** USM acts on luminance; the change is
+    reapplied to RGB via the §0 hue-preserving `_reapply_luminance_ratio`
+    (out/in ratio, near-black-safe, **floor 0, NO top clamp** → overrange survives
+    to the downstream encode). So a coloured edge keeps its hue and no chroma
+    fringing is introduced. Detail / Masking (the closed-source halo-suppression
+    and edge-mask curves) are a documented follow-up increment.
+    """
+    if amount == 0.0:
+        return prophoto  # byte-exact identity — the ship-gate / default-off contract
+    from scipy.ndimage import gaussian_filter
+
+    from lrt_cinema.lut3d_baker import _srgb_eotf, _srgb_oetf
+
+    lum = prophoto @ _PROPHOTO_LUMINANCE  # linear ProPhoto luminance (≥0, may be >1)
+    # Perceptual domain — sRGB OETF, NO clip (extends >1 → headroom preserved).
+    perceptual = _srgb_oetf(np.maximum(lum, 0.0))
+    sigma = max(float(radius), 0.0)
+    blurred = gaussian_filter(perceptual, sigma=sigma, mode="reflect")
+    highpass = perceptual - blurred  # σ=0 → blurred==perceptual → highpass 0 → no-op
+    strength = (amount / 100.0) * _SHARPEN_AMOUNT_K
+    perceptual_sharp = perceptual + strength * highpass
+    lum_out = _srgb_eotf(perceptual_sharp)  # → linear; eotf floors its base ≥0
+    out = _reapply_luminance_ratio(prophoto, lum, lum_out)  # floor 0; NO top clamp
+    return out.astype(prophoto.dtype, copy=False)
 
 
 def _apply_contrast_perceptual(prophoto: np.ndarray, contrast: float) -> np.ndarray:
@@ -818,9 +879,12 @@ def _apply_contrast_perceptual(prophoto: np.ndarray, contrast: float) -> np.ndar
 def apply_stage_12_perceptual(
     prophoto: np.ndarray, ops: DevelopOps,
     intent: RenderIntent = RenderIntent.FAITHFUL,
+    capture_sharpen: str = "off",
 ) -> np.ndarray:
     """Apply all stage-12 perceptual-domain ops; `intent` selects the applicators
-    (DECISIONS.md §7).
+    (DECISIONS.md §7). `capture_sharpen` ({off,xmp,acr}, default off → byte-exact)
+    gates FAITHFUL-path capture sharpening (`apply_sharpness`); see DECISIONS §5
+    amendment.
 
     **FAITHFUL** (default — the sRGB TIFF / LRT round-trip, the Lightroom look):
     ToneCurve → Saturation → Vibrance → HSL → ColorGrade → Contrast → Sharpness,
@@ -844,9 +908,10 @@ def apply_stage_12_perceptual(
     **Identity / ship gate.** Every op short-circuits to a byte-exact no-op when
     its slider(s) are zero, so a render with no perceptual intent is bit-identical
     across intents and the gym 0.026 / rose 0.545 ΔE ship gate (faithful stages
-    1-9 → sRGB) is untouched. ToneCurve/Sat/Vibrance/Sharpness are intent-
-    independent; HSL, ColorGrade, Contrast, DR-compression, Texture/Clarity branch
-    on intent."""
+    1-9 → sRGB) is untouched. ToneCurve/Sat/Vibrance are intent-independent;
+    **Sharpness is FAITHFUL-only** (the perceptual master defers detail to the
+    grade) and gated off by default; HSL, ColorGrade, Contrast, DR-compression,
+    Texture/Clarity branch on intent."""
     out = apply_tone_curve_pv2012(prophoto, ops.tone_curve)
     out = apply_saturation(out, ops.saturation)
     out = apply_vibrance(out, ops.vibrance)
@@ -870,7 +935,14 @@ def apply_stage_12_perceptual(
         out = apply_hsl(out, ops.hsl)
         out = apply_color_grade(out, ops.color_grade)
         out = apply_contrast_2012(out, ops.contrast)
-    out = apply_sharpness(out, ops.sharpness)
+    # Capture sharpening — FAITHFUL path only (matches the LRT JPG's baked ACR
+    # capture sharpening); the perceptual master defers detail to the grade
+    # (trunk/branch model). `capture_sharpen=off` (default) → Amount 0 → the
+    # apply_sharpness short-circuit → byte-exact. Was a no-op stub on both intents,
+    # so dropping it from the perceptual branch is byte-identical.
+    if intent is RenderIntent.FAITHFUL:
+        amount, radius = _resolve_capture_sharpen(ops, capture_sharpen)
+        out = apply_sharpness(out, amount, radius)
     return out
 
 
@@ -878,6 +950,7 @@ def apply_develop_ops(
     prophoto: np.ndarray, ops: DevelopOps,
     intent: RenderIntent = RenderIntent.FAITHFUL,
     master_look: str = "bake",
+    capture_sharpen: str = "off",
 ) -> np.ndarray:
     """Entry point: apply all develop ops (stages 11 + 12) to linear
     ProPhoto. Returns linear ProPhoto post-LR-ops, ready for stage 13
@@ -907,7 +980,7 @@ def apply_develop_ops(
     out = apply_stage_11_linear(prophoto, ops)
     if master_look == "defer":
         return out
-    return apply_stage_12_perceptual(out, ops, intent)
+    return apply_stage_12_perceptual(out, ops, intent, capture_sharpen)
 
 
 # ---------------------------------------------------------------------------
