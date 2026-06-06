@@ -7,16 +7,20 @@ vs ours-variant) on DSC_4053 / LRT_00001 (frame 1, indoor venue). Tool:
 `LRT_CINEMA_BACKEND=numpy` (so numpy demosaic edits execute), D750 Camera Standard DCP,
 encoded to sRGB via the gym encoder (`tests/test_pipeline.py::_prophoto_to_srgb_8bit`).
 
-**TL;DR.** Root = the **demosaic reconstructing chrominance (R−G, B−G) across
-per-channel clip boundaries** seeds a Bayer-phase-locked **blue↔yellow oscillation**;
-proven directly (the swing is in the camera RGB pre-colour, ablation 5) and by
-elimination (the demosaic algorithm is the ONLY lever that moves the metric — mlri
-halves it). REFUTED: rcd-specific false-colour (menon≈rcd), WB/LookTable/matrix as the
-colouriser (all flat under a DC-invariant pinned-mask metric; FM is passthrough),
-post-demosaic highlight recovery, and **naive same-channel CFA inpaint *as the fix***
-(worsens it — the fix must be joint-channel, not independent per channel). Fix lever:
-quality/clip-aware demosaic (mlri ≈ −40–50 %, low-risk; a ratio-locked joint-channel
-highlight-coupled demosaic is the real fix).
+**TL;DR.** WHERE = the **demosaic stage** (the only stage that mixes neighbours; only a
+demosaic-algorithm swap moves the metric — every colour stage is flat under a
+DC-invariant pinned mask). SEED = **per-channel highlight CLIPPING corrupting the
+reconstructed chrominance (R−G, B−G)** at high-contrast highlight→clip edges, rendered
+~identically by every quality demosaic (the camera-space B−G oscillation is
+demosaic-AGNOSTIC, ablation 5 — it is clipping physics, NOT a per-algorithm
+reconstruction error). The result is a Bayer-phase-locked **blue↔yellow oscillation**.
+REFUTED: rcd-specific false-colour (menon≈rcd), WB/LookTable/matrix as the colouriser
+(all flat under the DC-invariant pinned-mask metric; FM is passthrough), post-demosaic
+highlight recovery, and **naive same-channel CFA inpaint *as the fix*** (worsens it).
+**Principled fix = restore true per-channel values BEFORE demosaic** (ratio-locked
+joint-channel highlight reconstruction). **mlri demosaic = low-risk EMPIRICAL
+mitigation** (≈ −40–50 % final fringe_b, established by tap-7 / pre-tone; the Stage-8+9
+tone amplifier is only ≤1.24×; mlri's precise mechanism is not fully isolated).
 
 > **NB on an earlier commit message** ("CFA inpaint REFUTES cross-clip-demosaic seed"):
 > that overclaimed — the inpaint refutes naive same-channel inpaint *as the FIX*, NOT
@@ -160,18 +164,19 @@ at the clip-edge mask:
 | fixtures | 0.161 | 0.162 | 0.159 | 0.077 | 0.123 |
 | winupper | 0.105 | 0.102 | 0.125 | 0.101 | 0.142 |
 
-**The (B−G) oscillation is present in the demosaic output BEFORE any colour stage.**
-This is the direct, positive proof (not by elimination): the blue↔yellow swing exists
-in camera RGB the moment the mosaic is interpolated across the per-channel clip
-boundaries, and the downstream per-pixel stages merely carry/recolour it.
+**The (B−G) oscillation is present in the demosaic output BEFORE any colour stage** —
+the blue↔yellow swing exists in camera RGB the moment the mosaic is interpolated across
+the per-channel clip boundaries; the per-pixel colour stages merely carry/recolour it.
 
-Nuance: in *camera space* HP(B−G) is ~equal for rcd vs mlri, yet mlri's FINAL fringe_b
-is ~half (ablation 4). So mlri's win is **not** a smaller camera-space B−G swing — it
-distributes R−G / luminance differently, and the Stage-9 **hue-preserving tone sort**
-(highly nonlinear exactly at the clip, where it sorts max/mid/min channels) **amplifies
-the small demosaic differences** into the final image. Still demosaic-seeded; the tone
-sort is the amplifier. (libraw bilinear seeds the MOST R−G/B−G oscillation → consistent
-with it being the documented quality floor.)
+**Crucial nuance — the seed is clipping physics, not a per-algorithm error.** In camera
+space HP(B−G) is **~equal for rcd vs menon vs mlri** (botleft 0.087/–/0.088; fixtures
+0.161/–/0.162) — the quality demosaics produce the SAME camera-space colour-difference
+oscillation. Combined with the identical rcd-vs-linear partial-clip B−G≈−0.20 (direct
+seed inspection), this says the oscillation is **demosaic-AGNOSTIC**: it is the
+per-channel **clipping** corrupting the reconstructed colour difference, which every
+demosaic faithfully renders — NOT a reconstruction error specific to a bad algorithm.
+(libraw bilinear has the HIGHEST HP(R−G) → it adds general-edge false colour ON TOP, so
+it is worse, but the clip-seed is common.)
 
 ## ABLATION 6 — the two FIX-CLASS falsifications
 
@@ -188,33 +193,53 @@ lesson: the fix must be **joint-channel / ratio-locked**, not independent per ch
 **(b) Post-demosaic highlight recovery (Tier-1) @ tap-7 — does not fix.** `highlight_
 recovery=True` (active at tap-7; inert at tap-9): fringe_b **unchanged** (botleft
 9.57→9.57) or slightly worse. Post-demosaic ratio propagation cannot **unbake** an
-oscillation the demosaic already wrote → the fix must live **at or before** the
+oscillation the demosaic already wrote AND it only touches FULL clips, not the
+partial-clip boundary that carries the fringe → the fix must live **at or before** the
 demosaic, not after it.
+
+## ABLATION 5b — where mlri's win lands + the Stage-8/9 amplifier (one pinned mask)
+
+rcd vs mlri at tap-7 (pre-LookTable/tone) and tap-9, all linear ProPhoto, mask pinned to
+rcd@tap-7:
+
+| crop | rcd tap7 | rcd tap9 | mlri tap7 | mlri tap9 | Stage8+9 amp (rcd t9/t7) |
+|---|---|---|---|---|---|
+| botleft  |  9.57 | 11.90 |  5.95 |  6.97 | 1.24× |
+| fixtures | 21.81 | 25.41 | 18.40 | 17.46 | 1.16× |
+| winupper | 15.21 | 15.50 | 12.60 | 13.21 | 1.02× |
+
+(fringe_b.) Two findings: **(1) the Stage-8+9 tone amplifier is modest (1.02–1.24×)** —
+NOT the dominant factor. **(2) mlri's advantage is already present at tap-7** (9.57→5.95
+botleft), i.e. established at the demosaic/scene-linear level, NOT by the downstream
+nonlinearity. But since mlri ≈ rcd in *camera-space* HP(B−G) (ablation 5) yet < rcd at
+tap-7, **mlri's precise mechanism is not fully isolated** (its spatial distribution of
+the residual yields a lower Lab-b\* fringe after WB despite an equal camera-space B−G
+swing). The win is empirical and robust; the mechanism is open.
 
 ---
 
-## ROOT CAUSE (proven)
+## ROOT CAUSE (WHERE proven; SEED identified; mlri mechanism open)
 
-**The demosaic's reconstruction of the 2×-subsampled chrominance (the colour-difference
-planes R−G, B−G) ACROSS per-channel clip boundaries seeds a Bayer-phase-locked
-blue↔yellow spatial oscillation.** At a high-contrast highlight→clip edge the three
-Bayer channels saturate at *different scene brightnesses* (this frame, camera space: G
-clips most, then R, then B; on partial-clip pixels B−G ≈ −0.20). The demosaic must
-interpolate the missing 75 % of each channel across that boundary from samples that are
-flat-topped on one channel but not another → the colour difference it reconstructs
-oscillates with the Bayer sampling phase. The downstream stages are all **per-pixel**
-(WB scalar, ProPhoto-passthrough FM, LookTable HSV cube, hue-preserving tone sort), so
-they cannot create the alternation — they only carry and recolour it, with the Stage-9
-tone sort amplifying it at the clip.
+**WHERE — the demosaic stage.** Airtight: every stage after demosaic is **per-pixel**
+(WB scalar, ProPhoto-passthrough FM, LookTable HSV cube, hue-preserving tone sort) and
+cannot create a neighbour-to-neighbour alternation; the demosaic is the only stage that
+mixes neighbours; and it is the only lever that moves the metric (ablations 1, 3, 4, 6).
 
-**Proven by:**
-- *Direct (ablation 5):* the (B−G) oscillation is measurable in the camera RGB straight
-  out of the demosaic, before any colour stage.
-- *By elimination:* the demosaic ALGORITHM is the **only** lever that moves the metric
-  (mlri halves fringe_b; ablation 1, 4) — WB, LookTable, FM/matrix, CFA-inpaint, and
-  post-demosaic hl-recovery all leave it flat or worse (ablations 1, 3, 6).
-- *Logic:* every post-demosaic stage is per-pixel → a neighbour-to-neighbour alternation
-  is necessarily demosaic-origin.
+**SEED — per-channel highlight CLIPPING corrupting the reconstructed chrominance.** At a
+high-contrast highlight→clip edge the three Bayer channels saturate at *different scene
+brightnesses* (this frame, camera space: G clips most, then R, then B; partial-clip
+B−G ≈ −0.20). The demosaic reconstructs the missing 75 % of each channel across that
+boundary from samples flat-topped on one channel but not another → the colour difference
+(R−G, B−G) oscillates with the Bayer phase = the blue↔yellow sawtooth. This seed is
+**demosaic-AGNOSTIC** (rcd≈menon≈mlri in camera-space HP(B−G), ablation 5; rcd≈linear in
+partial-clip B−G) — it is clipping physics that every quality demosaic renders, NOT a
+bad-algorithm reconstruction error. The downstream stages only carry/recolour it (WB
+modulates the hue, tone sort amplifies a modest ≤1.24×).
+
+**Proven by:** direct (the B−G swing is in the camera RGB pre-colour, ablation 5) +
+elimination (demosaic algorithm is the only lever; ablations 1/3/4/6) + logic (per-pixel
+post-demosaic stages). **Open:** the precise reason mlri's final fringe is ~half rcd's
+despite equal camera-space B−G (ablation 5b) — empirically real, mechanism not isolated.
 
 ## REFUTED ALTERNATIVES (each with its test)
 
@@ -240,28 +265,35 @@ lrt-jpg-northstar-baseline), orthogonal to the edge fringing. Not pursued furthe
 
 ## PROPOSED FIX (NOT implemented — owner signs off; touches load-bearing demosaic)
 
-The fix must act **at or before the demosaic** and be **joint-channel / ratio-locked**
-(naive independent per-channel mosaic fill is proven wrong, ablation 6a):
+Because the SEED is per-channel CLIPPING (not a bad demosaic algorithm), the principled
+fix is to **restore true per-channel values BEFORE the demosaic, ratio-locked** — naive
+independent per-channel fill is proven wrong (ablation 6a) and post-demosaic recovery is
+too late (6b).
 
-1. **Low-risk production lever — swap the quality demosaic rcd → mlri** (or a
-   clip-aware demosaic). Measured **~40–50 % fringe_b reduction** with no pipeline
-   surgery (mlri is already wired, headroom-preserving, BSD-licensed). This is the
-   immediate recommendation for owner sign-off; it does not eliminate the fringe but
-   roughly halves it. *Caveat:* verify mlri's resolution/MTF + gym/rose gate + LRT-JPG
-   north-star before adopting as the production default (CLAUDE.md demosaic-change rule).
-2. **Proper fix — a clip-aware / joint-channel highlight-coupled demosaic** (the real
-   B1 work): reconstruct the clipped channels in a **ratio-locked** way that ties all
-   three channels to a shared local brightness/chroma BEFORE / DURING the directional
-   interpolation, so the reconstructed colour difference does not oscillate across the
-   clip. Candidate forms: a guided/joint demosaic that propagates the unclipped
-   channels' chroma into the clipped ones on the mosaic; or RawTherapee-style
-   colour-propagation highlight recovery fused into the CFA stage (the `_extract_cfa`
-   B1 hook) rather than the post-demosaic Tier-1 (which ablation 6b shows is too late).
-3. A cheaper **post-hoc chroma-median / fringe-suppression** confined to the clip-edge
-   mask (the `edge_clip_mask` this tool computes) could knock down the residual without
-   touching the demosaic — but it is a cosmetic band-aid, not the root fix, and risks
-   the detail loss the owner explicitly wants to AVOID (the sawtooth destroys a real
-   feature; smoothing it further is the wrong direction). Listed for completeness only.
+1. **PRINCIPLED FIX (the real B1 work) — ratio-locked joint-channel highlight
+   reconstruction at the CFA stage** (the `pipeline._extract_cfa` B1 hook), so the
+   demosaic interpolates *consistent* colour differences across the clip and never seeds
+   the oscillation. The clipped channels must be reconstructed **tied to a shared local
+   brightness/chroma** (the unclipped channels' ratios propagated into the clipped ones
+   *jointly*), NOT each channel filled from its own rim. This directly attacks the seed
+   identified above. Candidate forms: a guided/joint mosaic reconstruction; or
+   RawTherapee-style colour-propagation highlight recovery fused into the CFA stage
+   (in front of the demosaic, unlike the current post-demosaic Tier-1). This is the
+   recommended direction; it is the only fix that addresses the proven seed.
+2. **LOW-RISK EMPIRICAL MITIGATION — swap the quality demosaic rcd → mlri.** Measured
+   **~40–50 % fringe_b reduction**, established by tap-7 (pre-tone), with zero pipeline
+   surgery (mlri is already wired, headroom-preserving, BSD-licensed). **Caveat: this is
+   an empirical mitigation whose mechanism is not isolated** (ablation 5b — mlri ≈ rcd in
+   camera-space B−G yet lower final fringe) and it does NOT eliminate the fringe (it
+   roughly halves it). Good as an interim while #1 is built; verify mlri's resolution/
+   MTF + gym/rose gate + LRT-JPG north-star before any production default change
+   (CLAUDE.md demosaic-change rule). Do NOT read this as "the cause was a bad demosaic" —
+   the cause is clipping; mlri just renders the clip-seed into less final fringe.
+3. **Cosmetic band-aid (NOT recommended)** — post-hoc chroma-median / fringe-suppression
+   on the clip-edge mask (`edge_clip_mask`). Knocks the residual down without touching
+   the demosaic, but smooths the very feature the owner wants preserved (the sawtooth
+   *destroys* real detail; blurring it further is the wrong direction). Listed only for
+   completeness.
 
 ## TOOLS / REPRO (committed)
 
