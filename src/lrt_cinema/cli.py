@@ -183,12 +183,13 @@ def _build_parser() -> argparse.ArgumentParser:
             "factor before applying it (HG/Global untouched). Default 1.0 = the "
             "LRT-authored value (byte-exact) AND correct — leave it there. The B2 "
             "root-cause audit (docs/research/deflicker-rootcause-audit.md) confirmed "
-            "the deflicker is correctly scaled at 1:1 in the LINEAR domain (scaling up "
-            "≥2× provably worsens flicker). The earlier '~3× under-application' was a "
-            "GAMMA-DOMAIN ARTIFACT (per-frame gain fit on 8-bit sRGB JPEGs inflates a "
-            "linear-EV factor by ~the encoding slope); the residual LRT drift is the "
-            "PV2012 tone-curve-shape gap, not the deflicker. This knob is an owner "
-            "escape hatch only."
+            "the deflicker is correctly scaled at 1:1 (it's short-term BY DESIGN, so "
+            "the long-term drift isn't its job; a linear preview test shows scaling up "
+            "≥2× worsens flicker). The '~3×' was a SCALAR-GAIN CONFLATION — a no-offset "
+            "per-frame gain (LRT≈g·ours) mixes exposure with tone-shape, so a fixed "
+            "tone-curve difference back-solves into a fake deflicker factor; the "
+            "residual drift is the PV2012 tone-curve-shape gap, not the deflicker. This "
+            "knob is an owner escape hatch only."
         ),
     )
     render.add_argument(

@@ -83,12 +83,13 @@ def apply_deflicker(
     `scale` (B2) multiplies the deflicker EV delta before it is applied. Default
     1.0 = byte-exact AND **correct** — the B2 root-cause audit
     (docs/research/deflicker-rootcause-audit.md) confirmed the deflicker is correctly
-    scaled at 1:1 in the **linear** domain (scaling up ≥2× provably *worsens* flicker,
-    every high-pass window). The earlier "~3× under-application" was a **gamma-domain
-    measurement artifact** (per-frame gain fit on 8-bit sRGB JPEGs inflates a linear-EV
-    factor by ~the encoding slope); the residual LRT-vs-ours drift is the PV2012
-    tone-curve-shape gap (DECISIONS §11), not the deflicker. The knob stays only as an
-    owner escape hatch; **leave it at 1.0**.
+    scaled at 1:1 (it's short-term *by design*, so the long-term drift isn't its job;
+    a linear preview test shows scaling up ≥2× provably *worsens* flicker). The "~3×"
+    was a **scalar-gain conflation** — a no-offset per-frame gain `LRT≈g·ours`
+    conflates exposure with tone-shape, so a fixed tone-curve difference back-solves
+    into a fake deflicker factor; the residual drift is the PV2012 tone-curve-shape gap
+    (DECISIONS §11), not the deflicker. The knob stays only as an owner escape hatch;
+    **leave it at 1.0**.
 
     Returns the mutated list (also mutates `per_frame_ops` for in-place callers).
     """
@@ -119,9 +120,10 @@ def apply_lrt_mask_offsets(
 
     `deflicker_scale` (B2) multiplies ONLY the **deflicker**-kind delta (HG/Global
     untouched). Default 1.0 = byte-exact AND correct — the B2 audit
-    (docs/research/deflicker-rootcause-audit.md) found the deflicker is correctly
-    scaled at 1:1 in the linear domain; the "~3×" was a gamma-domain artifact (8-bit
-    JPEG gain) and the residual drift is the PV2012 tone-shape gap, not the deflicker.
+    (docs/research/deflicker-rootcause-audit.md) found the deflicker correctly scaled
+    at 1:1; the "~3×" was a **scalar-gain conflation** (a no-offset gain mixes exposure
+    with tone-shape, so a fixed tone-curve difference back-solves into a fake deflicker
+    factor) and the residual drift is the PV2012 tone-shape gap, not the deflicker.
     Owner escape hatch only; **leave at 1.0**.
 
     Mutates `per_frame_ops` in place and returns it. See
