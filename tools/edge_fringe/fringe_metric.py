@@ -192,16 +192,27 @@ def edge_clip_mask(srgb_uint8: np.ndarray, grad_pct: float = 97.0) -> np.ndarray
     return strong & near_clip, lab
 
 
-def fringe_metrics(srgb_uint8: np.ndarray, hp_radius: int = 6) -> dict:
+def fringe_metrics(
+    srgb_uint8: np.ndarray, hp_radius: int = 6, pinned_mask: np.ndarray | None = None,
+) -> dict:
     """Both fringe metrics on an sRGB-uint8 image.
 
+    `pinned_mask`: when given, use THIS edge&clip mask instead of recomputing — so a
+    WB/LookTable ablation (which shifts which pixels pass max>0.97) measures the SAME
+    pixels as the baseline. This is mandatory for the DC-invariant matrix/WB verdict
+    (a moving mask would confound the delta).
+
     Returns:
-      chroma_at_edge : mean hypot(a*,b*) over the edge&clip mask (owner's metric)
+      chroma_at_edge : mean hypot(a*,b*) over the mask (owner's metric)
       abs_b_at_edge  : mean |b*| over the mask (blue↔yellow axis)
       fringe_hp      : RMS of (chroma - box-mean chroma) over the mask (DC-invariant)
       n_mask         : pixel count in the mask
     """
-    mask, lab = edge_clip_mask(srgb_uint8)
+    if pinned_mask is not None:
+        mask = pinned_mask
+        lab = srgb8_to_lab_d65(srgb_uint8)
+    else:
+        mask, lab = edge_clip_mask(srgb_uint8)
     a = lab[..., 1]
     b = lab[..., 2]
     chroma = np.hypot(a, b)

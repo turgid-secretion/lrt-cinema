@@ -687,9 +687,19 @@ def apply_adobe_pipeline(
         )
     h, w, _ = camera_rgb.shape
 
+    # --- edge-fringing ablation hooks (env-gated; research-only, default off) ---
+    # docs/research/edge-fringing-rootcause.md. These let the deterministic ablation
+    # harness bypass individual colour stages WITHOUT changing default behaviour
+    # (every gate defaults off → byte-identical render). Never set in production.
+    import os as _os
+    _ablate_no_wb = _os.environ.get("LRT_FRINGE_NO_WB") == "1"
+    _ablate_no_looktable = _os.environ.get("LRT_FRINGE_NO_LOOKTABLE") == "1"
+
     # Stage 2: AsShotNeutral inverse → balanced camera RGB.
     wb_mul = 1.0 / as_shot_neutral
     wb_mul = wb_mul / wb_mul[1]
+    if _ablate_no_wb:  # ablation: kill WB asymmetry (wb_mul → [1,1,1])
+        wb_mul = np.ones_like(wb_mul)
     balanced = camera_rgb * wb_mul[None, None, :]
 
     # Stage 3: camera RGB → XYZ(D50).
@@ -799,7 +809,7 @@ def apply_adobe_pipeline(
         return rgb
 
     # Stage 8: LookTable in HSV (backend-dispatched; numpy ref or numba kernel).
-    if profile.look_table is not None:
+    if profile.look_table is not None and not _ablate_no_looktable:
         rgb = accel.apply_hsv_cube_rgb(
             rgb, profile.look_table.data_1, profile.look_table,
         )

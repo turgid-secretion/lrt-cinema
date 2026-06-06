@@ -37,17 +37,78 @@ fixtures (1024,1280,256); winupper (2048,256,256). Crops saved to /tmp/fringe_cr
 fringes heavily (chroma@edge 31, |b*| 30).
 
 ### Verdict on H1 (rcd-specific directional false-colour) — REFUTED as dominant cause
-The advisor's H1↔H2 discriminator: *if menon ≪ rcd → rcd-specific false-colour (H1);
-if menon ≈ rcd → any directional demosaic colours the clip imbalance, H2 dominates.*
-menon ≈ rcd → **H1 is refuted as the primary cause.** RCD's known battery weakness
-(false-colour 18.5 vs Menon 15.2) does NOT explain this fringe — Menon, the
-battery-best, fringes identically. The demosaic *algorithm* is at most a SECONDARY
-lever (mlri's different green/residual scheme shaves ~1/3 off fringe_hp but leaves
-most of it). The sawtooth/false-colour is therefore NOT principally a demosaic
-reconstruction error.
+The H1↔H2 discriminator: *menon ≪ rcd → rcd-specific false-colour (H1); menon ≈ rcd
+→ any directional demosaic colours the clip imbalance.* menon ≈ rcd → **RCD-specific
+false-colour is refuted.** RCD's battery weakness (false-colour 18.5 vs Menon 15.2)
+does NOT explain this — Menon, the battery-best, fringes identically.
 
-The **wood tint (a*≈15.7, actually warm/magenta not green) does NOT co-vary with the
-demosaic** (15.67/15.71/15.95) → the tint is upstream of / independent of demosaic.
+**IMPORTANT (logic correction):** this does NOT mean "demosaic is not the source."
+*Every* stage after demosaic (Stage 2 WB scalar, Stage 3/4 matrix, Stage 8 LookTable
+cube, Stage 9 tone sort) is **per-pixel** — none touch neighbours. So ALL spatial
+structure, including the sawtooth ALTERNATION `fringe_hp` measures, MUST be seeded by
+the demosaic (and LRT demosaics the same raw cleanly → it is OUR demosaic). The
+correct reading: **demosaic interpolating ACROSS THE HARD CLIP seeds the per-channel
+spatial variation (any directional algorithm does this — rcd≈menon); the downstream
+colour stages (WB asymmetry primarily) colourise that variation blue↔yellow.** An
+**interaction**, not one stage. mlri's ~38% lower fringe_hp (13.1→8.1 botleft) is REAL
+signal (a different green/residual scheme seeds less cross-clip variation) but leaves
+the majority → the demosaic algorithm is a partial lever, not the fix.
 
-→ Points at **H2: the clip-imbalance × WB × camera-matrix rotation** colouring the
-edge largely independent of which demosaic produced it. Tested next.
+The **wood tint (a*≈15.7, warm/magenta not green) does NOT co-vary with the demosaic**
+(15.67/15.71/15.95) → independent of demosaic; tracked but not the fringe driver.
+
+→ Next: locate WHERE the chroma grows (tap bisection) + confirm WB as the colouriser.
+
+### Mechanism (from DCP + WB inspection, before ablating)
+- WB multipliers this frame: **R=2.0, G=1.0, B=1.289** (ASN [0.5,1.0,0.776]) — a large
+  asymmetry. libraw hard-clips each camera channel at 1.0 (camera space, pre-WB).
+- The D750 Camera Standard FM is **ProPhoto-passthrough** (`M_xyz→pp·FM1 ≈ I`) → Stage
+  3/4 does NO chromatic rotation. NO HueSatMap (Stage 5 absent). Colour comes from WB +
+  LookTable (Stage 8) + ProfileToneCurve (Stage 9). **So the "camera-matrix rotation"
+  of H2 is really the WB asymmetry (+ LookTable), not a matrix.** Identity-matrix
+  ablation is moot and is SKIPPED.
+- `apply_rgb_tone` (Stage 9) pins input to [0,1] BEFORE curving → a FULLY-clipped pixel
+  `[≥1,≥1,≥1]`→`[1,1,1]`→neutral white. So the tap-9 fringe is NOT from saturated clip
+  CORES (those go neutral) — it is from **PARTIALLY-clipped boundary pixels**, exactly
+  the demosaic-across-clip region. (Also why hl-recovery, which neutralises full clips,
+  is inert at tap-9.)
+
+## ABLATION 2 — tap bisection (linear ProPhoto, same metric, rcd hlF)
+
+| tap | what is applied | chroma@edge | |b*| | fringe_hp | n |
+|---|---|---|---|---|---|
+| 4 | WB + FM-passthrough only | 26.80 | 16.39 | 9.79 | 128034 |
+| 7 | + ExposureRamp (no HSM) | 26.80 | 16.39 | 9.79 | 128034 |
+| 9 | + LookTable + ProfileToneCurve | 20.20 | 18.44 | 14.64 | 41839 |
+
+tap4==tap7 (Stage 5 absent, Stage 7 monotone). **fringe_hp = 9.79 already at tap-4
+with ONLY WB applied** (FM is passthrough). tap-9 mask shrinks 3× (tone curve pulls
+highlights below 0.97) so tap9-vs-tap4 isn't a clean delta, but fringe_hp does rise.
+
+## ABLATION 3 — WB / LookTable bypass at tap9-sRGB, PINNED baseline mask (DC-invariant)
+
+DC-invariant `fringe_hp` (the actual blue↔yellow ALTERNATION = the sawtooth):
+
+| variant | botleft fringe_hp | fixtures fringe_hp | winupper fringe_hp |
+|---|---|---|---|
+| **baseline (rcd)** | 13.14 | 25.07 | 19.13 |
+| **NO_WB** (wb→[1,1,1]) | 11.81 | 26.82 | 17.45 |
+| **NO_LOOKTABLE** | 14.40 | 25.14 | 22.24 |
+| **NO_WB + NO_LT** | 13.74 | 27.85 | 18.17 |
+
+(raw chroma@edge/|b*| move a lot — NO_WB recolours the whole frame — but those are the
+DC level, not the artifact; the DC-invariant fringe_hp is what matters.)
+
+### Verdict on H2 (WB / matrix as the colouriser of the fringe) — REFUTED
+**Killing WB does NOT collapse the fringe_hp** (botleft 13.14→11.81, fixtures 25.07→
+26.82 — flat / slightly up). Killing the LookTable doesn't either. The DC-invariant
+ALTERNATION is **essentially invariant to every colour-stage ablation** (demosaic
+rcd↔menon, WB on/off, LookTable on/off). The ONLY lever that moved fringe_hp is the
+demosaic *algorithm* (mlri: 13.1→8.1). So WB/LookTable set the fringe's overall hue/
+saturation (the DC level) but **do NOT create or destroy the local alternation** — they
+are per-pixel maps and cannot. **The artifact's spatial structure is demosaic-seeded
+and survives every colour ablation.**
+
+→ The root is the **demosaic's per-channel reconstruction across the hard clip** — a
+spatial per-channel imbalance present BEFORE any colour stage. Confirmed next by
+measuring the seed directly on balanced camera RGB, pre-colour.
