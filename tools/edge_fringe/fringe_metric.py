@@ -202,37 +202,51 @@ def fringe_metrics(
     pixels as the baseline. This is mandatory for the DC-invariant matrix/WB verdict
     (a moving mask would confound the delta).
 
-    Returns:
-      chroma_at_edge : mean hypot(a*,b*) over the mask (owner's metric)
-      abs_b_at_edge  : mean |b*| over the mask (blue↔yellow axis)
-      fringe_hp      : RMS of (chroma - box-mean chroma) over the mask (DC-invariant)
-      n_mask         : pixel count in the mask
+    Returns (see `_lab_fringe_stats`): chroma_at_edge, abs_b_at_edge, fringe_hp
+    (DC-invariant magnitude), fringe_b / fringe_a (SIGNED blue↔yellow / green↔magenta
+    alternation — what the owner's "alternating blue↔yellow" describes), n_mask.
     """
     if pinned_mask is not None:
         mask = pinned_mask
         lab = srgb8_to_lab_d65(srgb_uint8)
     else:
         mask, lab = edge_clip_mask(srgb_uint8)
+    return _lab_fringe_stats(lab, mask, hp_radius)
+
+
+def _lab_fringe_stats(lab: np.ndarray, mask: np.ndarray, hp_radius: int) -> dict:
+    """Shared fringe stats from a Lab image + an edge&clip mask.
+
+    fringe_hp  = RMS high-pass of chroma magnitude hypot(a,b) (DC-invariant).
+    fringe_b/a = RMS high-pass of SIGNED b*/a* — the blue↔yellow / green↔magenta
+                 ALTERNATION. fringe_hp (magnitude) is partly blind to a balanced
+                 signed swing at constant magnitude; fringe_b/a capture exactly the
+                 owner's "alternating blue↔yellow" sawtooth.
+    """
     a = lab[..., 1]
     b = lab[..., 2]
     chroma = np.hypot(a, b)
     if mask.sum() == 0:
-        return dict(chroma_at_edge=0.0, abs_b_at_edge=0.0, fringe_hp=0.0, n_mask=0)
+        return dict(
+            chroma_at_edge=0.0, abs_b_at_edge=0.0, fringe_hp=0.0,
+            fringe_b=0.0, fringe_a=0.0, n_mask=0,
+        )
     chroma_hp = chroma - _box_mean(chroma, hp_radius)
+    b_hp = b - _box_mean(b, hp_radius)
+    a_hp = a - _box_mean(a, hp_radius)
     return dict(
         chroma_at_edge=float(chroma[mask].mean()),
         abs_b_at_edge=float(np.abs(b[mask]).mean()),
         fringe_hp=float(np.sqrt(np.mean(chroma_hp[mask] ** 2))),
+        fringe_b=float(np.sqrt(np.mean(b_hp[mask] ** 2))),
+        fringe_a=float(np.sqrt(np.mean(a_hp[mask] ** 2))),
         n_mask=int(mask.sum()),
     )
 
 
-def fringe_metrics_prophoto(prophoto: np.ndarray, hp_radius: int = 6) -> dict:
-    """Fringe metrics measured on LINEAR ProPhoto (Lab via D50→D65, NO [0,1] clip
-    on chroma — overrange survives). For tap-7 where the fringe lives above 1.0.
-    The edge/clip mask is derived from the linear max-channel (clip≈1.0)."""
-    from scipy.ndimage import maximum_filter, sobel
-
+def prophoto_to_lab_d65(prophoto: np.ndarray) -> np.ndarray:
+    """Linear ProPhoto(D50) → Lab(D65), NO [0,1] clip on chroma (overrange survives).
+    For tap-7 where the fringe lives above 1.0."""
     m_pp_to_xyz = colour.RGB_COLOURSPACES["ProPhoto RGB"].matrix_RGB_to_XYZ
     m_bradford = colour.adaptation.matrix_chromatic_adaptation_VonKries(
         np.array([0.96422, 1.0, 0.82521]),
@@ -242,24 +256,31 @@ def fringe_metrics_prophoto(prophoto: np.ndarray, hp_radius: int = 6) -> dict:
     h, w, _ = prophoto.shape
     xyz_d50 = prophoto.reshape(-1, 3) @ m_pp_to_xyz.T
     xyz_d65 = (xyz_d50 @ m_bradford.T).reshape(h, w, 3)
-    lab = colour.XYZ_to_Lab(np.clip(xyz_d65, 0, None), illuminant=_D65_xy)
-    L, a, b = lab[..., 0], lab[..., 1], lab[..., 2]
-    gx = sobel(L, axis=1, mode="reflect")
-    gy = sobel(L, axis=0, mode="reflect")
-    strong = np.hypot(gx, gy) > np.percentile(np.hypot(gx, gy), 97.0)
-    maxc = prophoto.max(axis=-1)
-    near_clip = maximum_filter(maxc > 0.97, size=7)
-    mask = strong & near_clip
-    chroma = np.hypot(a, b)
-    if mask.sum() == 0:
-        return dict(chroma_at_edge=0.0, abs_b_at_edge=0.0, fringe_hp=0.0, n_mask=0)
-    chroma_hp = chroma - _box_mean(chroma, hp_radius)
-    return dict(
-        chroma_at_edge=float(chroma[mask].mean()),
-        abs_b_at_edge=float(np.abs(b[mask]).mean()),
-        fringe_hp=float(np.sqrt(np.mean(chroma_hp[mask] ** 2))),
-        n_mask=int(mask.sum()),
-    )
+    return colour.XYZ_to_Lab(np.clip(xyz_d65, 0, None), illuminant=_D65_xy)
+
+
+def prophoto_clip_edge_mask(prophoto: np.ndarray, lab: np.ndarray | None = None) -> np.ndarray:
+    """Edge&clip mask on LINEAR ProPhoto: strong |∇L*| AND near a linear clip (max
+    channel >0.97, dilated 7px). The linear analogue of `edge_clip_mask`."""
+    from scipy.ndimage import maximum_filter, sobel
+
+    if lab is None:
+        lab = prophoto_to_lab_d65(prophoto)
+    L = lab[..., 0]
+    grad = np.hypot(sobel(L, axis=1, mode="reflect"), sobel(L, axis=0, mode="reflect"))
+    strong = grad > np.percentile(grad, 97.0)
+    near_clip = maximum_filter(prophoto.max(axis=-1) > 0.97, size=7)
+    return strong & near_clip
+
+
+def fringe_metrics_prophoto(
+    prophoto: np.ndarray, hp_radius: int = 6, pinned_mask: np.ndarray | None = None,
+) -> dict:
+    """Fringe metrics on LINEAR ProPhoto (overrange survives). For tap-7. `pinned_mask`
+    measures the same pixels across ablations."""
+    lab = prophoto_to_lab_d65(prophoto)
+    mask = pinned_mask if pinned_mask is not None else prophoto_clip_edge_mask(prophoto, lab)
+    return _lab_fringe_stats(lab, mask, hp_radius)
 
 
 def green_tint(srgb_uint8: np.ndarray, patch=GREEN_TINT_PATCH) -> float:
