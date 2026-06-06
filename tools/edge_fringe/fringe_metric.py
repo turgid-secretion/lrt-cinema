@@ -33,7 +33,6 @@ GOTCHA GUARDS (both fail LOUD):
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -52,7 +51,7 @@ if not lrt_cinema.__file__.startswith(_WORKTREE_SRC):
 import colour  # noqa: E402
 
 from lrt_cinema.dcp import parse_dcp  # noqa: E402
-from lrt_cinema.pipeline import apply_adobe_pipeline, render_frame  # noqa: E402
+from lrt_cinema.pipeline import render_frame  # noqa: E402
 
 # --- fixed paths (verified this session) -----------------------------------
 NEF = "/Volumes/SanDisk Extreme Pro 55AF Media/Projects/2026 international faire timelapse/DSC_4053.NEF"
