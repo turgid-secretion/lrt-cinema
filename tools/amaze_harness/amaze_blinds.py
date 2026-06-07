@@ -123,34 +123,68 @@ def run_amaze(cfa: np.ndarray, pattern: str, clip_pt: float = 1.0) -> np.ndarray
     return np.ascontiguousarray(rgb)
 
 
-# --- inject a precomputed RGB into render_frame via the shared chokepoint ----
-def render_with_injected_rgb(camera_rgb: np.ndarray):
-    """Run the FULL production render (Stages 1-9 + develop_ops + sRGB encode)
-    but with `camera_rgb` substituted for the demosaic output. Returns a
-    16-bit-equivalent float [0,1] sRGB image (4032x6032)."""
+# --- the EXACT production lrtimelapse finish (cli.py 432-443 + encode) -------
+# Defaults for the lrtimelapse preset / faithful sRGB TIFF (cli.py):
+#   highlight_recovery=True, intent=FAITHFUL, master_look="bake",
+#   capture_sharpen="off", stop_after_stage=9.
+def _load_ops():
+    """DevelopOps parsed from the frame's LRT XMP sidecar (the develop intent the
+    on-disk _method_rcd render carried). Applied IDENTICALLY to every demosaic, so
+    it cannot bias the demosaic-vs-demosaic delta — but it IS needed to land on the
+    same develop scale as the 0.56 / 0.28 references (both fully-developed)."""
+    from lrt_cinema.xmp_parser import parse_xmp_file
+    xmp = NEF.with_suffix(".xmp")
+    ops = parse_xmp_file(xmp)[0]
+    return ops
+
+
+def _finish_to_srgb(prophoto, ops):
+    """linear ProPhoto (post Stage-9) -> production faithful sRGB float [0,1]."""
+    from lrt_cinema.develop_ops import apply_develop_ops
+    from lrt_cinema.ir import RenderIntent
+    from lrt_cinema.output import _prophoto_to_display
+    graded = apply_develop_ops(
+        prophoto, ops, RenderIntent.FAITHFUL, master_look="bake", capture_sharpen="off",
+    )
+    return np.clip(_prophoto_to_display(graded, "srgb"), 0.0, 1.0)
+
+
+def render_with_injected_rgb(camera_rgb: np.ndarray, ops):
+    """FULL production lrtimelapse render with `camera_rgb` substituted for the
+    demosaic output (the ONLY thing that varies). Stages 1-9 (incl. HL-recovery)
+    + develop_ops + production sRGB encode. Returns float [0,1] sRGB (4032x6032)."""
     import lrt_cinema.pipeline as P
     from lrt_cinema.dcp import parse_dcp
-    from lrt_cinema.output import _prophoto_to_display
 
     rgb32 = np.ascontiguousarray(camera_rgb, dtype=np.float32)
-
     orig = P._demosaic_rgb
 
     def patched(raw, rawpy_mod, half_size, demosaic):  # noqa: ARG001
-        # Same shape/scale/dtype the real demosaic returns; identity otherwise.
         return rgb32
 
     P._demosaic_rgb = patched
     try:
         profile = parse_dcp(DCP)
-        # demosaic="linear" is irrelevant now (patched), but keep it explicit.
-        result = P.render_frame(NEF, profile, dcp_path=DCP, demosaic="linear")
+        result = P.render_frame(
+            NEF, profile, dcp_path=DCP, develop_ops=ops,
+            highlight_recovery=True, demosaic="linear",  # patched; name irrelevant
+        )
     finally:
         P._demosaic_rgb = orig
+    return _finish_to_srgb(result.prophoto, ops)
 
-    # Production sRGB encode (output.py), matching write_tiff_display's path.
-    encoded = _prophoto_to_display(result.prophoto, "srgb")
-    return np.clip(encoded, 0.0, 1.0)
+
+def render_native_rcd(ops):
+    """A CURRENT production RCD render (no monkeypatch) through the identical
+    finish — the version-proof hand-off gate. Inject-RCD must match this."""
+    import lrt_cinema.pipeline as P
+    from lrt_cinema.dcp import parse_dcp
+    profile = parse_dcp(DCP)
+    result = P.render_frame(
+        NEF, profile, dcp_path=DCP, develop_ops=ops,
+        highlight_recovery=True, demosaic="rcd",
+    )
+    return _finish_to_srgb(result.prophoto, ops)
 
 
 def our_rcd_camera_rgb(cfa: np.ndarray, pattern: str) -> np.ndarray:
@@ -172,25 +206,36 @@ def main() -> int:
     cfa, pattern = extract_cfa()
     print(f"   cfa {cfa.shape} {cfa.dtype}  pattern={pattern}  "
           f"range=[{cfa.min():.4f},{cfa.max():.4f}]")
+    ops = _load_ops()
 
-    # ---- HAND-OFF GATE: our RCD through the inject path must match the normal
-    #      _method_rcd render at the blinds (proves the mechanism). ----
-    print("\n== HAND-OFF GATE: our RCD through the inject-and-finish path ==")
+    # ---- HAND-OFF GATE (version-proof internal consistency): our RCD through the
+    #      inject path must match a CURRENT native RCD production render. Both carry
+    #      the same develop_ops + HL-recovery, so this proves ONLY the demosaic
+    #      varies. (We do NOT gate against the stale 0.7.1a0 on-disk TIFF.) ----
+    print("\n== HAND-OFF GATE: inject-RCD vs native production-RCD (current code) ==")
     rcd_rgb = our_rcd_camera_rgb(cfa, pattern)
-    rcd_srgb = render_with_injected_rgb(rcd_rgb)
-    rcd_inject_hf = chroma_hf(rcd_srgb, 0)
-    print(f"   our-RCD-injected blinds chroma-HF = {rcd_inject_hf:.4f}  (must be ~0.56)")
+    rcd_inject = render_with_injected_rgb(rcd_rgb, ops)
+    rcd_native = render_native_rcd(ops)
+    rcd_inject_hf = chroma_hf(rcd_inject, 0)
+    rcd_native_hf = chroma_hf(rcd_native, 0)
+    # Byte-level identity of the two RGBs at the blinds (the strongest gate).
+    a = (rcd_inject[1350:1660, 150:1400] * 65535).round()
+    b = (rcd_native[1350:1660, 150:1400] * 65535).round()
+    max_cu = float(np.abs(a - b).max())
+    print(f"   inject-RCD blinds chroma-HF = {rcd_inject_hf:.4f}")
+    print(f"   native-RCD blinds chroma-HF = {rcd_native_hf:.4f}")
+    print(f"   max |inject-native| at blinds = {max_cu:.1f} code units (16-bit)")
 
     rcd_disk = tifffile.imread(str(RCD_TESTRUN)).astype(np.float32) / 65535.0
     rcd_disk_hf = chroma_hf(rcd_disk, 0)
-    print(f"   on-disk _method_rcd blinds chroma-HF = {rcd_disk_hf:.4f}")
+    print(f"   (FYI) stale on-disk _method_rcd 0.7.1a0 = {rcd_disk_hf:.4f}")
 
-    # ---- AMaZE ----
-    print("\n== REAL AMaZE on the same CFA ==")
+    # ---- AMaZE (same CFA, same finish) ----
+    print("\n== REAL AMaZE on the same CFA, same finish ==")
     amaze_rgb = run_amaze(cfa, pattern, clip_pt=1.0)
     print(f"   amaze rgb {amaze_rgb.shape} range=[{amaze_rgb.min():.4f},"
           f"{amaze_rgb.max():.4f}]")
-    amaze_srgb = render_with_injected_rgb(amaze_rgb)
+    amaze_srgb = render_with_injected_rgb(amaze_rgb, ops)
     amaze_hf = chroma_hf(amaze_srgb, 0)
     print(f"   AMaZE-injected blinds chroma-HF = {amaze_hf:.4f}")
 
@@ -198,20 +243,27 @@ def main() -> int:
     acr = tifffile.imread(str(ACR_NR_OFF)).astype(np.float32) / 65535.0
     acr_hf = chroma_hf(acr, -8)
 
-    # ---- crops ----
-    save_crop(rcd_srgb, "our_rcd_blinds.tif", 0)
+    # ---- 1:1 crops ----
+    save_crop(rcd_native, "our_rcd_blinds.tif", 0)
     save_crop(amaze_srgb, "amaze_blinds.tif", 0)
     save_crop(acr, "acr_nr_off_blinds.tif", -8)
 
+    gate_ok = max_cu <= 1.0  # ≤1 code unit = byte-identical (FP rounding only)
+    delta = amaze_hf - rcd_native_hf
     print("\n================ SUMMARY (blinds chroma-HF) ================")
-    print(f"  ACR-NR-off (TARGET)        : {acr_hf:.4f}")
-    print(f"  our RCD (baseline, on-disk): {rcd_disk_hf:.4f}")
-    print(f"  our RCD (injected, gate)   : {rcd_inject_hf:.4f}")
-    print(f"  REAL AMaZE (injected)      : {amaze_hf:.4f}")
+    print(f"  ACR-NR-off (TARGET)           : {acr_hf:.4f}")
+    print(f"  our RCD  (native, current)    : {rcd_native_hf:.4f}")
+    print(f"  our RCD  (injected, gate)     : {rcd_inject_hf:.4f}")
+    print(f"  REAL AMaZE (injected)         : {amaze_hf:.4f}")
+    print(f"  AMaZE - RCD delta             : {delta:+.4f}")
     print("===========================================================")
-    gate_ok = abs(rcd_inject_hf - rcd_disk_hf) < 0.03
-    print(f"  hand-off gate {'PASS' if gate_ok else 'FAIL'} "
-          f"(|inject - disk| = {abs(rcd_inject_hf - rcd_disk_hf):.4f})")
+    print(f"  HAND-OFF GATE {'PASS' if gate_ok else 'FAIL'} "
+          f"(max {max_cu:.1f} cu inject-vs-native at blinds)")
+    verdict = ("AMaZE REACHES ACR (~0.28) -> adopt AMaZE-class demosaic"
+               if amaze_hf < 0.40
+               else "FUNDAMENTAL -> AMaZE ~= RCD, no demosaic swap reaches ACR's 0.28")
+    print(f"  VERDICT: {verdict}")
+    print(f"  crops: {CROP_DIR}")
     return 0
 
 
