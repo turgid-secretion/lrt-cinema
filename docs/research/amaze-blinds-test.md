@@ -133,19 +133,36 @@ checked (`tools/amaze_harness/falsify.py`):
 - **[P3] it really demosaics.** Green passthrough at green sites = **0.0** residual
   (mean & max); R/B at their sites ≈ 6e-8 (float rounding) — identical behaviour to
   our RCD. Not garbage.
-- **[green-clamp port artefact]** The darktable port hard-clamps **green** to [0,1]
-  on copy-back (R/B unclamped — output range R/B to ~1.10, G capped at 1.0), and it
-  fires in Nyquist-flagged regions = the blinds. In the blinds crop **8.0%** of
-  green pixels hit the clamp (full image 0.37%). This is the saturated brightest
-  slats — precisely where false colour is LEAST present (the sawtooth lives in the
-  unclipped 79%). It cannot bridge 0.56→0.28: disabling AMaZE's *whole* clip-gated
-  suppression moved the metric ~0.0018, so an 8%-pixel clamp would need ~150× the
-  impact of the entire suppression system. Negligible — verdict unaffected.
+- **[copy-back "clamp" — there is none; MEASURED].** The port's output writes look
+  like a hard clamp — `_clampnan(rgbgreen[indx], 0.0f, 1.0f)` (and 12 similar R/B
+  sites) — which I initially flagged as a darktable-vs-RawTherapee artefact that
+  could hobble AMaZE in the bright window. On reading `_clampnan` it is a **NaN/inf
+  guard, NOT a range clamp**: for any *finite* pixel it returns the value
+  **unchanged** (clamps only ±inf, replaces NaN with the midpoint). So no real pixel
+  is bounded — the AMaZE output runs R/B to ~1.22 and G past 1.0 unimpeded
+  (range [-0.095, 1.215]). Proven empirically: widening all 13 `_clampnan(…,0,1)`
+  bounds to [-16,16] and rebuilding gives a **byte-identical metric (0.5647, Δ
+  +0.00005)** and identical output range — the bounds touch zero pixels. This was
+  the last behavioural deviation between the darktable port and the original
+  algorithm; it is now measured to be a no-op. (The "8% of blinds green pixels at
+  1.0" is just the genuine green signal saturating at the white point on the
+  brightest slats — not a clamp.)
 - **Visual** (the "not crippled" line): the RCD|AMaZE|ACR strip shows AMaZE with the
   same blue false colour as RCD and a correct, sharp demosaic; ACR is clean.
 
 A result that *would* have needed scrutiny: AMaZE dropping near 0.28 while RCD
 stayed ~0.56. It did not — AMaZE ≈ RCD on every axis.
+
+**Closed residual (not re-run): an independent-pipeline AMaZE** (darktable-cli /
+libraw GPL pack) rendering the NEF through a *different* pipeline would be
+belt-and-suspenders against any harness-specific quirk. It is **not built** — high
+cost, no verdict-changing power given what is already established: the port is
+**verbatim** darktable source (only no-op shims added), P3's green-passthrough
+residual is exactly 0 (proves byte-correct tiling/indexing, not just "looks
+demosaiced"), the copy-back bounds are measured no-ops, and the visual shows a
+correct sharp demosaic with the same false colour. Port fidelity is established;
+an independent pipeline would only re-confirm it. Named here as closed for honesty,
+not left as an open gap.
 
 ## What this means for lrt-cinema
 The blinds false colour is **fundamental to the demosaic class**, not a deficiency

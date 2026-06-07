@@ -10,7 +10,8 @@ exact same code path. We achieve this by monkeypatching the single shared demosa
 chokepoint `pipeline._demosaic_rgb` to return a precomputed camera-RGB.
 
 AMaZE is GPL; like dng_validate / ACR it is a REFERENCE oracle only. Its source +
-binary live OUTSIDE the package (/tmp/amaze_work); nothing GPL is added to src/.
+binary live OUTSIDE the shipped package — gitignored `tools/external/amaze/` (built
+by its build.sh) and `/tmp/amaze_work`; nothing GPL is added to src/.
 
 Metric: horizontal chroma-HF over the blinds crop (the streaks), per the session
 spec. our-RCD ~0.56, ACR-NR-off ~0.28.
