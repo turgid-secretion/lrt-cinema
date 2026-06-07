@@ -158,8 +158,10 @@ critical path); the residual scipy homogeneity convolve (~a quarter of the old
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
-from scipy.ndimage import convolve, convolve1d, uniform_filter
+from scipy.ndimage import convolve, convolve1d, median_filter, uniform_filter
 
 # Reflect-pad width. The Hamilton-Adams green stencil and the Menon green
 # hypotheses reach +/-2 along each axis; the homogeneity kernel reaches +/-2; the
@@ -186,6 +188,66 @@ _REFINE_ITERS = 2
 # back in.
 _CHROMA_THR = 0.01
 _CHROMA_SOFT = 0.02
+
+# --- TERMINAL Freeman-style chroma-difference median (EXPERIMENTAL, default OFF) ---
+# A separate, optional false-colour remedy distinct from the linear chroma-gate
+# above: after the directional reconstruction + refining, median-filter the colour
+# DIFFERENCES (R-G, B-G) with a small SQUARE window, then re-derive R/B = G +
+# median(C-G). This is the classical Freeman [Freeman1988] iterative-median chroma
+# cleanup — a *median* (rank, edge-preserving) on the colour difference, NOT the
+# Menon linear 3-tap FIR the refining uses. Rationale: demosaic false colour shows
+# as a sign-alternating spike in the colour difference riding on a locally-flat true
+# chroma; a median rejects that impulse while a linear FIR smears it (and smears
+# true chroma). It is part of *demosaicing* (operates only on the demosaic's own
+# colour-difference planes), NOT a global chroma denoiser.
+#
+# Gated by env so the battery / adversarial harness and the CLI render exercise the
+# SAME operator without cli.py plumbing (PROPOSE-not-ship; the CLI default leaves it
+# OFF -> byte-exact identity preserved):
+#   LRT_RCD_CHROMA_MEDIAN      window size (odd int, 0/unset = OFF). 3 or 5.
+#   LRT_RCD_CHROMA_MEDIAN_ITERS  iterations (default 1).
+# A SQUARE window (size x size) is mandatory: a horizontal-only median would crush
+# the *horizontal* chroma-HF metric without fixing the artifact (and is the gaming
+# trap the metric's vertical companion exists to catch). Default OFF: the green is
+# untouched and the colour difference equals its input -> no-op, so the zero-slider
+# identity / ship gate is unchanged.
+
+
+def _chroma_median_config() -> tuple[int, int]:
+    """Read the terminal-chroma-median config from the environment.
+
+    Returns ``(size, iters)``; ``size <= 1`` (the default / unset / ``0``) means the
+    pass is OFF. ``size`` is forced odd (a median needs an odd window for a defined
+    centre). Read per-call so a test/harness can toggle it without re-import."""
+    try:
+        size = int(os.environ.get("LRT_RCD_CHROMA_MEDIAN", "0"))
+    except ValueError:
+        size = 0
+    if size <= 1:
+        return 0, 0
+    if size % 2 == 0:  # medians need an odd window; round the even value down
+        size -= 1
+    try:
+        iters = max(1, int(os.environ.get("LRT_RCD_CHROMA_MEDIAN_ITERS", "1")))
+    except ValueError:
+        iters = 1
+    return size, iters
+
+
+def _chroma_median(red, green, blue, r_site, b_site, g_site, size: int, iters: int) -> tuple:
+    """Freeman-style median on the colour differences (R-G, B-G); re-derive R/B.
+
+    Green is held FIXED (the median touches chroma only, so no luma/MTF50P metric is
+    affected — and none can guard it; the guard is the neutral zone-plate falseClr +
+    the adversarial real-colour grating, see module note). The known CFA samples are
+    re-pinned by the caller (`_rcd_rggb`) after this returns. SQUARE window only."""
+    g = green
+    r, b = red, blue
+    footprint = (size, size)
+    for _ in range(iters):
+        r = g + median_filter(r - g, size=footprint, mode="reflect")
+        b = g + median_filter(b - g, size=footprint, mode="reflect")
+    return r, g, b
 
 # Menon green-hypothesis FIR taps (the BSD-3 reference's h_0 + h_1): the directional
 # green estimate at a non-green site is 0.5*(near green neighbours)
@@ -448,6 +510,15 @@ def _rcd_rggb(cfa: np.ndarray) -> np.ndarray:
     # ------------------------------------------------- chroma-gated refining
     for _ in range(_REFINE_ITERS):
         red, green, blue = _refine_once(red, green, blue, r_site, b_site, g_site, m_dir)
+
+    # ------------------------- TERMINAL Freeman-style chroma-difference median
+    # Optional false-colour remedy (default OFF -> no-op). Square median on (R-G,
+    # B-G); green fixed. See `_chroma_median` / the module config note.
+    _cm_size, _cm_iters = _chroma_median_config()
+    if _cm_size:
+        red, green, blue = _chroma_median(
+            red, green, blue, r_site, b_site, g_site, _cm_size, _cm_iters,
+        )
 
     # Restore exact known CFA samples (flat-exact + PSNR fidelity depend on this;
     # the refining FIRs touch every site, so this re-pins the originals).
