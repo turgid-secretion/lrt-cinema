@@ -20,3 +20,6 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+
+# GPL reference tools (AMaZE etc) — kept OUT of the clean-room package
+tools/external/

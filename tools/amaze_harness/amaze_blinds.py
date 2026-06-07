@@ -35,9 +35,13 @@ DCP = Path(
     "/Library/Application Support/Adobe/CameraRaw/CameraProfiles/Camera/"
     "Nikon D750/Nikon D750 Camera Standard.dcp"
 )
-AMAZE_BIN = Path("/tmp/amaze_work/amaze")
-AMAZE_CFA = Path("/tmp/amaze_work/cfa.bin")
-AMAZE_RGB = Path("/tmp/amaze_work/rgb.bin")
+# GPL reference binary lives in the gitignored tools/external/amaze (built by its
+# build.sh); falls back to the ephemeral /tmp build if the local one is absent.
+AMAZE_BIN = WORKTREE / "tools" / "external" / "amaze" / "amaze"
+if not AMAZE_BIN.exists():
+    AMAZE_BIN = Path("/tmp/amaze_work/amaze")
+AMAZE_CFA = Path("/tmp/amaze_cfa.bin")
+AMAZE_RGB = Path("/tmp/amaze_rgb.bin")
 
 RCD_TESTRUN = Path(
     "/Volumes/SanDisk Extreme Pro 55AF Media/Projects/lrt-cinema-testrun/"
@@ -104,6 +108,7 @@ def verify_filters(pattern: str, filters: int) -> None:
 # --- CFA extraction (the EXACT bytes our pipeline feeds its demosaic) --------
 def extract_cfa():
     import rawpy
+
     from lrt_cinema.pipeline import _extract_cfa
     with rawpy.imread(str(NEF)) as raw:
         cfa, pattern = _extract_cfa(raw)

@@ -23,8 +23,12 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from amaze_blinds import (  # noqa: E402
-    chroma_hf, extract_cfa, run_amaze, render_with_injected_rgb, _load_ops,
+    _load_ops,
+    chroma_hf,
+    extract_cfa,
     our_rcd_camera_rgb,
+    render_with_injected_rgb,
+    run_amaze,
 )
 
 
@@ -67,8 +71,10 @@ def main() -> int:
     print(f"   |amaze_G - cfa_G| at green sites: mean={resid.mean():.2e} "
           f"max={resid.max():.2e}  (≈0 ⇒ true demosaic, green passthrough)")
     # red at red sites (0,0) must match cfa; blue at blue sites (1,1) must match
-    rmask = np.zeros(cfa.shape, bool); rmask[0::2, 0::2] = True
-    bmask = np.zeros(cfa.shape, bool); bmask[1::2, 1::2] = True
+    rmask = np.zeros(cfa.shape, bool)
+    rmask[0::2, 0::2] = True
+    bmask = np.zeros(cfa.shape, bool)
+    bmask[1::2, 1::2] = True
     rr = np.abs(rgb[..., 0][rmask] - cfa[rmask])
     bb = np.abs(rgb[..., 2][bmask] - cfa[bmask])
     print(f"   |amaze_R - cfa_R| at red sites:   mean={rr.mean():.2e} max={rr.max():.2e}")
