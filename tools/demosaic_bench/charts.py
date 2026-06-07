@@ -162,6 +162,14 @@ def siemens_star(
 # must reconstruct the transition from chrominance alone (the failure boundary).
 _ISO_RED = (0.85, 0.12, 0.12)
 _ISO_GREEN = (0.12, 0.337, 0.12)
+# A third isoluminant colour NOT collinear with red/green in the (G, R) plane, for a
+# NON-DEGENERATE colour grating. A 2-colour grating is a trap for the adversarial
+# real-colour test: every pixel lies exactly on one line R=a·G+b in (G,R), which is
+# the EXACT model MLRI's tentative fits, so MLRI reconstructs it with zero residual
+# *by construction* (a false "perfect recovery" that certifies nothing about real
+# content). A 3rd off-line colour breaks that degeneracy. Solved for the same
+# Y≈0.275 in linear Rec.709 (a saturated blue): isoluminant with the other two.
+_ISO_BLUE = (0.30, 0.20, 0.95)
 
 
 def isoluminant_color_edge(
@@ -183,3 +191,79 @@ def isoluminant_color_edge(
     return slanted_edge(
         size, angle_deg, low=color_a, high=color_b, softness=softness, olpf_sigma=olpf_sigma
     )
+
+
+def isoluminant_color_grating(
+    size: int = 256,
+    period_px: float = 3.0,
+    color_a: tuple[float, float, float] = _ISO_RED,
+    color_b: tuple[float, float, float] = _ISO_GREEN,
+    *,
+    axis: str = "h",
+    olpf_sigma: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """A periodic NEAR-NYQUIST grating between two ISOLUMINANT SATURATED colours —
+    the ADVERSARIAL real-colour test for any false-colour suppression
+    (docs/research/demosaic-false-color-test.md).
+
+    The venetian-blind artifact is a DENSE PERIODIC near-Nyquist chroma pattern, and
+    the central finding is that such a pattern is LOCALLY INDISTINGUISHABLE from a
+    REAL near-Nyquist colour pattern: an edge-preserving median preserves both, a
+    low-pass (mlri's residual fill) destroys both. This chart IS that real pattern —
+    a genuine fine colour grating at the blinds' frequency. A correct demosaic must
+    reconstruct its chroma; a chroma-killer (blur) attenuates it.
+
+    The two colours are EXACTLY isoluminant in linear Rec.709 (ΔL*≈0), so the
+    luminance channel carries ~no signal and the grating lives purely in CHROMA —
+    the worst case for a luminance-first demosaicer and the cleanest probe of chroma
+    reconstruction. `period_px` is the full cycle in pixels (one colour_a band + one
+    colour_b band): 2.0 = exactly Nyquist, 3.0 = near-Nyquist (the blinds regime),
+    4.0 = comfortably resolvable. `axis='h'` makes HORIZONTAL stripes (the chroma
+    varies VERTICALLY, undersampling R/B along columns — exactly the blinds geometry,
+    where R/B are vertically undersampled). Returns (linear-RGB ground truth, the
+    same ground truth) so a metric can compare recovered vs true chroma.
+
+    SAMPLING-LIMIT CAVEAT (read before interpreting): at near-Nyquist EVERY Bayer
+    demosaic attenuates real chroma — that is the sampling limit, not a defect. So
+    the metric compares each method's recovered chroma amplitude to the BASELINE
+    (rcd), NOT to 1.0. The falsifier for "preserves real colour" is: attenuates the
+    grating SUBSTANTIALLY MORE than rcd."""
+    h = w = _even(size)
+    yy, xx = np.indices((h, w), dtype=np.float64)
+    coord = yy if axis == "h" else xx   # axis='h' -> horizontal stripes vary with y
+    # Square-wave selector in [0,1]: band A then band B each period_px/2 wide.
+    sel = ((coord % period_px) < (period_px / 2.0)).astype(np.float64)
+    a = np.asarray(color_a, dtype=np.float64)
+    b = np.asarray(color_b, dtype=np.float64)
+    rgb = a[None, None, :] + sel[..., None] * (b - a)[None, None, :]
+    rgb = np.clip(rgb, 0.0, 1.0)
+    return _olpf(rgb, olpf_sigma), rgb
+
+
+def isoluminant_color_grating3(
+    size: int = 256,
+    band_px: int = 1,
+    colors: tuple = (_ISO_RED, _ISO_GREEN, _ISO_BLUE),
+    *,
+    axis: str = "h",
+    olpf_sigma: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """A 3-colour isoluminant grating — the NON-DEGENERATE companion to
+    `isoluminant_color_grating` (which is exactly reconstructible by MLRI's linear
+    tentative and so cannot fairly probe it; see `_ISO_BLUE`).
+
+    Cycles three isoluminant saturated colours in `band_px`-tall bands (default 1px →
+    a 3-colour cycle per 3px, *beyond* Bayer Nyquist, the harshest stress). The three
+    colours are NOT collinear in the (G, R) plane, so no single linear R=a·G+b model
+    fits — MLRI cannot trivially zero its residual here, and the chroma-recovery
+    ranking reflects real reconstruction, not a chart artifact. Returns (linear-RGB
+    ground truth, the same) for `metrics.chroma_amplitude_recovery`."""
+    h = w = _even(size)
+    yy, xx = np.indices((h, w))
+    coord = yy if axis == "h" else xx
+    band = (coord // max(band_px, 1)) % len(colors)
+    rgb = np.zeros((h, w, 3), dtype=np.float64)
+    for i, c in enumerate(colors):
+        rgb[band == i] = c
+    rgb = np.clip(rgb, 0.0, 1.0)
+    return _olpf(rgb, olpf_sigma), rgb

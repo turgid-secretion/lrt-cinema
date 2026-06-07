@@ -25,7 +25,9 @@ Skip-gates cleanly if /tmp/kodak or colour_demosaicing are absent.
 
 from __future__ import annotations
 
+import os
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -40,9 +42,40 @@ from lrt_cinema._rcd_demosaic import rcd_demosaic  # noqa: E402
 _BORDER = 10
 
 
+@contextmanager
+def _rcd_chroma_median(size: int, iters: int = 1):
+    """Force the RCD terminal-chroma-median config for the duration of the block, so
+    a median variant is measured against the SAME operator the CLI render uses
+    (`LRT_RCD_CHROMA_MEDIAN`). Restores the prior env afterwards."""
+    keys = {"LRT_RCD_CHROMA_MEDIAN": str(size), "LRT_RCD_CHROMA_MEDIAN_ITERS": str(iters)}
+    saved = {k: os.environ.get(k) for k in keys}
+    os.environ.update(keys)
+    try:
+        yield
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def _rcd_med(c, size, iters=1):
+    """RCD with the terminal chroma-median forced ON (env-scoped)."""
+    with _rcd_chroma_median(size, iters):
+        return rcd_demosaic(c, "RGGB")
+
+
 def _methods():
     """The demosaic methods, each (name, fn(cfa_float, 'RGGB') -> HxWx3).
-    Returns None if the colour_demosaicing anchors are unavailable (skip-gate)."""
+    Returns None if the colour_demosaicing anchors are unavailable (skip-gate).
+
+    The `our-RCD+medNiK` rows are the experimental terminal chroma-median (square
+    median on R-G/B-G, N = window, K = iters; default-OFF in production) — the
+    challenger for the venetian-blind false-colour test. They share the exact
+    operator the CLI render invokes via `LRT_RCD_CHROMA_MEDIAN`. The decision gate
+    here is: does `our-RCD+med` drop neutral falseClr (unambiguous — true chroma is
+    zero on the zone-plate) while holding CPSNR/SCIELAB vs `our-RCD`?"""
     try:
         from colour_demosaicing import (
             demosaicing_CFA_Bayer_Malvar2004 as malvar,
@@ -55,7 +88,11 @@ def _methods():
     return [
         ("bilinear", lambda c: M.bilinear_rggb(c)),
         ("Malvar2004", lambda c: np.asarray(malvar(c, "RGGB"), dtype=np.float64)),
-        ("our-RCD", lambda c: rcd_demosaic(c, "RGGB")),
+        ("our-RCD", lambda c: _rcd_med(c, 0)),  # median forced OFF (the baseline)
+        ("our-RCD+med3i1", lambda c: _rcd_med(c, 3, 1)),
+        ("our-RCD+med5i1", lambda c: _rcd_med(c, 5, 1)),
+        ("our-RCD+med3i2", lambda c: _rcd_med(c, 3, 2)),
+        ("our-RCD+med5i2", lambda c: _rcd_med(c, 5, 2)),
         ("our-MLRI", lambda c: mlri_demosaic(c, "RGGB")),
         ("Menon2007", lambda c: np.asarray(menon(c, "RGGB"), dtype=np.float64)),
     ]
@@ -102,6 +139,13 @@ def _run_charts(methods) -> dict[str, dict[str, float]]:
     edge = charts.slanted_edge(256, angle_deg=5.0)            # neutral edge
     zp, zp_mask = charts.zone_plate(256, k=1.1)               # neutral -> false colour
     iso = charts.isoluminant_color_edge(256, angle_deg=5.0)   # isoluminant chroma edge
+    # ADVERSARIAL real-colour test: a near-Nyquist isoluminant colour grating (the
+    # blinds' frequency + geometry). A false-colour suppressor must NOT flatten it.
+    # 2-colour is a degeneracy for MLRI (exact linear tentative) so we ALSO run the
+    # 3-colour non-degenerate variant; the median's verdict (does it attenuate real
+    # chroma vs rcd?) is read off the 3-colour column.
+    grat, grat_gt = charts.isoluminant_color_grating(256, period_px=3.0, axis="h")
+    grat3, grat3_gt = charts.isoluminant_color_grating3(256, band_px=1, axis="h")
     iso_xyz_ref = M.xyz_from_linear_rgb(_clip01(iso))
     # The isoluminant transition lives in CHROMA, not L* — localise with the
     # chroma-gradient mask (an L* mask sees ~no signal here). The ΔE is measured
@@ -113,6 +157,8 @@ def _run_charts(methods) -> dict[str, dict[str, float]]:
         e_out = fn(M.mosaic_rggb(edge))
         z_out = fn(M.mosaic_rggb(zp))
         i_out = fn(M.mosaic_rggb(iso))
+        g_out = fn(M.mosaic_rggb(grat))
+        g3_out = fn(M.mosaic_rggb(grat3))
         lab_r = M._xyz_to_lab(iso_xyz_ref)
         lab_t = M._xyz_to_lab(M.xyz_from_linear_rgb(_clip01(i_out)))
         de = np.sqrt(np.sum((lab_r - lab_t) ** 2, axis=-1))
@@ -120,6 +166,8 @@ def _run_charts(methods) -> dict[str, dict[str, float]]:
             "mtf50p": M.mtf50p(_clip01(e_out), channel="luma"),
             "falsecolor": M.falsecolor_chroma_energy(z_out, zp_mask),
             "iso_edge_de": float(np.mean(de[iso_edge_mask])) if iso_edge_mask.any() else 0.0,
+            "grating_recov": M.chroma_amplitude_recovery(g_out, grat_gt),
+            "grating3_recov": M.chroma_amplitude_recovery(g3_out, grat3_gt),
         }
     return out
 
@@ -145,6 +193,8 @@ def _print_table(kodak: dict, charts_res: dict, methods) -> None:
         ("MTF50P↑", "charts", "mtf50p", 4),
         ("falseClr↓", "charts", "falsecolor", 3),
         ("isoΔE↓", "charts", "iso_edge_de", 3),
+        ("grat2↑", "charts", "grating_recov", 3),
+        ("grat3↑", "charts", "grating3_recov", 3),
     ]
     print("\n" + "=" * 92)
     print("DEMOSAIC MULTI-METRIC BATTERY  (↑ higher better · ↓ lower better)")
@@ -170,7 +220,11 @@ def _print_table(kodak: dict, charts_res: dict, methods) -> None:
 # demosaic legitimately beats a directional one (less colour fringe), so bilinear
 # is EXPECTED to score well there. Excluded from the "bilinear worst" gate with
 # that reason; the gate scopes to the genuine quality axes below.
-_SANITY_EXCLUDE = {"isoΔE↓"}
+# gratRecov is also excluded: it characterises the adversarial real-colour grating,
+# where MORE chroma blur -> LESS recovery, so the floor is whichever method blurs
+# chroma MOST (bilinear OR mlri), not a demosaic-quality ranking. Like isoΔE it
+# probes the failure boundary, not quality.
+_SANITY_EXCLUDE = {"isoΔE↓", "grat2↑", "grat3↑"}
 
 
 def _print_sanity(kodak, charts_res, names, cols, src) -> None:

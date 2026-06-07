@@ -363,6 +363,52 @@ def region_split(
 # ----------------------------------------------------------------------------
 
 
+def chroma_amplitude_recovery(
+    test_rgb: np.ndarray,
+    gt_rgb: np.ndarray,
+    *,
+    border: int = 8,
+) -> float:
+    """Fraction of a colour grating's TRUE chroma modulation a demosaic recovered
+    (docs/research/demosaic-false-color-test.md — the adversarial real-colour test).
+
+    For the isoluminant near-Nyquist colour grating (`charts.isoluminant_color_grating`):
+    the ground truth alternates between two fixed CIELab chroma points, so its chroma
+    signal has a known modulation amplitude. A faithful demosaic reproduces that
+    modulation; a chroma-killer (blur / aggressive smoothing) flattens it. This
+    returns ``std(chroma_test) / std(chroma_gt)`` over the interior — 1.0 = full
+    chroma recovered, →0 = the colour grating smeared to a flat field.
+
+    Measured in the (a*, b*) chroma PLANE and PROJECTED onto the ground-truth chroma
+    modulation, so it captures the chroma that is actually ALIGNED with the real
+    grating and REJECTS orthogonal aliasing chroma (a raw std would conflate the two
+    and read >1 from aliasing inflation). Concretely: zero-mean the test and GT (a*,
+    b*) signals over the interior, then recovery = <test, gt> / <gt, gt> — the
+    least-squares scale of GT present in the reconstruction. 1.0 = the real colour
+    modulation fully survived; →0 = smeared to a flat field; the projection discards
+    the false-colour component that does not co-vary with the true pattern.
+
+    INTERPRETATION (sampling limit): near Nyquist every Bayer demosaic attenuates the
+    real grating, so read this RELATIVE to the baseline (rcd): a method recovering
+    SUBSTANTIALLY LESS than rcd is smearing real colour (the falsifier). Inputs are
+    LINEAR chart RGB."""
+    lab_t = _xyz_to_lab(xyz_from_linear_rgb(np.clip(test_rgb, 0.0, 1.0)))
+    lab_g = _xyz_to_lab(xyz_from_linear_rgb(np.clip(gt_rgb, 0.0, 1.0)))
+    b = border
+    # (a*, b*) vectors over the interior, mean-removed so we measure MODULATION.
+    t = lab_t[b:-b, b:-b, 1:3].reshape(-1, 2)
+    g = lab_g[b:-b, b:-b, 1:3].reshape(-1, 2)
+    t = t - t.mean(axis=0)
+    g = g - g.mean(axis=0)
+    gg = float(np.sum(g * g))
+    if gg <= 1e-9:
+        return 0.0
+    # Least-squares projection of the true chroma modulation onto the reconstruction:
+    # the scalar a minimising ||t - a*g||, = <t,g>/<g,g>. Rejects aliasing orthogonal
+    # to the true pattern (which a raw-std ratio would wrongly count as "recovery").
+    return float(np.sum(t * g) / gg)
+
+
 def falsecolor_chroma_energy(
     test_rgb: np.ndarray,
     neutral_mask: np.ndarray,
