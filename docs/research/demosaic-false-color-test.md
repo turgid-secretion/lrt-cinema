@@ -27,9 +27,9 @@ are unclipped) — it is a real demosaic-quality gap.
 
 **Worst-spot ROI (our render coords, 4032×6032):** `y 1350–1660, x 150–1400`.
 
-The 4×-zoom crops (`/tmp/fc_crops/zoom4x_*.png`, committed harness regenerates them)
-show it directly: `rcd` has a broad cyan/magenta wash over the slats + colored
-speckle on the vertical mullion; `ACR-NR-off` is near-neutral with crisp slats.
+The 4×-zoom crops (`docs/research/demosaic-false-color-crops/zoom4x_*.png`) show it
+directly: `rcd` has a broad cyan/magenta wash over the slats + colored speckle on the
+vertical mullion; `ACR-NR-off` is near-neutral with crisp slats.
 
 ## 2. Metric + alignment (re-verified)
 
