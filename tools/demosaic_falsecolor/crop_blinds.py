@@ -74,4 +74,5 @@ def main(out_dir: str) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1] if len(sys.argv) > 1 else "/tmp/fc_crops"))
+    default_dir = "docs/research/demosaic-false-color-crops"
+    raise SystemExit(main(sys.argv[1] if len(sys.argv) > 1 else default_dir))

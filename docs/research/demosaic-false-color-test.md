@@ -174,29 +174,42 @@ defect).
 **Falsifier:** *a method that attenuates the real grating substantially MORE than
 rcd is smearing real colour.* Run on rcd / mlri / median:
 
-- **2-colour grating (`grat2`) is a DEGENERACY — discard for mlri.** Every pixel
-  lies on one line `R = a·G + b` in (G,R), which is exactly MLRI's linear tentative,
-  so MLRI zeroes its residual **by construction** → a false "perfect" 0.891. Verified
-  by adding a 3rd off-line isoluminant colour (`grat3`): MLRI drops **0.891 → 0.498**.
-  So `grat2` certifies nothing about MLRI; `grat3` is the fair probe.
-- **The median FAILS the falsifier:** `grat3` med3i1 **0.078 < rcd 0.173** — it
-  attenuates the real periodic chroma *below baseline* and **distorts** it (a
-  period-4 slice: GT modulation peak-to-peak 20.1, rcd 53.5, med5 **56.0**,
-  mis-aligned). This is the **same mechanism** that worsens the blinds: the median
-  cannot tell dense-periodic-real from dense-periodic-false, so it mangles both. The
-  adversarial test fired on exactly the operator one might propose.
+- **The median FAILS the falsifier (degeneracy-immune evidence).** A median fits
+  **no** linear model, so the 2-colour grating is **not** degenerate *for the
+  median* — its numbers are fully valid. On the 2-colour **period-4** grating
+  (resolvable, the cleanest read): projection recovery **med3 = med5 = 0.333 vs rcd
+  0.552** — the median attenuates the real periodic chroma to ~60% of baseline. And
+  it **distorts** the surviving modulation: a period-4 slice has GT peak-to-peak
+  20.1, rcd 53.5, **med5 56.0**, with the values mis-ordered
+  (`[26.4, 24.0, 80.0, 53.0]` vs GT `[40.8, 40.8, 60.9, 60.9]`). Same mechanism that
+  worsens the blinds: the median cannot tell dense-periodic-real from
+  dense-periodic-false, so it mangles both. The adversarial test fired on exactly the
+  operator one might propose.
+- **2-colour grating (`grat2`, period 3) is a DEGENERACY *for mlri only* — discard
+  mlri's grat2 score.** Every pixel lies on one line `R = a·G + b` in (G,R), which is
+  exactly MLRI's linear tentative, so MLRI zeroes its residual **by construction** →
+  a false "perfect" 0.891. Verified by a 3rd off-line isoluminant colour (`grat3`):
+  MLRI drops **0.891 → 0.498**. (This does NOT affect the median's grat2 numbers
+  above — the median has no linear model to exploit the degeneracy.)
+- **`grat3` (3-colour, band_px=1) is past chroma-Nyquist and noisy** — a 3-colour
+  cycle per 3 px is below any Bayer sensor's resolution, so all methods are poor
+  (0.04–0.50) and the median's grat3 is **window-size-dependent and not meaningful**
+  (med3 0.078 but med5 ≈ baseline 0.194). It served its one job — breaking mlri's
+  2-colour degeneracy (0.891→0.498) — and the median's verdict is read off the
+  resolvable 2-colour period-4 case + the blinds, not off grat3.
 - **mlri** recovers more than rcd on `grat3` (0.498 vs 0.173) but this is the
   blur-family flattening the aliasing toward the smooth truth — consistent with its
   isoΔE 0.286, not evidence of fidelity.
 
-## 7. 1:1 native crops
+## 7. 1:1 native crops (committed)
 
-`tools/demosaic_falsecolor/crop_blinds.py` → `/tmp/fc_crops/` (regenerable). Exact
-ROI pixels straight from each production sRGB TIFF (16→8-bit `>>8`, **no resample,
-no tone change**), ACR shifted by the measured −8,−8. `blinds_<opt>.png` (full
-310×1250 ROI) + `zoom4x_<opt>.png` (4×-nearest sub-tile of a slat-dense corner).
-Eyeball: rcd = broad cyan/magenta wash; med5i1 ≈ rcd (no help); mlri = less wash but
-softer; **ACR-NR-off = cleanest, crisp slats + neutral chroma**.
+**Committed to `docs/research/demosaic-false-color-crops/`** (regenerate with
+`tools/demosaic_falsecolor/crop_blinds.py <dir>`). Exact ROI pixels straight from
+each production sRGB TIFF (16→8-bit `>>8`, **no resample, no tone change**), ACR
+shifted by the measured −8,−8. `blinds_<opt>.png` (full 310×1250 ROI) +
+`zoom4x_<opt>.png` (4×-nearest sub-tile of a slat-dense corner). Eyeball: rcd = broad
+cyan/magenta wash; med5i1 ≈ rcd (no help); mlri = less wash but softer;
+**ACR-NR-off = cleanest, crisp slats + neutral chroma**.
 
 ## 8. Recommendation
 
@@ -240,13 +253,14 @@ LRT_RCD_CHROMA_MEDIAN=5 LRT_RCD_CHROMA_MEDIAN_ITERS=1 PYTHONPATH=<wt>/src \
 
 # battery (incl. grat2/grat3 adversarial cols) + crops:
 PYTHONPATH=<wt>/src python3 tools/demosaic_bench/run_battery.py /tmp/kodak
-PYTHONPATH=<wt>/src python3 tools/demosaic_falsecolor/crop_blinds.py /tmp/fc_crops
+PYTHONPATH=<wt>/src python3 tools/demosaic_falsecolor/crop_blinds.py docs/research/demosaic-false-color-crops
 ```
 
 ## 10. Artifacts
 
 - Metric/alignment: `tools/demosaic_falsecolor/metric.py`
-- Crops: `tools/demosaic_falsecolor/crop_blinds.py` → `/tmp/fc_crops/`
+- Crops (committed): `docs/research/demosaic-false-color-crops/` (script:
+  `tools/demosaic_falsecolor/crop_blinds.py`)
 - Adversarial chart: `tools/demosaic_bench/charts.py`
   (`isoluminant_color_grating`, `isoluminant_color_grating3`)
 - Recovery metric: `tools/demosaic_bench/metrics.py` (`chroma_amplitude_recovery`)
