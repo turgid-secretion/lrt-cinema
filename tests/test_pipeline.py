@@ -40,8 +40,10 @@ _GYM_DNG = fixture("DSC_4053.dng")
 # Gym ground-truth reference: prefer the `dng_validate` render; fall back to the
 # Adobe DNG **Converter** render (`DSC_4053_final.tif`) when it is absent. Both are
 # Adobe DNG-SDK renders of the same DNG + DCP and are empirically equivalent — our
-# stages-1-9 render scores the documented **0.026** mean ΔE2000 against `final.tif`,
-# identical to the historic dng_validate number. The fallback lets the gym ship-gate
+# stages-1-9 render scores the documented **0.023** mean ΔE2000 (re-pinned
+# 2026-06-10 after the WB-before-demosaic H1 fix; was 0.026 pre-fix; the
+# divide-back changes only quantisation + clipped-highlight handling on the
+# bilinear path). The fallback lets the gym ship-gate
 # RUN wherever an Adobe reference is present, instead of silently skipping forever on
 # a filename mismatch (it had been dormant for exactly that reason).
 # Regeneration recipe (FIXTURES.md): dng_validate -profile "Camera Standard" -16 -tif
@@ -160,8 +162,10 @@ def test_ship_gate_gym_de_under_1():
         f"Gym mean ΔE {m['mean']:.3f} exceeds ship gate {_SHIP_GATE_DE_MEAN}. "
         f"Detail: P50={m['P50']:.3f} P95={m['P95']:.3f} max={m['max']:.3f} "
         f"<1ΔE pixels={m['pct_lt_1']:.1f}%. "
-        "Baseline: 0.026 mean (hue-preserving RefBaselineRGBTone, 2026-05-30; "
-        "was 0.79 with per-channel tone)."
+        "Baseline: 0.023 mean / P95 0.193 / max 13.6 (WB-before-demosaic H1 "
+        "fix, 2026-06-10; max sits at 0.006% partially-clipped highlight px "
+        "where dng_validate reconstructs and the canonical clip-to-white "
+        "differs — CLAIMS.md). Was 0.026/0.320/2.06 (2026-05-30 lineage)."
     )
 
 
@@ -330,11 +334,20 @@ def test_stage_7_emission_preserves_more_overrange_than_stage_9():
     This is the load-bearing recovery claim of cinema-linear-master — and
     the one the shipped v0.7.1 quietly failed (the ExposureRamp clamped at
     1.0 before the Stage-7 emission point). See pipeline.py support_overrange
-    and tools/verify_emission_format.py check C3."""
+    and tools/verify_emission_format.py check C3.
+
+    Rendered with the 'rcd' CFA demosaic: the float CFA path preserves
+    blown-pixel levels through the WB-conditioned demosaic (scale → demosaic
+    → divide-back telescopes exactly), so Stage-2 WB still lifts clipped
+    whites above 1.0. The libraw 'linear' path post-H1-fix instead lands
+    blown pixels at NEUTRAL 1.0 by construction (canonical scale-then-clip,
+    dcraw/Adobe clip-to-white) — no overrange survives there BY DESIGN, so
+    bilinear is the wrong arm for this guard (CLAIMS.md, WB-before-demosaic
+    row)."""
     profile = parse_dcp(_GYM_DCP)
-    stage9 = render_frame(_GYM_DNG, profile, dcp_path=_GYM_DCP)
+    stage9 = render_frame(_GYM_DNG, profile, dcp_path=_GYM_DCP, demosaic="rcd")
     stage7 = render_frame(
-        _GYM_DNG, profile, dcp_path=_GYM_DCP, stop_after_stage=7,
+        _GYM_DNG, profile, dcp_path=_GYM_DCP, stop_after_stage=7, demosaic="rcd",
     )
     # Stage 9 clamps inside the tone-curve solver — no overrange survives.
     assert stage9.prophoto.max() <= 1.0 + 1e-3

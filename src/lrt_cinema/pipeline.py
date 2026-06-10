@@ -446,19 +446,34 @@ def _resolve_demosaic(rawpy_mod, demosaic: str):
     return algo
 
 
-def _postprocess_kwargs(rawpy_mod, half_size: bool, demosaic: str = "linear") -> dict:
+def _postprocess_kwargs(
+    rawpy_mod, half_size: bool, demosaic: str = "linear",
+    wb_mul: np.ndarray | None = None,
+) -> dict:
     """The maximally-neutral libraw postprocess args (shared by the demosaic
-    entry points so they cannot drift). No auto-bright, unit WB, raw output
-    colour, `demosaic` algorithm (default LINEAR = byte-exact / Adobe-SDK-matching;
+    entry points so they cannot drift). No auto-bright, raw output colour,
+    `demosaic` algorithm (default LINEAR = byte-exact / Adobe-SDK-matching;
     see `demosaic_camera_rgb`). `half_size` (preview) uses libraw's 2×2-bin and
-    ignores the algorithm choice."""
+    ignores the algorithm choice.
+
+    `wb_mul` (3,) G-normalised WB multipliers → passed as 4-value RGBG
+    `user_wb` so libraw scales the CFA BEFORE interpolating — the cross-engine
+    canonical order (dcraw: `scale_colors` → `*_interpolate`; libraw, RT and
+    LR likewise demosaic the white-balanced mosaic). The caller divides the
+    result back by the same multipliers to preserve the unbalanced-camera-RGB
+    contract (`_demosaic_rgb`). None → unit WB (the pre-fix behaviour; kept
+    for the synthetic-DNG identity tests)."""
+    user_wb = (
+        [float(wb_mul[0]), float(wb_mul[1]), float(wb_mul[2]), float(wb_mul[1])]
+        if wb_mul is not None else [1.0, 1.0, 1.0, 1.0]
+    )
     return dict(
         output_bps=16,
         gamma=(1, 1),
         no_auto_bright=True,
         use_camera_wb=False,
         use_auto_wb=False,
-        user_wb=[1.0, 1.0, 1.0, 1.0],
+        user_wb=user_wb,
         output_color=rawpy_mod.ColorSpace.raw,
         demosaic_algorithm=_resolve_demosaic(rawpy_mod, demosaic),
         half_size=half_size,
@@ -517,58 +532,106 @@ def _extract_cfa(raw) -> tuple[np.ndarray, str]:
     return cfa_norm[: h - (h % 2), : w - (w % 2)], pattern
 
 
-def _cfa_demosaic(raw, method: str) -> np.ndarray:
+def _cfa_demosaic(raw, method: str, wb_mul: np.ndarray | None = None) -> np.ndarray:
     """Demosaic an open rawpy `raw` on the extracted CFA with a CFA-domain `method`
-    ('rcd'|'mlri'|'menon'), headroom-preserving. Returns float32 (H, W, 3)."""
+    ('rcd'|'mlri'|'menon'), headroom-preserving. Returns float32 (H, W, 3).
+
+    `wb_mul` (3,) G-normalised WB multipliers: the CFA is scaled per-site by
+    them BEFORE interpolation and the result divided back after, so the output
+    stays unbalanced camera RGB. This is the cross-engine canonical order
+    (dcraw `scale_colors` → `*_interpolate`; libraw, RawTherapee, Lightroom
+    likewise demosaic the white-balanced mosaic): directional demosaics
+    estimate edges from inter-channel comparisons, which mis-fire on
+    unbalanced channels and invent saturated false colour at steep edges —
+    the owner-flagged cyan "venetian blinds". Bilinear COMMUTES with the
+    per-channel scale, which is exactly why the Adobe `dng_validate` gate
+    (bilinear reference) never caught the wrong order — see CLAIMS.md
+    "H1 CONFIRMED" + anti-drift rule 8. Headroom: scale → demosaic → divide
+    is exact in float; >1 values survive."""
     cfa, pattern = _extract_cfa(raw)
     # B1 mosaic-domain highlight-recon pre-pass (extract CFA → [B1] → demosaic).
-    # ENV-GATED, default off → byte-exact. See _b1_highlight + vertical-cyan-rootcause.
+    # ENV-GATED, default off → byte-exact; operates on the UN-scaled mosaic
+    # (its asn math is sensor-referred). See _b1_highlight (deletion pending —
+    # built for the refuted pre-H1 diagnosis).
     _b1 = os.environ.get("LRT_CINEMA_B1", "off")
     if _b1 and _b1 != "off":
         from lrt_cinema._b1_highlight import b1_reconstruct
         cfa = b1_reconstruct(cfa, pattern, _asn_from_wb(raw.camera_whitebalance), _b1)
+    if wb_mul is not None:
+        colors = raw.raw_colors_visible
+        h, w = cfa.shape
+        chan = np.where(colors[:h, :w] == 3, 1, colors[:h, :w])   # G2 → G
+        cfa = cfa * wb_mul[chan].astype(np.float32)
     if method == "rcd":
         from lrt_cinema import accel
-        return accel.rcd_demosaic(cfa, pattern)
-    if method == "mlri":
+        rgb = accel.rcd_demosaic(cfa, pattern)
+    elif method == "mlri":
         from lrt_cinema._mlri_demosaic import mlri_demosaic
-        return mlri_demosaic(cfa, pattern).astype(np.float32)
-    if method == "menon":  # colour_demosaicing BSD-3 Menon2007 (DDFAPD) — quality default
+        rgb = mlri_demosaic(cfa, pattern).astype(np.float32)
+    elif method == "menon":  # colour_demosaicing BSD-3 Menon2007 (DDFAPD) — quality default
         from colour_demosaicing import demosaicing_CFA_Bayer_Menon2007
         out = np.asarray(
             demosaicing_CFA_Bayer_Menon2007(cfa, pattern), dtype=np.float32,
         )
         # Floor ≥0 to match the RCD/MLRI convention (directional demosaics can ring
         # slightly negative at edges); NO top clip — preserve highlight headroom.
-        return np.maximum(out, np.float32(0.0))
-    raise ValueError(f"unknown CFA demosaic method {method!r}")
+        rgb = np.maximum(out, np.float32(0.0))
+    else:
+        raise ValueError(f"unknown CFA demosaic method {method!r}")
+    if wb_mul is not None:
+        rgb = rgb / wb_mul[None, None, :]
+    return rgb
 
 
-def _demosaic_rgb(raw, rawpy_mod, half_size: bool, demosaic: str) -> np.ndarray:
+def _libraw_rgb(raw, rawpy_mod, half_size: bool, demosaic: str,
+                wb_mul: np.ndarray | None) -> np.ndarray:
+    """libraw `postprocess` → unbalanced linear camera RGB in [0, 1].
+
+    With `wb_mul`, libraw scales the CFA before interpolating (canonical
+    order — see `_postprocess_kwargs`) and the output is divided back here.
+    libraw normalises the user multipliers by their MINIMUM (verified
+    empirically: user_wb [2,1,1.5,1] scales output by exactly [2,1,1.5] when
+    min=1), so the divide-back uses `wb_mul / wb_mul.min()`. Channels clip at
+    65535 pre-divide, so a blown pixel lands at `min/wb_c` per channel —
+    which Stage-2's re-multiply maps back to NEUTRAL white (Adobe/dcraw
+    "solid white" highlight-clip behaviour; the unit-WB path instead let
+    blown pixels go to the WB colour)."""
+    rgb = raw.postprocess(
+        **_postprocess_kwargs(rawpy_mod, half_size, demosaic, wb_mul),
+    ).astype(np.float32) / 65535.0
+    if wb_mul is not None:
+        rgb = rgb / (wb_mul / wb_mul.min())[None, None, :]
+    return rgb
+
+
+def _demosaic_rgb(raw, rawpy_mod, half_size: bool, demosaic: str,
+                  wb_mul: np.ndarray | None = None) -> np.ndarray:
     """Linear camera RGB (H, W, 3) float32 from an OPEN rawpy `raw`. A CFA-domain
     method ('rcd'/'mlri'/'menon', full-res only) runs on the extracted CFA
     (headroom-preserving), falling back to libraw 'linear' on a non-Bayer sensor, a
     missing optional dep (e.g. colour_demosaicing for 'menon'), or ANY error; preview
     (half_size) and libraw algos go through `postprocess` (/65535). Shared by
-    `demosaic_camera_rgb` + `_decode_raw` so they cannot drift."""
+    `demosaic_camera_rgb` + `_decode_raw` so they cannot drift.
+
+    `wb_mul` (3,) G-normalised WB multipliers → demosaic the white-balanced
+    mosaic, divide back after (cross-engine canonical order; the H1 cyan
+    root-cause fix — see `_cfa_demosaic`). Output stays unbalanced camera RGB
+    either way."""
     if demosaic in _CFA_DEMOSAICS and not half_size:
         try:
-            rgb = _cfa_demosaic(raw, demosaic)
+            rgb = _cfa_demosaic(raw, demosaic, wb_mul)
         except Exception as exc:  # noqa: BLE001 — any failure → safe libraw fallback
             import sys
             sys.stderr.write(
                 f"warning: demosaic '{demosaic}' unavailable ({exc}); "
                 f"falling back to 'linear'.\n",
             )
-            rgb = raw.postprocess(
-                **_postprocess_kwargs(rawpy_mod, half_size, "linear"),
-            ).astype(np.float32) / 65535.0
+            rgb = _libraw_rgb(raw, rawpy_mod, half_size, "linear", wb_mul)
     else:
-        rgb = raw.postprocess(
-            **_postprocess_kwargs(rawpy_mod, half_size, demosaic),
-        ).astype(np.float32) / 65535.0
+        rgb = _libraw_rgb(raw, rawpy_mod, half_size, demosaic, wb_mul)
     # Post-demosaic chroma-difference median (env-gated, default off → byte-exact).
-    # Smooths demosaic false colour BEFORE white balance. See _b1_highlight.
+    # Smooths demosaic false colour BEFORE white balance. See _b1_highlight
+    # (deletion pending — built for the refuted pre-H1 diagnosis).
     _cm = os.environ.get("LRT_CINEMA_CHROMA_MED", "")
     if _cm:
         from lrt_cinema._b1_highlight import chroma_diff_median
@@ -584,8 +647,17 @@ def _asn_from_wb(camera_whitebalance) -> np.ndarray:
     return (asn / asn[1]).astype(np.float32)
 
 
+def _wb_mul_from_asn(asn: np.ndarray) -> np.ndarray:
+    """AsShotNeutral → Stage-2's exact G-normalised WB multipliers (3,).
+    Shared by the demosaic pre-scale and Stage 2 so the divide-back/re-multiply
+    cancel exactly."""
+    wb = 1.0 / np.asarray(asn, dtype=np.float32)
+    return (wb / wb[1]).astype(np.float32)
+
+
 def demosaic_camera_rgb(
     raw_path: str | Path, half_size: bool = False, demosaic: str = "linear",
+    wb_asn: np.ndarray | None = None,
 ) -> np.ndarray:
     """Demosaic via libraw with maximally-neutral postprocess settings.
 
@@ -594,6 +666,13 @@ def demosaic_camera_rgb(
     theoretical 16383). Both close real-world ΔE vs dng_validate; see
     `docs/research/dng-pipeline-findings.md` §"Verification of the LINEAR
     demosaic finding".
+
+    The mosaic is white-balance-scaled BEFORE interpolation and divided back
+    after (cross-engine canonical order; the H1 cyan fix — `_cfa_demosaic`),
+    so the return contract is unchanged: UNBALANCED linear camera RGB.
+    `wb_asn` selects the neutral used for that conditioning — default None =
+    the camera AsShotNeutral (dcraw's default); pass the develop/render
+    neutral when known so the pre-scale matches Stage 2 exactly.
 
     `half_size` (preview only): libraw's fast 2×2-bin demosaic — one output
     pixel per Bayer quad, so it skips interpolation AND returns a (H/2, W/2)
@@ -607,26 +686,33 @@ def demosaic_camera_rgb(
     import rawpy
 
     with rawpy.imread(str(raw_path)) as raw:
-        return _demosaic_rgb(raw, rawpy, half_size, demosaic)
+        asn = wb_asn if wb_asn is not None else _asn_from_wb(raw.camera_whitebalance)
+        return _demosaic_rgb(raw, rawpy, half_size, demosaic, _wb_mul_from_asn(asn))
 
 
 def _decode_raw(
     raw_path: str | Path, half_size: bool = False, demosaic: str = "linear",
+    wb_asn: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Open the raw ONCE; return (linear camera RGB, AsShotNeutral).
+    """Open the raw ONCE; return (linear camera RGB, camera AsShotNeutral).
 
     `render_frame` needs both the demosaiced pixels and the camera AsShotNeutral;
     opening the file twice (`read_as_shot_neutral` + `demosaic_camera_rgb`) wastes
     a full ~0.3 s raw decode per frame — dominant at high `preview_scale`, where
-    the pixel work is tiny. This folds them into a single `rawpy.imread`. The
-    returned values are byte-identical to the two separate calls (same WB tag,
-    same postprocess args)."""
+    the pixel work is tiny. This folds them into a single `rawpy.imread`.
+
+    `wb_asn`: the neutral for the demosaic WB pre-conditioning (canonical
+    scale-before-interpolate order, H1 fix). None → the camera AsShotNeutral.
+    Callers that override WB downstream (Holy-Grail kelvin) pass their final
+    neutral so the pre-scale matches Stage 2 exactly. The returned
+    AsShotNeutral is ALWAYS the camera tag (unchanged contract)."""
     import rawpy
 
     with rawpy.imread(str(raw_path)) as raw:
-        asn = _asn_from_wb(raw.camera_whitebalance)
-        rgb = _demosaic_rgb(raw, rawpy, half_size, demosaic)
-    return rgb, asn
+        cam_asn = _asn_from_wb(raw.camera_whitebalance)
+        asn = wb_asn if wb_asn is not None else cam_asn
+        rgb = _demosaic_rgb(raw, rawpy, half_size, demosaic, _wb_mul_from_asn(asn))
+    return rgb, cam_asn
 
 
 def _block_downsample(img: np.ndarray, k: int) -> np.ndarray:
@@ -919,18 +1005,27 @@ def render_frame(
             f"preview_scale must be one of {_PREVIEW_SCALES}, got {preview_scale}",
         )
 
-    # One raw open yields both the demosaiced pixels and AsShotNeutral (the
-    # separate read wasted a full decode — costly at high preview_scale).
-    camera_rgb, asn = _decode_raw(
-        raw_path, half_size=(preview_scale >= 2), demosaic=demosaic,
-    )
-    if preview_scale >= 2:
-        camera_rgb = _block_downsample(camera_rgb, preview_scale // 2)
-
+    # The render WB is resolved BEFORE the decode: the demosaic pre-conditions
+    # the mosaic with the SAME neutral Stage 2 will use (scale-before-
+    # interpolate canonical order, H1 cyan fix — `_cfa_demosaic`), so the
+    # Holy-Grail kelvin override must be known up front.
     scene_kelvin = DEFAULT_SCENE_KELVIN
+    override_asn: np.ndarray | None = None
     if develop_ops is not None and develop_ops.temperature_k is not None:
         scene_kelvin = float(develop_ops.temperature_k)
-        asn = kelvin_to_neutral(profile, scene_kelvin, float(develop_ops.tint or 0.0))
+        override_asn = kelvin_to_neutral(
+            profile, scene_kelvin, float(develop_ops.tint or 0.0),
+        )
+
+    # One raw open yields both the demosaiced pixels and AsShotNeutral (the
+    # separate read wasted a full decode — costly at high preview_scale).
+    camera_rgb, cam_asn = _decode_raw(
+        raw_path, half_size=(preview_scale >= 2), demosaic=demosaic,
+        wb_asn=override_asn,
+    )
+    asn = override_asn if override_asn is not None else cam_asn
+    if preview_scale >= 2:
+        camera_rgb = _block_downsample(camera_rgb, preview_scale // 2)
 
     dng_be = read_dng_baseline_exposure(raw_path)
     dbr = read_dcp_default_black_render(dcp_path) if dcp_path is not None else 0

@@ -246,9 +246,9 @@ def _render_scene_referred(seq, frame_index: int, k: float, dcp_path: Path) -> P
         CAL_DIR / seq.source_frames[frame_index], CAL_DIR / ".dng-cache",
         no_convert=False,
     )
-    camera_rgb, asn = _decode_raw(dng, demosaic="linear")
     scene_kelvin = float(ops.temperature_k)
     asn = kelvin_to_neutral(profile, scene_kelvin, float(ops.tint or 0.0))
+    camera_rgb, _cam_asn = _decode_raw(dng, demosaic="linear", wb_asn=asn)
     camera_rgb = camera_rgb * np.float32(2.0 ** ev)
     prophoto = apply_adobe_pipeline(
         camera_rgb=camera_rgb, profile=profile, as_shot_neutral=asn,

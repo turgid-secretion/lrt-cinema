@@ -309,13 +309,22 @@ def mlx_render_frame_to_srgb(raw_path, profile, develop_ops=None,
     renderer = _get_mlx_renderer(
         profile, cache_key=(str(dcp_path) if dcp_path is not None else None),
     )  # may raise MlxUnsupported
-    cam, asn = P._decode_raw(raw_path, half_size=(preview_scale >= 2))
-    if preview_scale >= 2:
-        cam = P._block_downsample(cam, preview_scale // 2)
+    # WB resolved BEFORE decode so the demosaic pre-conditioning uses the
+    # final render neutral (H1 fix — mirrors pipeline.render_frame). Also
+    # passes the develop TINT, which this path previously dropped.
     scene_kelvin = P.DEFAULT_SCENE_KELVIN
+    override_asn = None
     if ops.temperature_k is not None:
         scene_kelvin = float(ops.temperature_k)
-        asn = P.kelvin_to_neutral(profile, scene_kelvin)
+        override_asn = P.kelvin_to_neutral(
+            profile, scene_kelvin, float(ops.tint or 0.0),
+        )
+    cam, cam_asn = P._decode_raw(
+        raw_path, half_size=(preview_scale >= 2), wb_asn=override_asn,
+    )
+    asn = override_asn if override_asn is not None else cam_asn
+    if preview_scale >= 2:
+        cam = P._block_downsample(cam, preview_scale // 2)
     dng_be = P.read_dng_baseline_exposure(raw_path)
     dbr = P.read_dcp_default_black_render(dcp_path) if dcp_path is not None else 0
     return renderer.render(cam, asn, scene_kelvin, ops, dng_be, dbr)
