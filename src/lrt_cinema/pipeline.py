@@ -943,6 +943,16 @@ def render_frame(
         from lrt_cinema.highlight_recovery import reconstruct_highlights
         camera_rgb = reconstruct_highlights(camera_rgb, asn)
 
+    # LRT mask-EV corrections (deflicker / Holy-Grail / global): a
+    # scene-referred linear gain, pre-Stage-2 — Lightroom applies
+    # LocalExposure2012 (×4, see interpolation.LR_LOCAL_EXPOSURE_SCALE)
+    # upstream of the tone pipeline; the post-curve `exposure_ev` domain
+    # measurably cannot match it (tools/cal_deflicker_factor.py, CLAIMS.md
+    # "Exact mask-exposure factor"). After highlight recovery: recovery's
+    # clip detection is sensor-referred.
+    if develop_ops is not None and develop_ops.scene_exposure_ev != 0.0:
+        camera_rgb = camera_rgb * np.float32(2.0 ** develop_ops.scene_exposure_ev)
+
     prophoto = apply_adobe_pipeline(
         camera_rgb=camera_rgb,
         profile=profile,

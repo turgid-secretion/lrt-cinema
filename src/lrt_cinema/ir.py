@@ -170,6 +170,14 @@ class DevelopOps:
 
     # Exposure / tone
     exposure_ev: float = 0.0          # crs:Exposure2012
+    # Scene-referred exposure delta — NOT a crs: slider. Carries the LRT
+    # per-frame mask-EV corrections (Deflicker / Holy-Grail / Global), whose
+    # serialized LocalExposure2012 is EV/4 and which Lightroom applies as a
+    # linear gain UPSTREAM of the DCP tone pipeline. render_frame multiplies
+    # camera RGB by 2^this before Stage 2; the post-curve exposure_ev domain
+    # measurably cannot reproduce it (CLAIMS.md "Exact mask-exposure factor",
+    # tools/cal_deflicker_factor.py).
+    scene_exposure_ev: float = 0.0
     contrast: float = 0.0             # crs:Contrast2012 (-100..100)
     highlights: float = 0.0           # crs:Highlights2012 (-100..100)
     shadows: float = 0.0              # crs:Shadows2012 (-100..100)
@@ -263,6 +271,7 @@ class DevelopOps:
 
         return DevelopOps(
             exposure_ev=lerp_f(self.exposure_ev, other.exposure_ev),
+            scene_exposure_ev=lerp_f(self.scene_exposure_ev, other.scene_exposure_ev),
             contrast=lerp_f(self.contrast, other.contrast),
             highlights=lerp_f(self.highlights, other.highlights),
             shadows=lerp_f(self.shadows, other.shadows),

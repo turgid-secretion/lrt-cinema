@@ -170,6 +170,10 @@ def test_materialize_all_frames_covers_full_sequence():
 
 
 def test_apply_deflicker_adds_per_frame_delta():
+    # Serialized LocalExposure2012 is EV/4: the applied correction is ×4
+    # (LR_LOCAL_EXPOSURE_SCALE), landing on the SCENE-REFERRED channel —
+    # the post-curve exposure_ev must stay untouched (CLAIMS.md "Exact
+    # mask-exposure factor").
     seq = _seq(4, [
         Keyframe(frame_index=0, ops=DevelopOps(exposure_ev=1.0)),
         Keyframe(frame_index=3, ops=DevelopOps(exposure_ev=1.0)),
@@ -179,15 +183,17 @@ def test_apply_deflicker_adds_per_frame_delta():
     ])
     frames = materialize_all_frames(seq)
     deflickered = apply_deflicker(frames, seq)
-    assert deflickered[0].exposure_ev == 1.0
-    assert deflickered[1].exposure_ev == pytest.approx(1.1)
-    assert deflickered[2].exposure_ev == pytest.approx(0.95)
-    assert deflickered[3].exposure_ev == 1.0
+    assert deflickered[0].scene_exposure_ev == 0.0
+    assert deflickered[1].scene_exposure_ev == pytest.approx(0.4)    # 4 × 0.1
+    assert deflickered[2].scene_exposure_ev == pytest.approx(-0.2)   # 4 × -0.05
+    assert deflickered[3].scene_exposure_ev == 0.0
+    assert all(f.exposure_ev == 1.0 for f in deflickered)            # untouched
 
 
 def test_apply_lrt_mask_offsets_sums_kinds_per_frame():
     # ADVERSARIAL_AUDIT_2026-05-23 HIGH-2: real-LRT mask corrections
-    # (HG/Deflicker/Global) sum additively per frame onto exposure_ev.
+    # (HG/Deflicker/Global) sum additively per frame — onto the
+    # scene-referred channel, ×4 (same LocalExposure2012 serialization).
     seq = _seq(4, [
         Keyframe(frame_index=0, ops=DevelopOps(exposure_ev=1.0)),
         Keyframe(frame_index=3, ops=DevelopOps(exposure_ev=1.0)),
@@ -200,25 +206,29 @@ def test_apply_lrt_mask_offsets_sums_kinds_per_frame():
     ]
     frames = materialize_all_frames(seq)
     applied = apply_lrt_mask_offsets(frames, seq)
-    # Frame 1: sum of all three kinds = 0.30 - 0.05 + 0.10 = 0.35
-    assert applied[1].exposure_ev == pytest.approx(1.35)
-    # Frame 2: only deflicker
-    assert applied[2].exposure_ev == pytest.approx(1.20)
-    # Frames with no offsets untouched
-    assert applied[0].exposure_ev == 1.0
-    assert applied[3].exposure_ev == 1.0
+    # Frame 1: 4 × (0.30 - 0.05 + 0.10) = 1.40
+    assert applied[1].scene_exposure_ev == pytest.approx(1.40)
+    # Frame 2: only deflicker, 4 × 0.20
+    assert applied[2].scene_exposure_ev == pytest.approx(0.80)
+    # Frames with no offsets untouched; exposure_ev never touched
+    assert applied[0].scene_exposure_ev == 0.0
+    assert applied[3].scene_exposure_ev == 0.0
+    assert all(f.exposure_ev == 1.0 for f in applied)
 
 
-def test_deflicker_scale_b2():
-    """B2: deflicker_scale multiplies ONLY the deflicker delta (HG/Global untouched);
-    default 1.0 is byte-exact (the LRT-authored value)."""
-    # apply_deflicker (synthetic offsets): scale multiplies the delta.
+def test_deflicker_scale_trims_corrected_baseline():
+    """deflicker_scale is an owner trim on the CALIBRATED (×4) deflicker
+    correction, deflicker kind only (HG/Global untouched). Default 1.0 =
+    the Lightroom-faithful baseline."""
+    # apply_deflicker (synthetic offsets): scale multiplies the corrected delta.
     seq = _seq(3, [Keyframe(frame_index=0, ops=DevelopOps(exposure_ev=1.0))],
                deflicker=[DeflickerOffset(frame_index=1, exposure_delta_ev=0.1)])
-    assert apply_deflicker(materialize_all_frames(seq), seq, scale=1.0)[1].exposure_ev \
-        == pytest.approx(1.1)               # default unchanged
-    assert apply_deflicker(materialize_all_frames(seq), seq, scale=3.0)[1].exposure_ev \
-        == pytest.approx(1.3)               # 1.0 + 3*0.1
+    assert apply_deflicker(materialize_all_frames(seq), seq, scale=1.0)[1] \
+        .scene_exposure_ev == pytest.approx(0.4)    # calibrated baseline 4×0.1
+    assert apply_deflicker(materialize_all_frames(seq), seq, scale=3.0)[1] \
+        .scene_exposure_ev == pytest.approx(1.2)    # trim ×3 on the baseline
+    assert apply_deflicker(materialize_all_frames(seq), seq, scale=0.0)[1] \
+        .scene_exposure_ev == 0.0                   # 0.0 disables deflicker
 
     # apply_lrt_mask_offsets: deflicker_scale hits ONLY the deflicker kind.
     seq2 = _seq(2, [Keyframe(frame_index=0, ops=DevelopOps(exposure_ev=0.0))])
@@ -227,17 +237,18 @@ def test_deflicker_scale_b2():
         LRTMaskOffset(frame_index=1, kind="deflicker", exposure_delta_ev=0.10),
         LRTMaskOffset(frame_index=1, kind="global",    exposure_delta_ev=0.20),
     ]
-    # default 1.0: 0.30 + 0.10 + 0.20 = 0.60 (byte-exact)
+    # default 1.0: 4 × (0.30 + 0.10 + 0.20) = 2.40
     assert apply_lrt_mask_offsets(
-        materialize_all_frames(seq2), seq2)[1].exposure_ev == pytest.approx(0.60)
-    # scale 3.0: hg 0.30 + deflicker 0.10*3 + global 0.20 = 0.80 (only deflicker scaled)
+        materialize_all_frames(seq2), seq2)[1].scene_exposure_ev \
+        == pytest.approx(2.40)
+    # scale 3.0: 4×0.30 + 4×0.10×3 + 4×0.20 = 3.20 (only deflicker trimmed)
     assert apply_lrt_mask_offsets(
-        materialize_all_frames(seq2), seq2, deflicker_scale=3.0)[1].exposure_ev \
-        == pytest.approx(0.80)
+        materialize_all_frames(seq2), seq2, deflicker_scale=3.0)[1] \
+        .scene_exposure_ev == pytest.approx(3.20)
 
 
 def test_apply_lrt_mask_offsets_kinds_filter():
-    # Only the requested kinds apply.
+    # Only the requested kinds apply (×4 calibrated scale on each).
     seq = _seq(2, [Keyframe(frame_index=0, ops=DevelopOps(exposure_ev=0.0))])
     seq.lrt_mask_offsets = [
         LRTMaskOffset(frame_index=0, kind="hg",        exposure_delta_ev=1.0),
@@ -246,7 +257,7 @@ def test_apply_lrt_mask_offsets_kinds_filter():
     ]
     frames = materialize_all_frames(seq)
     only_hg = apply_lrt_mask_offsets(frames[:], seq, kinds=("hg",))
-    assert only_hg[0].exposure_ev == pytest.approx(1.0)
+    assert only_hg[0].scene_exposure_ev == pytest.approx(4.0)
     frames2 = materialize_all_frames(seq)
     only_dfk = apply_lrt_mask_offsets(frames2, seq, kinds=("deflicker",))
-    assert only_dfk[0].exposure_ev == pytest.approx(2.0)
+    assert only_dfk[0].scene_exposure_ev == pytest.approx(8.0)

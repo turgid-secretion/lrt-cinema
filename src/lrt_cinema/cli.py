@@ -180,18 +180,13 @@ def _build_parser() -> argparse.ArgumentParser:
     render.add_argument(
         "--deflicker-scale", dest="deflicker_scale", type=float, default=1.0,
         help=(
-            "Multiply the per-frame DEFLICKER EV delta (LocalExposure2012) by this "
-            "factor before applying it (HG/Global untouched). Default 1.0 applies "
-            "the LRT-authored value as-is (byte-exact with prior renders). "
-            "MEASURED 2026-06-10 (CLAIMS.md): against the owner-approved "
-            "LRTimelapse-internal JPG renders of the production sequence, the "
-            "brightness drift correlates with this EV channel at r=1.000 and "
-            "flattens at scale ~3.1 (frame-250 gain 1.081 -> 1.006, dE 2.30 -> "
-            "1.49) — LRT's internal engine applies ~3x the serialized EV. The "
-            "earlier B2 audit's '1.0 confirmed correct' conclusion is superseded; "
-            "whether 3.1 reflects Lightroom's mask semantics (our bug) or "
-            "LRT-internal's over-application (a look choice) is pending the "
-            "fresh-Lightroom-export arbiter test. Until then the default stays 1.0."
+            "Trim multiplier on the CORRECTED per-frame DEFLICKER correction "
+            "(HG/Global untouched). The serialized LocalExposure2012 is EV/4; "
+            "the renderer applies the calibrated 4x as a scene-referred gain "
+            "(CALIBRATED 2026-06-10, k*=3.992+/-0.027, CLAIMS.md 'Exact "
+            "mask-exposure factor'). Default 1.0 = the Lightroom-faithful "
+            "calibrated application; 0.0 disables deflicker; values !=1.0 are "
+            "an owner look-trim on top of the correct baseline."
         ),
     )
     render.add_argument(

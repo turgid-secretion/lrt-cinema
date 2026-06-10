@@ -71,33 +71,45 @@ def materialize_all_frames(seq: LRTSequence) -> list[DevelopOps]:
     return [interpolate(seq, i) for i in range(seq.frame_count())]
 
 
+# Lightroom serializes local/mask exposure (crs:LocalExposure2012) as EV/4 —
+# the local slider spans ±4 EV — and applies 2^(4·serialized) as a linear gain
+# UPSTREAM of the DCP tone pipeline. Calibrated 2026-06-10 on owner-exported
+# single-variable CAL frames: k* = 3.992 ± 0.027 across two EV levels, sharp
+# minimum, ΔE 0.20/0.44 at exactly 4.0 (tools/cal_deflicker_factor.py;
+# CLAIMS.md "Exact mask-exposure factor"). History: the order audit's F3
+# (2026-06-04) had flagged the ~3× under-delivery; the B2 audit wrongly
+# refuted it; the LR-arbiter + CAL experiments re-confirmed and sharpened it.
+LR_LOCAL_EXPOSURE_SCALE = 4.0
+
+
 def apply_deflicker(
     per_frame_ops: list[DevelopOps], seq: LRTSequence, scale: float = 1.0,
 ) -> list[DevelopOps]:
     """Apply LRT-written per-frame deflicker exposure deltas in place.
 
-    Each `DeflickerOffset(frame_index, exposure_delta_ev)` adds its (scaled)
-    delta onto that frame's exposure_ev. Frames without a recorded
-    offset are unchanged.
+    Each `DeflickerOffset(frame_index, exposure_delta_ev)` carries a
+    serialized `LocalExposure2012` value; the true correction is
+    `LR_LOCAL_EXPOSURE_SCALE ×` that, applied **scene-referred** — so it is
+    added to that frame's `scene_exposure_ev` (a pre-Stage-2 linear gain in
+    `render_frame`), NOT the post-tone-curve `exposure_ev`. Both the ×4 and
+    the domain are measured, not assumed: the post-curve domain cannot match
+    Lightroom at HG-ramp magnitudes for any factor (CLAIMS.md "Exact
+    mask-exposure factor"; evidence
+    `tests/fixtures/evidence/cal_deflicker_factor_2026-06-10.json`).
 
-    `scale` (B2) multiplies the deflicker EV delta before it is applied. Default
-    1.0 = byte-exact AND **correct** — the B2 root-cause audit
-    (docs/research/deflicker-rootcause-audit.md) confirmed the deflicker is correctly
-    scaled at 1:1 (it's short-term *by design*, so the long-term drift isn't its job;
-    a linear preview test shows scaling up ≥2× provably *worsens* flicker). The "~3×"
-    was a **scalar-gain conflation** — a no-offset per-frame gain `LRT≈g·ours`
-    conflates exposure with tone-shape, so a fixed tone-curve difference back-solves
-    into a fake deflicker factor; the residual drift is the PV2012 tone-curve-shape gap
-    (DECISIONS §11), not the deflicker. The knob stays only as an owner escape hatch;
-    **leave it at 1.0**.
+    `scale` multiplies the **corrected** delta (an owner trim knob on top of
+    the calibrated baseline). Default 1.0 = the calibrated Lightroom-faithful
+    application; 0.0 disables deflicker entirely.
 
     Returns the mutated list (also mutates `per_frame_ops` for in-place callers).
     """
     delta_by_frame = {d.frame_index: d.exposure_delta_ev for d in seq.deflicker_offsets}
     for i, ops in enumerate(per_frame_ops):
-        delta = delta_by_frame.get(i, 0.0) * scale
+        delta = delta_by_frame.get(i, 0.0) * LR_LOCAL_EXPOSURE_SCALE * scale
         if delta != 0.0:
-            per_frame_ops[i] = replace(ops, exposure_ev=ops.exposure_ev + delta)
+            per_frame_ops[i] = replace(
+                ops, scene_exposure_ev=ops.scene_exposure_ev + delta,
+            )
     return per_frame_ops
 
 
@@ -109,22 +121,24 @@ def apply_lrt_mask_offsets(
     """Apply real-LRT mask-correction per-frame exposure deltas in place.
 
     Real LRT 7.5.3 emits Holy Grail / Visual Deflicker / Global per-frame
-    EV deltas inside `crs:MaskGroupBasedCorrections`. Parser extracts
-    those as `LRTMaskOffset(frame_index, kind, exposure_delta_ev)` and
-    stores them on `seq.lrt_mask_offsets`. This function sums all
-    requested kinds per frame and adds to that frame's `exposure_ev`.
+    EV deltas inside `crs:MaskGroupBasedCorrections` (serialized
+    `LocalExposure2012`, i.e. EV/4 — see `LR_LOCAL_EXPOSURE_SCALE`). Parser
+    extracts those as `LRTMaskOffset(frame_index, kind, exposure_delta_ev)`
+    on `seq.lrt_mask_offsets`. This function sums all requested kinds per
+    frame, scales by `LR_LOCAL_EXPOSURE_SCALE`, and adds to that frame's
+    `scene_exposure_ev` — the scene-referred pre-Stage-2 gain, matching
+    where Lightroom applies local exposure. All three kinds are the same
+    serialization, so all three get the ×4 (sequence-validated for the
+    deflicker kind; mechanism-derived for HG/Global, which are zero in the
+    current production sequence).
 
     `kinds` selects which sources to apply; default is all three. Pass
     `("deflicker",)` to apply only Deflicker corrections, etc. Matches
     the CLI's per-source toggle semantics.
 
-    `deflicker_scale` (B2) multiplies ONLY the **deflicker**-kind delta (HG/Global
-    untouched). Default 1.0 = byte-exact AND correct — the B2 audit
-    (docs/research/deflicker-rootcause-audit.md) found the deflicker correctly scaled
-    at 1:1; the "~3×" was a **scalar-gain conflation** (a no-offset gain mixes exposure
-    with tone-shape, so a fixed tone-curve difference back-solves into a fake deflicker
-    factor) and the residual drift is the PV2012 tone-shape gap, not the deflicker.
-    Owner escape hatch only; **leave at 1.0**.
+    `deflicker_scale` multiplies ONLY the **deflicker**-kind corrected delta
+    (HG/Global untouched) — an owner trim knob on the calibrated baseline.
+    Default 1.0 = the calibrated Lightroom-faithful application.
 
     Mutates `per_frame_ops` in place and returns it. See
     ADVERSARIAL_AUDIT_2026-05-23 HIGH-2 for context.
@@ -134,18 +148,21 @@ def apply_lrt_mask_offsets(
     for off in seq.lrt_mask_offsets:
         if off.kind not in kinds_set:
             continue
-        ev = off.exposure_delta_ev
+        ev = off.exposure_delta_ev * LR_LOCAL_EXPOSURE_SCALE
         if off.kind == "deflicker":
             ev *= deflicker_scale
         sum_by_frame[off.frame_index] = sum_by_frame.get(off.frame_index, 0.0) + ev
     for i, ops in enumerate(per_frame_ops):
         delta = sum_by_frame.get(i, 0.0)
         if delta != 0.0:
-            per_frame_ops[i] = replace(ops, exposure_ev=ops.exposure_ev + delta)
+            per_frame_ops[i] = replace(
+                ops, scene_exposure_ev=ops.scene_exposure_ev + delta,
+            )
     return per_frame_ops
 
 
 __all__ = [
+    "LR_LOCAL_EXPOSURE_SCALE",
     "apply_deflicker",
     "apply_lrt_mask_offsets",
     "interpolate",

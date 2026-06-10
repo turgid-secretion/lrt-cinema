@@ -354,6 +354,11 @@ class MlxFaithfulRenderer:
         M = mx.array(self._frame_matrix(asn, scene_kelvin))
         x = mx.array(np.ascontiguousarray(camera_rgb.reshape(-1, 3), np.float32))
 
+        # LRT mask-EV corrections: scene-referred gain pre-Stage-2, mirroring
+        # pipeline.render_frame (CLAIMS.md "Exact mask-exposure factor").
+        if ops.scene_exposure_ev != 0.0:
+            x = x * (2.0 ** ops.scene_exposure_ev)
+
         pp = x @ M.T                                              # stages 2-4
         # stage 7 ExposureRamp (support_overrange=False, clamp linear to 1)
         ev = dng_baseline_exposure + self._be_offset
