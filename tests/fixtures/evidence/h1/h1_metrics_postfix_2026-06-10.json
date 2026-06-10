@@ -1,0 +1,42 @@
+{
+ "crop_yx": [
+  1352,
+  584
+ ],
+ "kelvin": 4034.0,
+ "tint": 20.0,
+ "metrics": {
+  "rcd-current": {
+   "cyan_mean_x1000": 13.461,
+   "cyan_p99.5_x1000": 187.74
+  },
+  "rcd-h1": {
+   "cyan_mean_x1000": 10.982,
+   "cyan_p99.5_x1000": 87.18
+  },
+  "rcd-pipeline": {
+   "cyan_mean_x1000": 10.982,
+   "cyan_p99.5_x1000": 87.18
+  },
+  "menon-current": {
+   "cyan_mean_x1000": 13.749,
+   "cyan_p99.5_x1000": 197.81
+  },
+  "menon-h1": {
+   "cyan_mean_x1000": 11.192,
+   "cyan_p99.5_x1000": 94.47
+  },
+  "menon-pipeline": {
+   "cyan_mean_x1000": 11.192,
+   "cyan_p99.5_x1000": 94.47
+  },
+  "LR-Classic": {
+   "cyan_mean_x1000": 10.93,
+   "cyan_p99.5_x1000": 84.48
+  },
+  "LRT-jpg": {
+   "cyan_mean_x1000": 10.076,
+   "cyan_p99.5_x1000": 69.89
+  }
+ }
+}

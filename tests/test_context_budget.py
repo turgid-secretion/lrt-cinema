@@ -32,7 +32,12 @@ _CLAUDE_MD_CAP = 10_240
 # (4 bannered reference docs + docs/reference/lrtimelapse). +4 KB slack so a
 # one-line correction doesn't fail CI; lower it, never raise it, without an
 # owner-approved commit saying why.
-_LIVE_DOCS_BUDGET = 220_190 + 4_096
+# 2026-06-10 (same day, later): +8 KB for docs/REFERENCE_PIPELINE.md — the
+# cross-engine canon table the owner explicitly requested and pre-approved
+# in the session brief ("I pre-approve this one file"; anti-drift rule 8
+# names it as the queued artifact). Seed is 7,213 bytes; the build-out must
+# fit the allowance or archive prose elsewhere first.
+_LIVE_DOCS_BUDGET = 220_190 + 4_096 + 8_192
 
 # Rule 3 — files that existed at the freeze (grandfathered; everything else
 # under live docs/ must carry an "Owner-approved:" line).

@@ -101,11 +101,19 @@ def main() -> int:
     algos = {"rcd": lambda c: accel.rcd_demosaic(c, pattern), "menon": menon}
     renders: dict[str, np.ndarray] = {}
     for name, dm in algos.items():
-        for cond in ("current", "h1"):
+        # "current" = the PRE-FIX behaviour (demosaic the raw mosaic), kept as
+        # the historical arm; "h1" = the hand-built target arm; "pipeline" =
+        # the SHIPPED production path (`_cfa_demosaic` with wb_mul, post
+        # 2026-06-10 WB-before-demosaic fix) — must land on the h1 arm.
+        for cond in ("current", "h1", "pipeline"):
             if cond == "current":
                 rgb = dm(cfa).astype(np.float32)
-            else:
+            elif cond == "h1":
                 rgb = (dm(cfa * gainmap) / wb_mul[None, None, :]).astype(np.float32)
+            else:
+                from lrt_cinema.pipeline import _cfa_demosaic
+                with rawpy.imread(str(DNG)) as raw2:
+                    rgb = _cfa_demosaic(raw2, name, wb_mul.astype(np.float32))
             pp = apply_adobe_pipeline(rgb, profile, asn, KELVIN,
                                       dng_baseline_exposure=dng_be, stop_after_stage=9)
             renders[f"{name}-{cond}"] = _srgb8(pp)
@@ -132,7 +140,8 @@ def main() -> int:
     print(f"artifact hotspot (ours-minus-LR) crop @ y={cy0} x={cx0} (ours grid)")
 
     metrics, panels = {}, []
-    for name in ("rcd-current", "rcd-h1", "menon-current", "menon-h1"):
+    for name in ("rcd-current", "rcd-h1", "rcd-pipeline",
+                 "menon-current", "menon-h1", "menon-pipeline"):
         crop = renders[name][cy0:cy0 + CROP, cx0:cx0 + CROP]
         c = _cyanness(crop)
         metrics[name] = {"cyan_mean_x1000": round(float(c.mean()) * 1000, 3),
