@@ -39,15 +39,16 @@ tifffile = pytest.importorskip("tifffile")
 from lrt_cinema.dcp import parse_dcp  # noqa: E402
 from lrt_cinema.pipeline import read_as_shot_neutral, render_frame  # noqa: E402
 from tests import synthetic_dng as sd  # noqa: E402
+from tests.fixture_paths import dng_validate_binary, fixture, fixture_root  # noqa: E402
 from tests.test_pipeline import _prophoto_to_srgb_8bit, _to_lab_d65  # noqa: E402
 
-_DNG_VALIDATE = Path("/private/tmp/dng_sdk/_build/dng_sdk/source/dng_validate")
-_SRC_DNG = Path("/tmp/dng_out/DSC_4053.dng")
+_DNG_VALIDATE = dng_validate_binary()
+_SRC_DNG = fixture("DSC_4053.dng")
 _D750_CAMSTD = Path(
     "/Library/Application Support/Adobe/CameraRaw/CameraProfiles/"
     "Camera/Nikon D750/Nikon D750 Camera Standard.dcp"
 )
-_WORK = Path("/tmp/dng_out")
+_WORK = fixture_root()
 
 
 def _fixtures_present() -> bool:

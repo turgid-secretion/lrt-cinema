@@ -170,9 +170,10 @@ def test_mlx_render_frame_to_srgb_full_and_proxy_emit_valid():
     from pathlib import Path
 
     from lrt_cinema import accel
+    from tests.fixture_paths import fixture
     dng = next((Path(p) for p in (
-        "/tmp/dng_out/DSC_4053_dnglab.dng", "/tmp/dng_out/DSC_4053.dng",
-        "tests/fixtures/raw/sample.dng") if Path(p).is_file()), None)
+        fixture("DSC_4053_dnglab.dng"), fixture("DSC_4053.dng"),
+        Path("tests/fixtures/raw/sample.dng")) if Path(p).is_file()), None)
     if dng is None:
         pytest.skip("no converted DNG fixture for the full mlx decode path")
     profile = _profile()

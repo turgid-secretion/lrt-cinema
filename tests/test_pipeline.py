@@ -34,8 +34,9 @@ from lrt_cinema.dcp import parse_dcp  # noqa: E402
 from lrt_cinema.pipeline import render_frame  # noqa: E402
 
 # --- fixture paths ---------------------------------------------------------
+from tests.fixture_paths import fixture  # noqa: E402
 
-_GYM_DNG = Path("/tmp/dng_out/DSC_4053.dng")
+_GYM_DNG = fixture("DSC_4053.dng")
 # Gym ground-truth reference: prefer the `dng_validate` render; fall back to the
 # Adobe DNG **Converter** render (`DSC_4053_final.tif`) when it is absent. Both are
 # Adobe DNG-SDK renders of the same DNG + DCP and are empirically equivalent — our
@@ -43,9 +44,10 @@ _GYM_DNG = Path("/tmp/dng_out/DSC_4053.dng")
 # identical to the historic dng_validate number. The fallback lets the gym ship-gate
 # RUN wherever an Adobe reference is present, instead of silently skipping forever on
 # a filename mismatch (it had been dormant for exactly that reason).
+# Regeneration recipe (FIXTURES.md): dng_validate -profile "Camera Standard" -16 -tif
 _GYM_GT_CANDIDATES = (
-    Path("/tmp/dng_out/DSC_4053_dngvalidate.tif"),
-    Path("/tmp/dng_out/DSC_4053_final.tif"),
+    fixture("DSC_4053_dngvalidate.tif"),
+    fixture("DSC_4053_final.tif"),
 )
 _GYM_GT_TIF = next(
     (p for p in _GYM_GT_CANDIDATES if p.exists()), _GYM_GT_CANDIDATES[0],
@@ -55,8 +57,8 @@ _GYM_DCP = Path(
     "Camera/Nikon D750/Nikon D750 Camera Standard.dcp"
 )
 
-_ROSE_DNG = Path("/tmp/dng_out/rose.dng")
-_ROSE_GT_TIF = Path("/tmp/dng_out/rose_dngval_Camera_Standard.tif")
+_ROSE_DNG = fixture("rose.dng")
+_ROSE_GT_TIF = fixture("rose_dngval_Camera_Standard.tif")
 _ROSE_DCP = Path(
     "/Library/Application Support/Adobe/CameraRaw/CameraProfiles/"
     "Adobe Standard/Nikon D750 Adobe Standard.dcp"
