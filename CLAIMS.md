@@ -23,7 +23,8 @@ Statuses: **VERIFIED(date)** · **UNVERIFIED** (plausible, not yet re-run) ·
 | Synthetic flat-patch gate: neutral median ~0, chromatic mean ~0.05 | **VERIFIED 2026-06-10** | `python3 -m pytest tests/test_synthetic_dng.py` (2 passed, 35s) |
 | Rose mean ΔE = 0.545 | **BLOCKED(needs rose.dng)** | Fixture missing from this machine; restore `rose.dng` + regen `rose_dngval_Camera_Standard.tif` per FIXTURES.md, or strike the number |
 | Full pipeline byte-exact at zero sliders | **UNVERIFIED for stages 1–9** | Stage-12 ops have explicit byte-exact identity tests; stages 1–9 zero-op identity has NO direct test → Phase-1a adds one |
-| Test suite: **573 passed, 4 skipped**, ruff clean (dirty tree, pre-purge) | **VERIFIED 2026-06-10** | `python3 -m pytest -q && python3 -m ruff check .` (101s). Historical "250 tests green" and "485 tests" both wrong |
+| Test suite: **577 passed, 3 skipped**, ruff clean (post-purge) | **VERIFIED 2026-06-10** | `python3 -m pytest -q && python3 -m ruff check .` (126s). Delta vs the 573/4 pre-purge baseline is fully explained: +3 context-budget guard tests, +1 gym end-to-end gate flipped SKIP→PASS (fixture resurrected). Render behavior unchanged (gym ΔE identical 0.0262). Historical "250 tests green" and "485 tests" both wrong |
+| Phase-0/0.5 purge was behavior-neutral | **VERIFIED 2026-06-10** | Gym gate 0.0262 before and after; suite green; changes were prose/fixture-path/guard-test only |
 | WIP env-gates (`LRT_CINEMA_B1`, `LRT_CINEMA_CHROMA_MED`) are inert by default | **VERIFIED 2026-06-10** | Both gates default-off; gym gates green with the wiring committed (`9daed8f`) |
 
 ## The look gap (vs LRTimelapse / Lightroom output)
