@@ -69,6 +69,13 @@ The active repair plan lives at
    LRT-integration/relicensing optionality). License analysis: repair plan §5.
 7. Before acting on any environment claim (binary X missing, fixture Y absent),
    check the filesystem — stale memories said Lightroom wasn't installed; it is.
+8. **Agreement with a single reference ≠ correctness** — the gym gate certified
+   the WB-ordering bug because Adobe's reference demosaic is insensitive to it.
+   Pipeline-structure questions are answered against the cross-engine canon
+   (`docs/REFERENCE_PIPELINE.md` once it lands: dcraw/libraw, RawTherapee,
+   darktable, Adobe SDK, ISP literature); any divergence from canon carries a
+   written justification or a BUG/SUSPECT tag. Reading GPL sources to *learn*
+   ordering/semantics is allowed and encouraged; vendoring their code is not.
 
 ## Build / test / git
 
