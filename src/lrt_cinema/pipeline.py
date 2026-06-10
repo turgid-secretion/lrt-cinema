@@ -38,6 +38,7 @@ The module-level entry point is `render_frame()`.
 
 from __future__ import annotations
 
+import os
 import struct
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -520,6 +521,12 @@ def _cfa_demosaic(raw, method: str) -> np.ndarray:
     """Demosaic an open rawpy `raw` on the extracted CFA with a CFA-domain `method`
     ('rcd'|'mlri'|'menon'), headroom-preserving. Returns float32 (H, W, 3)."""
     cfa, pattern = _extract_cfa(raw)
+    # B1 mosaic-domain highlight-recon pre-pass (extract CFA → [B1] → demosaic).
+    # ENV-GATED, default off → byte-exact. See _b1_highlight + vertical-cyan-rootcause.
+    _b1 = os.environ.get("LRT_CINEMA_B1", "off")
+    if _b1 and _b1 != "off":
+        from lrt_cinema._b1_highlight import b1_reconstruct
+        cfa = b1_reconstruct(cfa, pattern, _asn_from_wb(raw.camera_whitebalance), _b1)
     if method == "rcd":
         from lrt_cinema import accel
         return accel.rcd_demosaic(cfa, pattern)
@@ -546,19 +553,27 @@ def _demosaic_rgb(raw, rawpy_mod, half_size: bool, demosaic: str) -> np.ndarray:
     `demosaic_camera_rgb` + `_decode_raw` so they cannot drift."""
     if demosaic in _CFA_DEMOSAICS and not half_size:
         try:
-            return _cfa_demosaic(raw, demosaic)
+            rgb = _cfa_demosaic(raw, demosaic)
         except Exception as exc:  # noqa: BLE001 — any failure → safe libraw fallback
             import sys
             sys.stderr.write(
                 f"warning: demosaic '{demosaic}' unavailable ({exc}); "
                 f"falling back to 'linear'.\n",
             )
-            return raw.postprocess(
+            rgb = raw.postprocess(
                 **_postprocess_kwargs(rawpy_mod, half_size, "linear"),
             ).astype(np.float32) / 65535.0
-    return raw.postprocess(
-        **_postprocess_kwargs(rawpy_mod, half_size, demosaic),
-    ).astype(np.float32) / 65535.0
+    else:
+        rgb = raw.postprocess(
+            **_postprocess_kwargs(rawpy_mod, half_size, demosaic),
+        ).astype(np.float32) / 65535.0
+    # Post-demosaic chroma-difference median (env-gated, default off → byte-exact).
+    # Smooths demosaic false colour BEFORE white balance. See _b1_highlight.
+    _cm = os.environ.get("LRT_CINEMA_CHROMA_MED", "")
+    if _cm:
+        from lrt_cinema._b1_highlight import chroma_diff_median
+        rgb = chroma_diff_median(rgb, passes=int(_cm))
+    return rgb
 
 
 def _asn_from_wb(camera_whitebalance) -> np.ndarray:
