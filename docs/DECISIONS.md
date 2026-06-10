@@ -1,3 +1,8 @@
+> **⚠️ Reference only (banner added 2026-06-10).** Several "settled" decisions
+> here rested on untested inferences and are reopened — notably the alt-engine
+> kill (hybrid REOPENED) and the cyan-artifact diagnosis (REFUTED by owner
+> experiment). **CLAIMS.md is authoritative.** Rewrite pending (repair Phase 2).
+
 # DECISIONS.md — binding decisions log
 
 The hard-won decisions that shaped lrt-cinema, each with a one-paragraph

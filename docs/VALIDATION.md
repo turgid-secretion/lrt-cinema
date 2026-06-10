@@ -1,3 +1,8 @@
+> **⚠️ Reference only (banner added 2026-06-10).** Methodology descriptions are
+> useful; the numbers and the "north-star gap" framing are stale or challenged
+> (the 1.71 metric is 6×-downsampled vs lossy JPEG, and faithful mode drops the
+> colorist's H/S/W sliders). **CLAIMS.md is authoritative.** Rewrite: Phase 2.
+
 # Pipeline validation
 
 How to objectively test what comes out of `lrt-cinema`, what the

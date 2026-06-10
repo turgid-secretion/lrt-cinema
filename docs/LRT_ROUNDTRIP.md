@@ -1,3 +1,7 @@
+> **⚠️ Reference only (banner added 2026-06-10).** The round-trip described here
+> (LRT ingests our 16-bit `LRT_*.tif` sequence) is the product's existential
+> premise and has **never been demonstrated** — owner test pending (CLAIMS.md).
+
 # The LRTimelapse round-trip (default emission)
 
 `lrt-cinema`'s default target is the **LRTimelapse round-trip**: render the

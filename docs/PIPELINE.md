@@ -1,3 +1,7 @@
+> **⚠️ Reference only (banner added 2026-06-10).** This doc contains unverified
+> and stale claims from the first LLM sprint. **CLAIMS.md is authoritative for
+> every number and verdict.** Evidence-based rewrite pending (repair Phase 2).
+
 # PIPELINE.md — canonical render-engine reference (as-built)
 
 **This is the single source of truth for the lrt-cinema render engine.** It is
