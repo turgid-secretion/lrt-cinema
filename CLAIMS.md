@@ -50,11 +50,12 @@ Statuses: **VERIFIED(date)** · **UNVERIFIED** (plausible, not yet re-run) ·
 | Claim | Status | Regenerate / evidence |
 |---|---|---|
 | "Fundamental demosaic false-color floor, amplified by cool WB; engine swap wouldn't help" | **REFUTED(owner experiment, 2026-06-10)** | Owner ran RawTherapee at the cool develop WB, multiple algorithms incl. bilinear + RCD, same raw: **no artifacts**. The repo's claim was extrapolated from OUR menon, never tested in RT (see header on `docs/archive/research/alt-raw-engine-feasibility.md`) |
-| H1: artifact root cause = we demosaic BEFORE WB scaling (RT/LR/libraw scale first); cool WB amplifies blue-channel error | **HYPOTHESIS (leading)** | Phase-1e A/B: pre-scale CFA by develop WB → demosaic → unscale; compare blinds crop |
-| H2: our clean-room demosaic ports are buggy (vs algorithm class) | **HYPOTHESIS** | Same pre-scaled CFA → our RCD vs BSD menon vs libraw |
-| H3: post-demosaic stage amplifies (HSM/LookTable/WB math/clip) | **HYPOTHESIS** | `stop_after_stage` taps on the blinds crop; find first stage where cyan appears |
-| H4: input-path difference (dnglab DNG vs NEF-direct) | **HYPOTHESIS** | Same render, both input paths |
-| Chroma-median mitigation (~40% reduction) is the right fix | **SUSPENDED pending root cause** | Built for the refuted diagnosis; fate decided by the H1–H4 verdict |
+| **H1 CONFIRMED: the cyan root cause is demosaicing the UN-white-balanced CFA** (we pass unit WB to libraw and feed raw mosaic to rcd/menon; Stage 2 scales after — RT/LR scale first) | **VERIFIED 2026-06-10** | Single-variable A/B (`tools/h1_wb_demosaic_ab.py`, develop WB 4034K/+20, artifact region auto-located by cyanness(ours)−cyanness(LR)): saturated-cyan tail (P99.5×1000) rcd 187.7→**87.2**, menon 197.8→**94.5**, vs **LR-Classic 84.5** — WB-before-demosaic lands us ON Adobe's level (mean 10.98 vs LR 10.93). Evidence: `tests/fixtures/evidence/h1/` |
+| H2: our clean-room demosaic ports are buggy | **REFUTED as cause** | The independent BSD menon shows the identical artifact and identical H1 response — input conditioning, not implementations |
+| H3: post-demosaic stage amplifies / H4: input-path difference | **MOOT** | Artifact forms at demosaic (H1); cool WB amplifies as understood, downstream stages and input path are not the cause |
+| "Fundamental demosaic false-colour floor — all engines have it; switching wouldn't help" (dead-sprint narrative) | **DEAD** | The floor exists, but our artifact sat 2.2× above it due to the H1 ordering bug; correctly conditioned we sit at ACR's floor. Owner's RT instinct was right |
+| Architecture gate input: bespoke raw front-end viability | **BESPOKE SURVIVES, STRENGTHENED** | Root cause = discrete fixable ordering defect, not a diffuse quality gap. Phase-3 fix: pre-scale CFA by WB at demosaic (all paths incl. libraw user_wb), re-pin gates after |
+| Chroma-median mitigation (~40% reduction) + B1 module | **OBSOLETE pending H1 fix** | Built for the misdiagnosis; delete after the WB-ordering fix ships and the blinds crop is owner-verified |
 
 ## Environment & strategy facts
 
