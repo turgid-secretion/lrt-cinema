@@ -181,16 +181,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--deflicker-scale", dest="deflicker_scale", type=float, default=1.0,
         help=(
             "Multiply the per-frame DEFLICKER EV delta (LocalExposure2012) by this "
-            "factor before applying it (HG/Global untouched). Default 1.0 = the "
-            "LRT-authored value (byte-exact) AND correct — leave it there. The B2 "
-            "root-cause audit (docs/research/deflicker-rootcause-audit.md) confirmed "
-            "the deflicker is correctly scaled at 1:1 (it's short-term BY DESIGN, so "
-            "the long-term drift isn't its job; a linear preview test shows scaling up "
-            "≥2× worsens flicker). The '~3×' was a SCALAR-GAIN CONFLATION — a no-offset "
-            "per-frame gain (LRT≈g·ours) mixes exposure with tone-shape, so a fixed "
-            "tone-curve difference back-solves into a fake deflicker factor; the "
-            "residual drift is the PV2012 tone-curve-shape gap, not the deflicker. This "
-            "knob is an owner escape hatch only."
+            "factor before applying it (HG/Global untouched). Default 1.0 applies "
+            "the LRT-authored value as-is (byte-exact with prior renders). "
+            "MEASURED 2026-06-10 (CLAIMS.md): against the owner-approved "
+            "LRTimelapse-internal JPG renders of the production sequence, the "
+            "brightness drift correlates with this EV channel at r=1.000 and "
+            "flattens at scale ~3.1 (frame-250 gain 1.081 -> 1.006, dE 2.30 -> "
+            "1.49) — LRT's internal engine applies ~3x the serialized EV. The "
+            "earlier B2 audit's '1.0 confirmed correct' conclusion is superseded; "
+            "whether 3.1 reflects Lightroom's mask semantics (our bug) or "
+            "LRT-internal's over-application (a look choice) is pending the "
+            "fresh-Lightroom-export arbiter test. Until then the default stays 1.0."
         ),
     )
     render.add_argument(
