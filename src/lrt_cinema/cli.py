@@ -144,8 +144,9 @@ def _build_parser() -> argparse.ArgumentParser:
             "math (OKLCh / ASC-CDL / local-tone DR-compression). DEFAULT is "
             "per-target: sRGB TIFF (lrtimelapse) → faithful; ACEScg EXR "
             "(cinema-linear-*) → perceptual. This flag overrides that default. "
-            "NOTE: the perceptual applicators are not yet implemented — they "
-            "alias faithful today, so the switch is byte-exact until v0.9 steps 2-4."
+            "The perceptual applicators (OKLCh HSL, ACEScct CDL, DR-compression, "
+            "Texture/Clarity) are fully implemented; both intents are byte-exact "
+            "at zero-slider identity."
         ),
     )
     render.add_argument(

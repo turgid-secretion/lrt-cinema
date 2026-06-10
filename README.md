@@ -106,6 +106,12 @@ lrt-cinema render \
   --dcp /path/to/camera.dcp \
   --workers 4 \
   --from-frame 0 --to-frame 500 \
+  --render-intent {faithful,perceptual} \
+  --demosaic {linear,menon,rcd,mlri,dcb,ahd,...} \
+  --capture-sharpen {off,xmp,acr} \
+  --master-look {bake,defer} \
+  --deflicker-scale 1.0 \
+  --highlight-recovery \
   --no-apply-lrt-offsets \
   --no-dng-convert \
   --dry-run
@@ -167,15 +173,24 @@ lrt-cinema render --input ... --output ... --preview-scale 4   # ~1/4 res
 
 **In scope:**
 - Adobe DNG 1.7.1 reference pipeline within < 1 ΔE2000 of `dng_validate`.
-- LRT XMP develop ops with public LR formulas: Exposure2012, Blacks2012,
-  ToneCurvePV2012, Saturation, Vibrance, Contrast2012.
-- Holy Grail kelvin override + LRT mask-correction per-frame deltas.
-- Three output presets (above).
+- LRT XMP develop ops: Exposure2012, Blacks2012, ToneCurvePV2012, Saturation,
+  Vibrance, Contrast2012, HSL (8 bands), Color Grading / Split Toning — plus,
+  on the perceptual intent, Highlights/Shadows/Whites (scene-referred
+  DR-compression approximation) and Texture/Clarity (edge-aware).
+- Capture sharpening (clean-room ACR-style USM, `--capture-sharpen {off,xmp,acr}`,
+  default off; tuning constants not yet validated against Lightroom output).
+- Holy Grail kelvin override + LRT mask-correction per-frame deltas +
+  `--deflicker-scale`.
+- Output presets (above); demosaic selection via `--demosaic`
+  (linear default; menon/rcd/mlri + libraw algorithms opt-in).
 
-**Out of scope:**
-- Lightroom PV5 parametric tone math (Highlights/Shadows/Whites — closed
-  source). These fields drop at render.
-- Sharpening (`sharpness` is a no-op — sharpening belongs in the grade).
+**Out of scope (current):**
+- Exact Lightroom PV5 parametric tone math (Highlights/Shadows/Whites are
+  local-adaptive and closed source — bit-matching them is impossible by
+  construction; the faithful intent drops them with a warning, the perceptual
+  intent approximates them).
+- Noise reduction (ColorNoiseReduction / LuminanceSmoothing — not parsed yet),
+  lens corrections, local masks (geometry), Dehaze.
 - AgX display transform (`stills-finished` preset — deferred).
 - CinemaDNG, ProRes, image-sequence-to-movie muxing.
 
@@ -187,12 +202,14 @@ End-to-end gate: `tests/test_pipeline.py` renders the project's test
 scenes through the pipeline and asserts mean ΔE2000 < 1.0 against
 Adobe's own `dng_validate` reference renderer.
 
-Latest measurement (v0.8 head, re-run 2026-05-30, gym + rose vs `dng_validate`):
+Latest measurement (gym re-verified 2026-06-10 against a freshly regenerated
+`dng_validate` reference; rose last measured 2026-05-30 and currently
+**unreproducible** — its fixture is missing, see [CLAIMS.md](CLAIMS.md)):
 
 | Scene | Mean ΔE | P50 | P95 | < 1 ΔE pixels |
 |---|---:|---:|---:|---:|
-| Gym (D750 Camera Standard) | **0.026** | 0.000 | 0.32 | 100% |
-| Rose (D750 Adobe Standard) | **0.545** | 0.577 | 0.90 | 97.8% |
+| Gym (D750 Camera Standard) | **0.026** | 0.000 | 0.32 | 99.99% |
+| Rose (D750 Adobe Standard) | 0.545 (stale) | 0.577 | 0.90 | 97.8% |
 
 Gym is now an effective bit-match — P50 0.000, 100% of pixels under 1 ΔE. The
 drop from the pre-fix 0.789 was a single change: Stage 9 now applies the DCP
@@ -220,4 +237,7 @@ median was already 0.000 before the fix. See
 
 ## Contributing
 
-Bug reports and PRs welcome via GitHub issues.
+Bug reports and PRs welcome via GitHub issues. PRs are merged only with
+explicit owner sign-off, and contributions must be the contributor's own work
+(no copied GPL code) — this keeps the copyright clean so the project retains
+the option to relicense or dual-license later.
