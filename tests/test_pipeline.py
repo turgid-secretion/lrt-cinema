@@ -336,18 +336,21 @@ def test_stage_7_emission_preserves_more_overrange_than_stage_9():
     1.0 before the Stage-7 emission point). See pipeline.py support_overrange
     and tools/verify_emission_format.py check C3.
 
-    Rendered with the 'rcd' CFA demosaic: the float CFA path preserves
-    blown-pixel levels through the WB-conditioned demosaic (scale → demosaic
-    → divide-back telescopes exactly), so Stage-2 WB still lifts clipped
-    whites above 1.0. The libraw 'linear' path post-H1-fix instead lands
-    blown pixels at NEUTRAL 1.0 by construction (canonical scale-then-clip,
-    dcraw/Adobe clip-to-white) — no overrange survives there BY DESIGN, so
-    bilinear is the wrong arm for this guard (CLAIMS.md, WB-before-demosaic
+    Rendered with the 'rcd' CFA demosaic in demosaic_highlights="headroom"
+    mode — the tap-7 master configuration (the CLI selects it for
+    STAGE_7_PRESETS): the float CFA path then preserves blown-pixel levels
+    through the WB-conditioned demosaic, so Stage-2 WB still lifts clipped
+    whites above 1.0. The DEFAULT "clip" policy (display targets,
+    owner-directed 2026-06-10) instead clips the scaled mosaic at the
+    common white — blown pixels land at NEUTRAL 1.0 by design and no
+    overrange survives, on ANY demosaic (CLAIMS.md, clip-to-common-white
     row)."""
     profile = parse_dcp(_GYM_DCP)
-    stage9 = render_frame(_GYM_DNG, profile, dcp_path=_GYM_DCP, demosaic="rcd")
+    stage9 = render_frame(_GYM_DNG, profile, dcp_path=_GYM_DCP, demosaic="rcd",
+                          demosaic_highlights="headroom")
     stage7 = render_frame(
         _GYM_DNG, profile, dcp_path=_GYM_DCP, stop_after_stage=7, demosaic="rcd",
+        demosaic_highlights="headroom",
     )
     # Stage 9 clamps inside the tone-curve solver — no overrange survives.
     assert stage9.prophoto.max() <= 1.0 + 1e-3

@@ -424,12 +424,18 @@ def _render_one_frame(job: _RenderJob) -> _RenderResult:
 
         # cinema-linear-master skips DCP LookTable + ProfileToneCurve
         # (Stages 8 + 9) for HDR headroom. LR PV2012 ops (Stages 11+12)
-        # still apply on top of the Stage 7 output.
-        stop_after_stage = 7 if job.preset in STAGE_7_PRESETS else 9
+        # still apply on top of the Stage 7 output. The same split decides
+        # demosaic highlight policy: display targets clip-to-common-white
+        # at the mosaic (owner default 2026-06-10 — clean neutral clipping
+        # whether or not reconstruction is enabled); the scene-linear
+        # master keeps headroom for grading + future reconstruction.
+        stage7 = job.preset in STAGE_7_PRESETS
         result = render_frame(
             dng_path, profile, dcp_path=job.dcp_path, develop_ops=job.ops,
-            stop_after_stage=stop_after_stage, preview_scale=job.preview_scale,
+            stop_after_stage=(7 if stage7 else 9),
+            preview_scale=job.preview_scale,
             highlight_recovery=job.highlight_recovery, demosaic=job.demosaic,
+            demosaic_highlights=("headroom" if stage7 else "clip"),
         )
         with_dev_ops = apply_develop_ops(
             result.prophoto, job.ops, job.intent, master_look=job.master_look,

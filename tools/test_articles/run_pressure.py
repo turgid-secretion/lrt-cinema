@@ -66,7 +66,8 @@ DCP = Path(
 DNG_VALIDATE = FIX / "dng_validate"
 EVIDENCE = REPO / "tests/fixtures/evidence/pressure_2026-06-10.json"
 ARMS = ("linear", "rcd", "menon")
-NEUTRAL_TRUTH = {"bars", "clipbars", "zoneplate"}
+NEUTRAL_TRUTH = {"bars", "clipbars", "zoneplate", "diagbars", "noisebars",
+                 "clipfield", "shadowwedge", "slantededge"}
 CROP = 384
 
 
@@ -157,23 +158,39 @@ def main() -> int:
             h, w = r.raw_image_visible.shape
         h -= h % 2
         w -= w % 2
-        scene = scene_field(meta["spec"], h, w)
+        spec = meta["spec"]
+        scene = scene_field(spec, h, w)
         unbal = scene * asn[None, None, :]
         expected_unbal = np.minimum(unbal, 1.0)    # perfect front-end + sensor clip
+        # develop-WB articles (e.g. clipbars_coolwb): the mosaic is the same
+        # physical scene; Stage 2 uses the OVERRIDE neutral — and the
+        # neutral-truth invariants are INVALID (the override casts the whole
+        # frame by design). External engine arms are skipped (they render at
+        # as-shot WB → duplicates of the base article's rows).
+        dev_ops = None
+        render_asn, render_kelvin = asn, 5500.0
+        if "develop_wb" in spec:
+            from lrt_cinema.ir import DevelopOps
+            from lrt_cinema.pipeline import kelvin_to_neutral
+            k, tint = spec["develop_wb"]
+            dev_ops = DevelopOps(temperature_k=int(k), tint=int(tint))
+            render_kelvin = float(k)
+            render_asn = kelvin_to_neutral(profile, render_kelvin, float(tint))
         exp_pp = apply_adobe_pipeline(
             camera_rgb=expected_unbal.astype(np.float32), profile=profile,
-            as_shot_neutral=asn, scene_kelvin=5500.0,
+            as_shot_neutral=render_asn, scene_kelvin=render_kelvin,
             dng_baseline_exposure=dng_be, default_black_render=dbr,
             stop_after_stage=9)
         exp8 = to8(exp_pp)
         # partial-clip zone: some-but-not-all channels clipped
         nclip = (unbal >= 1.0).sum(axis=-1)
         partial = (nclip > 0) & (nclip < 3)
-        neutral = name in NEUTRAL_TRUTH
+        neutral = name in NEUTRAL_TRUTH and dev_ops is None
         row: dict = {"clip_frac": meta["clip_frac"], "arms": {}}
 
         for arm in ARMS:
-            res = render_frame(dng, profile, dcp_path=DCP, demosaic=arm)
+            res = render_frame(dng, profile, dcp_path=DCP, demosaic=arm,
+                               develop_ops=dev_ops)
             ours8 = to8(res.prophoto)
             oh, ow = ours8.shape[:2]
             row["arms"][arm] = _score(
@@ -183,6 +200,13 @@ def main() -> int:
                 cy, cx = oh // 2 - CROP // 2, ow // 2 - CROP // 2
                 Image.fromarray(ours8[cy:cy + CROP, cx:cx + CROP]).save(
                     RENDERS / f"{name}_arm-{arm}.png")
+        if dev_ops is not None:
+            results["articles"][name] = row
+            a = row["arms"]
+            print(f"{name:12s} " + "  ".join(
+                f"{arm}: ΔE {a[arm]['de_mean']:.3f} (L {a[arm]['dl_mean']:.3f}"
+                f"/C {a[arm]['dc_mean']:.3f})" for arm in ARMS))
+            continue
         # libraw-engine arm: an INDEPENDENT renderer's answer on the same
         # file (its own WB/colour/tone path, zero shared code with our
         # stages) — scored on invariants only.
@@ -197,6 +221,32 @@ def main() -> int:
             cy, cx = lh // 2 - CROP // 2, lw // 2 - CROP // 2
             Image.fromarray(lr8[cy:cy + CROP, cx:cx + CROP]).save(
                 RENDERS / f"{name}_engine-libraw-ahd.png")
+
+        # darktable-cli engine arm: a SHIPPING raw developer's full default
+        # pipeline (own demosaic, false-colour suppression, pre-demosaic
+        # highlight reconstruction) — the product-grade anchor dng_validate
+        # cannot be (its reference demosaic is bilinear). Pixel-deterministic
+        # (verified; file hashes differ only by embedded timestamps).
+        dt_tif = RENDERS / f"{name}_engine-dt.tif"
+        try:
+            subprocess.run(
+                ["darktable-cli", str(dng), str(dt_tif),
+                 "--core", "--disable-opencl"],
+                check=True, capture_output=True, timeout=600)
+            dt8 = tifffile.imread(str(dt_tif))
+            if dt8.dtype != np.uint8:
+                dt8 = (dt8.astype(np.float32) / np.iinfo(dt8.dtype).max
+                       * 255 + 0.5).astype(np.uint8)
+            dh, dw = dt8.shape[:2]
+            row["dt_engine_invariants"] = _invariants(
+                dt8, neutral, partial[:dh, :dw] if partial.any() else None)
+            if make_crops:
+                cy, cx = dh // 2 - CROP // 2, dw // 2 - CROP // 2
+                Image.fromarray(dt8[cy:cy + CROP, cx:cx + CROP]).save(
+                    RENDERS / f"{name}_engine-dt.png")
+            dt_tif.unlink()
+        except Exception as exc:  # noqa: BLE001 — anchor optional
+            row["dt_engine_invariants"] = {"error": str(exc)[:200]}
 
         # Adobe anchor on the same file
         stem = RENDERS / f"{name}_adobe"

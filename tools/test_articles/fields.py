@@ -105,12 +105,72 @@ def field_zoneplate(spec: dict, h: int, w: int) -> np.ndarray:
     return np.repeat(v.astype(np.float32)[..., None], 3, axis=-1)
 
 
+def field_diagbars(spec: dict, h: int, w: int) -> np.ndarray:
+    """Neutral bars at 45° (t = (x+y)/√2), pitch sweeping along x — the
+    directional-interpolator worst case the axis-aligned bars miss."""
+    yy, xx = _grid(h, w)
+    t = (xx + yy) / np.sqrt(2.0)
+    frac = xx / (w - 1)
+    pitch = spec["pitch_min"] * (spec["pitch_max"] / spec["pitch_min"]) ** frac
+    phase = np.floor(t / pitch) % 2
+    v = np.where(phase < 1, spec["hi"], spec["lo"]).astype(np.float32)
+    return np.repeat(v[..., None], 3, axis=-1)
+
+
+def field_clipfield(spec: dict, h: int, w: int) -> np.ndarray:
+    """Neutral Gaussian blob peaking far above clip (a blown window/sun):
+    a large solid-clip core, a partial-clip annulus, and a smooth falloff —
+    the bloom-edge / blown-region class in one target."""
+    yy, xx = _grid(h, w)
+    cy, cx = h / 2.0, w / 2.0
+    r2 = ((yy - cy) / spec["sigma"]) ** 2 + ((xx - cx) / spec["sigma"]) ** 2
+    v = spec["base"] + spec["peak"] * np.exp(-0.5 * r2)
+    return np.repeat(v.astype(np.float32)[..., None], 3, axis=-1)
+
+
+def field_shadowwedge(spec: dict, h: int, w: int) -> np.ndarray:
+    """Log-spaced near-black neutral patches (black-level / shadow
+    quantisation handling)."""
+    levels = np.geomspace(spec["lo"], spec["hi"], spec["n"]).astype(np.float32)
+    out = np.zeros((h, w, 3), np.float32)
+    for i, v in enumerate(levels):
+        x0, x1 = int(i / len(levels) * w), int((i + 1) / len(levels) * w)
+        out[:, x0:x1] = v
+    return out
+
+
+def field_noisebars(spec: dict, h: int, w: int) -> np.ndarray:
+    """bars + seeded Gaussian scene noise (deterministic: fixed seed in the
+    spec) — demosaic-on-grain false colour; the truth INCLUDES the noise
+    (it is scene), so invented CHROMA is still exactly the artifact (the
+    noise itself is neutral: one shared sample across channels)."""
+    base = field_bars(spec, h, w)
+    rng = np.random.default_rng(spec["seed"])
+    noise = rng.normal(0.0, spec["sigma"], size=(h, w)).astype(np.float32)
+    return np.clip(base + noise[..., None], 0.0, None)
+
+
+def field_slantededge(spec: dict, h: int, w: int) -> np.ndarray:
+    """ISO 12233:2017 eSFR-class slanted edge: a step across a line at
+    `angle_deg` (canonical ≈5°), neutral, sub-clip."""
+    yy, xx = _grid(h, w)
+    th = np.deg2rad(spec["angle_deg"])
+    d = (xx - w / 2.0) * np.cos(th) + (yy - h / 2.0) * np.sin(th)
+    v = np.where(d > 0, spec["hi"], spec["lo"]).astype(np.float32)
+    return np.repeat(v[..., None], 3, axis=-1)
+
+
 FIELDS = {
     "flatpatches": field_flatpatches,
     "clipramp": field_clipramp,
     "bars": field_bars,
     "clipbars": field_bars,        # same generator, clip-crossing levels
     "zoneplate": field_zoneplate,
+    "diagbars": field_diagbars,
+    "clipfield": field_clipfield,
+    "shadowwedge": field_shadowwedge,
+    "noisebars": field_noisebars,
+    "slantededge": field_slantededge,
 }
 
 
@@ -151,5 +211,37 @@ ARTICLES: dict[str, dict] = {
     "zoneplate": {
         "field": "zoneplate",
         "mid": 0.40, "amp": 0.35, "k": 4.0e-5,
+    },
+    "diagbars": {
+        "field": "diagbars",
+        "lo": 0.05, "hi": 0.80,
+        "pitch_min": 1.0, "pitch_max": 16.0,
+    },
+    "clipfield": {
+        "field": "clipfield",
+        "base": 0.06, "peak": 3.0, "sigma": 700.0,   # solid core + partial annulus
+    },
+    "shadowwedge": {
+        "field": "shadowwedge",
+        "lo": 0.0004, "hi": 0.03, "n": 16,
+    },
+    "noisebars": {
+        "field": "noisebars",
+        "lo": 0.05, "hi": 0.80, "pitch_min": 1.0, "pitch_max": 16.0,
+        "sigma": 0.01, "seed": 20260610,
+    },
+    "slantededge": {
+        "field": "slantededge",
+        "angle_deg": 5.0, "lo": 0.10, "hi": 0.70,
+    },
+    # Same mosaic as clipbars, RENDERED under the production develop-WB
+    # override (4034 K / +20) — the H1-regime regression article: tests the
+    # kelvin_to_neutral path + demosaic conditioning under a WB far from
+    # the as-shot neutral. The harness reads `develop_wb`.
+    "clipbars_coolwb": {
+        "field": "bars",
+        "lo": 0.06, "hi": 1.35,
+        "pitch_min": 1.0, "pitch_max": 16.0,
+        "develop_wb": [4034, 20],
     },
 }

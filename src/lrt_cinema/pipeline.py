@@ -530,7 +530,8 @@ def _extract_cfa(raw) -> tuple[np.ndarray, str]:
     return cfa_norm[: h - (h % 2), : w - (w % 2)], pattern
 
 
-def _cfa_demosaic(raw, method: str, wb_mul: np.ndarray | None = None) -> np.ndarray:
+def _cfa_demosaic(raw, method: str, wb_mul: np.ndarray | None = None,
+                  highlights: str = "clip") -> np.ndarray:
     """Demosaic an open rawpy `raw` on the extracted CFA with a CFA-domain `method`
     ('rcd'|'mlri'|'menon'), headroom-preserving. Returns float32 (H, W, 3).
 
@@ -552,6 +553,21 @@ def _cfa_demosaic(raw, method: str, wb_mul: np.ndarray | None = None) -> np.ndar
         h, w = cfa.shape
         chan = np.where(colors[:h, :w] == 3, 1, colors[:h, :w])   # G2 → G
         cfa = cfa * wb_mul[chan].astype(np.float32)
+        if highlights == "clip":
+            # Owner-directed default (2026-06-10): dcraw/libraw highlight=0
+            # semantics — clip the WB-scaled mosaic at the COMMON white
+            # (the minimum multiplier's saturation level) so every channel
+            # saturates at the same height. Uniform plateaus keep
+            # directional demosaics from inventing chroma at clipped fine
+            # detail (pressure suite: clipbars falsecolor 17.5 → ~1,
+            # externally anchored by libraw-AHD 0.88), and blown regions
+            # land NEUTRAL white after Stage 2. The trade (also dcraw's):
+            # channels with multiplier >1 lose their top fraction of REAL
+            # highlight detail to the clamp — so the scene-linear tap-7
+            # master path passes highlights="headroom" instead, preserving
+            # >1 values for grading + the future pre-demosaic
+            # reconstruction (REFERENCE_PIPELINE TARGET slot 5).
+            cfa = np.minimum(cfa, np.float32(wb_mul.min()))
     if method == "rcd":
         from lrt_cinema import accel
         rgb = accel.rcd_demosaic(cfa, pattern)
@@ -595,7 +611,8 @@ def _libraw_rgb(raw, rawpy_mod, half_size: bool, demosaic: str,
 
 
 def _demosaic_rgb(raw, rawpy_mod, half_size: bool, demosaic: str,
-                  wb_mul: np.ndarray | None = None) -> np.ndarray:
+                  wb_mul: np.ndarray | None = None,
+                  highlights: str = "clip") -> np.ndarray:
     """Linear camera RGB (H, W, 3) float32 from an OPEN rawpy `raw`. A CFA-domain
     method ('rcd'/'mlri'/'menon', full-res only) runs on the extracted CFA
     (headroom-preserving), falling back to libraw 'linear' on a non-Bayer sensor, a
@@ -609,7 +626,7 @@ def _demosaic_rgb(raw, rawpy_mod, half_size: bool, demosaic: str,
     either way."""
     if demosaic in _CFA_DEMOSAICS and not half_size:
         try:
-            rgb = _cfa_demosaic(raw, demosaic, wb_mul)
+            rgb = _cfa_demosaic(raw, demosaic, wb_mul, highlights)
         except Exception as exc:  # noqa: BLE001 — any failure → safe libraw fallback
             import sys
             sys.stderr.write(
@@ -675,7 +692,7 @@ def demosaic_camera_rgb(
 
 def _decode_raw(
     raw_path: str | Path, half_size: bool = False, demosaic: str = "linear",
-    wb_asn: np.ndarray | None = None,
+    wb_asn: np.ndarray | None = None, highlights: str = "clip",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Open the raw ONCE; return (linear camera RGB, camera AsShotNeutral).
 
@@ -694,7 +711,9 @@ def _decode_raw(
     with rawpy.imread(str(raw_path)) as raw:
         cam_asn = _asn_from_wb(raw.camera_whitebalance)
         asn = wb_asn if wb_asn is not None else cam_asn
-        rgb = _demosaic_rgb(raw, rawpy, half_size, demosaic, _wb_mul_from_asn(asn))
+        rgb = _demosaic_rgb(
+            raw, rawpy, half_size, demosaic, _wb_mul_from_asn(asn), highlights,
+        )
     return rgb, cam_asn
 
 
@@ -939,6 +958,7 @@ def render_frame(
     preview_scale: int = 1,
     highlight_recovery: bool = False,
     demosaic: str = "linear",
+    demosaic_highlights: str = "clip",
 ) -> FrameRenderResult:
     """End-to-end render of a single RAW frame through pipeline stages 1
     through `stop_after_stage`.
@@ -1004,7 +1024,7 @@ def render_frame(
     # separate read wasted a full decode — costly at high preview_scale).
     camera_rgb, cam_asn = _decode_raw(
         raw_path, half_size=(preview_scale >= 2), demosaic=demosaic,
-        wb_asn=override_asn,
+        wb_asn=override_asn, highlights=demosaic_highlights,
     )
     asn = override_asn if override_asn is not None else cam_asn
     if preview_scale >= 2:
