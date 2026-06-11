@@ -1,0 +1,47 @@
+{
+ "arms": {
+  "A-current-postcurve": {
+   "CALEXP100": {
+    "de_mean": 2.8418832222760804,
+    "de_mid": 5.586847930324822,
+    "gain_mid_mean": 1.1691559003294667,
+    "midtone_frac": 0.2871770895142833
+   },
+   "CALEXP200": {
+    "de_mean": 5.848975604603175,
+    "de_mid": 12.494572469597447,
+    "gain_mid_mean": 1.526378587283741,
+    "midtone_frac": 0.20127733745867593
+   }
+  },
+  "B-scene-puregain": {
+   "CALEXP100": {
+    "de_mean": 0.18723474326548797,
+    "de_mid": 0.2771412855756818,
+    "gain_mid_mean": 1.0000257899368654,
+    "midtone_frac": 0.34324272060693395
+   },
+   "CALEXP200": {
+    "de_mean": 0.28684698133345155,
+    "de_mid": 0.3452672235764296,
+    "gain_mid_mean": 0.9995495238971382,
+    "midtone_frac": 0.23008564147664662
+   }
+  },
+  "C-ramp-baselineexp": {
+   "CALEXP100": {
+    "de_mean": 0.18723474326548797,
+    "de_mid": 0.2771412855756818,
+    "gain_mid_mean": 1.0000257899368654,
+    "midtone_frac": 0.34324272060693395
+   },
+   "CALEXP200": {
+    "de_mean": 0.28684698133345155,
+    "de_mid": 0.3452672235764296,
+    "gain_mid_mean": 0.9995495238971382,
+    "midtone_frac": 0.23008564147664662
+   }
+  }
+ },
+ "pre_registered": "A fails; B midtones-only; C (ramp) wins both levels"
+}

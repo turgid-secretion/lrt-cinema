@@ -42,7 +42,12 @@ _CLAUDE_MD_CAP = 10_240
 # draft) — owner-sanctioned this round: "you are welcome to bump the
 # live-docs budget if it is meaningfully justified". Stale-prose archive
 # audit (the four bannered docs) is queued to claw bytes back.
-_LIVE_DOCS_BUDGET = 220_190 + 4_096 + 8_192 + 8_192
+# 2026-06-11: +12 KB for the TARGET-v2 justification ledger — the owner
+# REFUSED sign-off on the v1 diagram for lacking exactly this content
+# ("we should be able to justify every choice"): per-slot references,
+# evidence, verdicts, deciding experiments, governing strategy. The
+# archive audit remains queued to claw bytes back.
+_LIVE_DOCS_BUDGET = 220_190 + 4_096 + 8_192 + 8_192 + 12_288
 
 # Rule 3 — files that existed at the freeze (grandfathered; everything else
 # under live docs/ must carry an "Owner-approved:" line).

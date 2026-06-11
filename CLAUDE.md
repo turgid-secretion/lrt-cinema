@@ -72,10 +72,20 @@ The active repair plan lives at
 8. **Agreement with a single reference ≠ correctness** — the gym gate certified
    the WB-ordering bug because Adobe's reference demosaic is insensitive to it.
    Pipeline-structure questions are answered against the cross-engine canon
-   (`docs/REFERENCE_PIPELINE.md` once it lands: dcraw/libraw, RawTherapee,
+   (`docs/REFERENCE_PIPELINE.md`: dcraw/libraw, RawTherapee,
    darktable, Adobe SDK, ISP literature); any divergence from canon carries a
    written justification or a BUG/SUSPECT tag. Reading GPL sources to *learn*
    ordering/semantics is allowed and encouraged; vendoring their code is not.
+9. **Comparative architecture is the highest-leverage diagnostic** (owner,
+   2026-06-11): the reference-pipeline skeleton → engine comparison chain
+   produced the clip-to-common-white default that now beats the shipping
+   product — the solution was "easy and obvious once we had the right
+   context." Corollary: every architectural choice (op placement, domain,
+   ordering) must carry a stated justification — references to working,
+   battle-tested pipelines and/or our own empirical evidence — or an explicit
+   plan to obtain it. An unjustified slot is UNKNOWN, not default-OK; the
+   owner signs off on the ledger, not the diagram
+   (`docs/REFERENCE_PIPELINE.md` §TARGET).
 
 ## Build / test / git
 

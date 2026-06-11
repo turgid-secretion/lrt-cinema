@@ -242,35 +242,180 @@ ops. The audit is per-op, because the correct placement differs per op:
    (gym max-ΔE 13.6 at 0.006 % px). Resolution belongs to the highlight-
    reconstruction row above, after the lock.
 
-## Proposed TARGET architecture — DRAFT, owner lock pending
+## TARGET architecture v2 — the justification ledger
 
-Drafted 2026-06-10 from the canon above. Slots marked ◆ are settled by
-source/measurement; slots marked ? await their probe. **This is a
-proposal, not the lock** — the lock happens when the owner signs off and
-the ? slots have evidence.
+**Owner sign-off basis (2026-06-11): the owner signs the LEDGER, not the
+diagram.** v1 was refused for cause: no per-slot narrative, no stated
+strategy, unjustified structures left in place. Every slot below carries
+its references (battle-tested pipelines / specs), its empirical evidence
+(our checked-in experiments), a verdict, and — where the verdict is
+UNKNOWN — the experiment that would settle it. An unjustified slot is
+UNKNOWN, never default-OK (anti-drift rule 9).
 
-```
-  1. ◆ decode + linearize + black subtract        (sensor space)
-  2. ?  raw CA correction                          (mosaic; optional op,
-        only if the D-vs-F flip says the fringes are ours / wanted)
-  3. ◆ WB conditioning of the mosaic              (Stage-2 multipliers)
-  4. ◆ demosaic (directional; default decision post-lock)
-  5. ?  highlight reconstruction                   (post-demosaic camera
-        space per RT/dcraw — but must actually fix clip-edge fringes,
-        which Tier-1 today does not; may need partial-clip handling
-        in/at demosaic per Adobe behaviour)
-  6. ◆ scene-referred exposure block:             (linear camera/early)
-        scene_exposure_ev (mask EVs ×4) — shipped
-        + global Exposure2012 ?                    (pending CALEXP probe)
-  7. ◆ Stage 2–4 WB multiply + ForwardMatrix → linear ProPhoto
-  8. ◆ HSM → ExposureRamp → LookTable → ProfileToneCurve (Adobe chain)
-  9. ?  tone-domain develop ops (Contrast, ToneCurve …) — possibly
-        correctly post-curve; probe before moving anything
- 10. ?  color-domain develop ops (HSL, ColorGrade, Sat/Vib) — audit
-        after the exposure class
- 11. ◆ NR + sharpening (detail stage, placement vs ACR to calibrate)
- 12. ◆ output transform + encode
-```
+### The governing strategy
+
+1. **North star:** owner-judged quality ≥ the Lightroom export on the
+   production sequences, with every LRT-keyframed per-frame parameter
+   applied, Lightroom-free in production.
+2. **Default to the convergent canon.** Where dcraw/libraw, RawTherapee,
+   darktable, Adobe, and the ISP literature AGREE on a structure
+   (linearize → WB → demosaic → colour transform → tone → output;
+   exposure-class gains scene-referred), we adopt it. Convergence across
+   independently-evolved, battle-tested engines is the strongest available
+   prior.
+3. **Diverge only with both a reason and evidence.** A divergence needs a
+   product rationale (e.g. the scene-linear tap-7 master) AND a measured
+   demonstration it is safe/superior on the pressure suite + real frames.
+4. **Where the canon splits, an experiment decides.** Engines disagree on
+   highlight-reconstruction placement; no amount of reading settles it —
+   prototypes scored against the articles + the LR-product anchor do.
+5. **Where we have neither references nor evidence, say UNKNOWN** and
+   either run the probe (CAL-pattern single-variable exports; article
+   iteration) or state why it can wait.
+
+### The ledger
+
+**Slot 1 — decode, linearization, black subtract (sensor space).**
+VERDICT: JUSTIFIED. References: unanimous canon (every engine; DNG 1.7.1
+spec; K&B stage 1) [SRC/LIT]. Evidence: gym 0.023 ΔE vs dng_validate;
+flatpatches 0.15–0.18 ≈ Adobe-ref [EMP]. Nothing open.
+
+**Slot 2 — raw CA correction (mosaic domain).** VERDICT: ABSENT,
+PROVISIONALLY JUSTIFIED. References: canon SPLITS — RT (`CA_correct_RT`)
+and darktable correct pre-demosaic; dcraw has none; LR offers it but the
+production XMPs have it OFF (census [EMP]). Evidence: fringe forensics
+REFUTED lens CA as the residual-artifact cause [EMP]. Plan: stays absent
+until a real-lens article (`ca_shifted`, taxonomy v3) demonstrates need;
+placement would be pre-demosaic per RT/dt.
+
+**Slot 3 — white balance, applied ONCE, before demosaic.** VERDICT:
+JUSTIFIED (position); **current IMPLEMENTATION carries a declared wart.**
+References: unanimous canon — dcraw `scale_colors` → interpolate [SRC],
+darktable temperature@3 → demosaic@8 [SRC], RT scales before demosaic
+[EMP: owner experiment], ISP literature [LIT]. Evidence: H1 single-variable
+A/B (cyan P99.5 188→87, two independent demosaics; shipped arm ≡ target
+arm) [EMP]. **The wart (owner-flagged):** today we scale the mosaic,
+demosaic, DIVIDE BACK, and re-multiply at Stage 2 — WB on both sides of
+the demosaic. That divide-back is a **migration shim, not architecture**:
+it preserved the "unbalanced camera RGB" interface that stages 1.5–2
+(highlight recovery, the MLX entry, tests) consume, so the H1 fix could
+ship without rewiring them. It is mathematically exact on the default
+path (linear ops telescope; the common-white clip commutes through the
+divide/re-multiply pair), but it is structurally indefensible as a
+target. TARGET: WB applied once at the mosaic; downstream stages consume
+BALANCED camera RGB; Stage 2 reduces to identity and is deleted; the
+recovery threshold and MLX contract migrate with it (recovery's detection
+must move to the mosaic mask anyway — see slot 5). Migration is
+mechanical; scheduled with slot-5 work.
+
+**Slot 4 — demosaic (after WB, before colour transform).** VERDICT:
+JUSTIFIED (position — unanimous canon [SRC]); **algorithm choice OPEN.**
+Evidence: menon/rcd at or near best-engine on bars/zoneplate/slantededge/
+clipbars [EMP]; owner eyes: menon ≫ bilinear [EMP]. Open: diagbars 34.2
+vs LR-product 13.6 — the algorithm (or a complementary suppression
+stage, slot 6) has a product-anchored 2.5× gap. Plan: post-lock
+iteration against diagbars; candidates: RCD parameter work, AMaZE-class
+port (clean-room), or accepting menon + slot-6 suppression. Default-flip
+decision (linear→menon) is owner's, post-lock.
+
+**Slot 5 — highlight handling.** Two distinct sub-questions:
+- **5a, the fallback (no reconstruction): clip-to-common-white at the
+  scaled mosaic. VERDICT: JUSTIFIED, owner-directed.** References: dcraw/
+  libraw highlight=0 semantics [SRC+EMP probe]. Evidence: clipbars
+  falsecolor 17.5→1.12 (at libraw 0.88, BEATS LR-product 3.34); clipramp
+  3.03 — best smooth-clip of all engines tested; no magenta-band
+  inheritance; real-frame forensics confirm mechanism-A clusters gone
+  [EMP]. The documented cost: >1-multiplier channels lose top highlight
+  detail to the clamp (dcraw's own trade) — recovered only by 5b.
+- **5b, reconstruction placement: UNRESOLVED — the canon splits.**
+  darktable: pre-demosaic on the mosaic [SRC]; RT (`HLRecovery_*`) and
+  dcraw (`recover/blend_highlights`): post-demosaic [SRC]; LR: in-render,
+  and its smooth-clip result (clipramp clip-zone 1.07) is the best
+  measured [EMP]. Our current Tier-1 (post-demosaic, 0.99 threshold) is
+  measurably blind to interpolation-smeared partial clips [EMP: fringe
+  forensics; G≈F]. DECIDING EXPERIMENT (post-lock, autonomous): prototype
+  BOTH placements — (i) mosaic-domain reconstruction before demosaic
+  (dt-style), (ii) post-demosaic reconstruction driven by a MOSAIC-derived
+  clip mask — score on clipramp/clipfield/clipbars against the LR anchor
+  (targets ≈1.07 / ≈0.01 / ≤1.12) + owner eyeball on real blown windows.
+  Until decided, 5a is the shipped behaviour (the owner's "clean pipeline
+  either way" rationale).
+
+**Slot 6 — false-colour suppression (after demosaic, before colour
+transform). NEW SLOT. VERDICT: NEEDED, scheme UNKNOWN.** References:
+canon-supported everywhere — dcraw `-m` median passes, libraw FBDD, RT
+false-colour-suppression steps [SRC-fetch, scheme details pending local
+read], ACR internal (inferred: zoneplate 0.02 vs our 0.41 — near-total
+suppression) [EMP]. Evidence for need: zoneplate/noisebars/diagbars gaps
+are all chroma-dominated [EMP]; our naive 3×3 chroma-median probe was
+insufficient (fringe forensics) [EMP]. Plan: read RT/dt suppression
+sources (learn, never vendor), implement clean-room, iterate against
+zoneplate (→≈0.02), noisebars (→≈4), diagbars (contribution TBD).
+
+**Slot 7 — scene-referred exposure block (linear camera RGB, before the
+colour transform).** Sub-slots:
+- **Mask/local EVs (deflicker/HG/global masks) ×4: JUSTIFIED.** Evidence:
+  CAL calibration k\*=3.992±0.027, ΔE 0.20/0.44 at 4.0 exactly; the
+  post-curve domain provably cannot fit LR at ±1–2 EV [EMP]. References:
+  exposure-class ops are scene-referred in every engine that has them
+  (dt exposure@21 [SRC]; ISP literature [LIT]).
+- **Global `Exposure2012`: SCENE-REFERRED — measured 2026-06-11.**
+  CALEXP single-variable probe (owner exports, Exposure2012 = 1.0/2.0):
+  current post-curve arm FAILS (ΔE 2.84/5.85, midtone gain wrong by
+  17 %/53 %); scene-pure-gain and ExposureRamp arms are IDENTICAL to
+  three decimals and both land at the base-look floor (ΔE 0.187/0.287,
+  gain 1.0000/0.9995). Verdict: same domain as the mask EVs; the
+  pre-registered B-vs-C highlight distinction did not materialise on
+  this content (recorded honestly), so implementation folds
+  `Exposure2012` into `scene_exposure_ev` (one machinery). Migration:
+  with the slot-3 batch; zero production urgency (Exposure2012 = 0 in
+  the sequence). Evidence:
+  `tests/fixtures/evidence/cal_exposure_domain_2026-06-11.json`
+  (`tools/cal_exposure_domain.py`).
+
+**Slot 8 — colour transform + Adobe shaping chain (ForwardMatrix → HSM →
+ExposureRamp → LookTable → ProfileToneCurve).** VERDICT: JUSTIFIED.
+References: DNG 1.7.1 §Mapping Camera Color Space (implemented
+clause-by-clause); canonical position (colour transform after demosaic,
+tone after colour) unanimous [SRC/LIT]. Evidence: gym 0.023; flat-patch
+≈0; the entire Phase-0/1 validation lineage [EMP]. The tap-7 EXR master
+exits before LookTable/curve — a deliberate, documented divergence
+(scene-linear product goal), gated by the Phase-1f Resolve test.
+
+**Slot 9 — tone-domain develop ops (Contrast2012, parametric ToneCurve).**
+VERDICT: UNKNOWN. The current post-ProfileToneCurve placement was
+validated on LR *TIFF round-trips* — display-referred ops applied to
+display-referred input — which says NOTHING about where LR applies them
+inside a raw render. References: none solid (LR internal undocumented;
+engines differ in tone architecture). Probe (CAL pattern): single-variable
+Contrast ±50 owner exports; arms post-curve vs pre-curve application.
+Until then these ops are zero in production — latent, not load-bearing.
+
+**Slot 10 — colour-domain develop ops (HSL, ColorGrade, Sat/Vib).**
+VERDICT: UNKNOWN, LOW-RISK (zero/constant in production). Same probe
+pattern as slot 9, after the exposure/tone classes settle.
+
+**Slot 11 — NR + capture sharpening (detail stage).** VERDICT: placement
+plausible (ACR's detail stage is post-colour [LIT]; dt denoiseprofile
+post-demosaic [SRC]) — parameters UNVALIDATED. Evidence: production XMPs
+carry Sharpness 25 + ColorNR 25; we render neither by default; they are
+part of the measured ~0.6 ΔE base-look floor [EMP]. Probe: single-variable
+Sharpness/CNR exports + the noisebars article.
+
+**Slot 12 — output transform + encode.** VERDICT: JUSTIFIED. References:
+colour-space allowlist code-enforced; sRGB/Rec.709 delivery per LRT
+round-trip requirement. Evidence: oracle tests; owner-run LRT ingest
+round-trip [EMP].
+
+### What blocks the lock
+
+The lock needs: (a) ~~slot-7 global-exposure verdict~~ DONE 2026-06-11
+(scene-referred, measured), (b) slot-5b deciding experiment design
+AGREED (not necessarily run — the 5a fallback is shipped and safe),
+(c) owner acceptance of the slot-3 migration plan (WB-once), (d) this
+ledger's justifications challenged and signed. Slots 9–11 are explicitly
+OK-to-lock as UNKNOWN-latent: they are zero in production, carry written
+probes, and do not gate other work.
 
 ## The iteration substrate: pressure-test articles
 
