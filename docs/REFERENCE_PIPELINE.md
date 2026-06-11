@@ -392,6 +392,25 @@ owner's, post-lock.
   ≈0.01 / ≤1.12) + owner eyeball on real blown windows. Until decided,
   5a is the shipped behaviour (the owner's "clean pipeline either way"
   rationale).
+  **EXPERIMENT RUN 2026-06-11 (suite half) — pre-registration caught our
+  expectations:** P1 REFUTED — pre-opposed WORSENS clipramp clip-zone
+  (3.03→3.52; opposed preserves the ramp's tint where ACR rolls toward
+  neutral); P2 CONFIRMED — post (21.5) worse than pre (17.2) on clipbars
+  falsecolor, and BOTH are catastrophically worse than the 5a clip
+  default (1.12): the headroom decode re-exposes channel-disparate clip
+  plateaus at detail scale and reconstruction cannot undo
+  demosaic-invented chroma; P3 SPLIT — clipfield pre = exact parity
+  (0.008), post regresses (0.57). Suite verdict: **5a clip default
+  STANDS on every product-anchored target; IF reconstruction ships, the
+  mosaic placement (dt) dominates the RGB placement (RT) on every
+  measured article.** Metric blind spot recorded: the articles score
+  against a sensor-clipped reference, so RECOVERED REAL DETAIL scores as
+  error — the owner-eyeball half (native-res flips on the real blown
+  windows, `verify-2026-06-11/hl-flip/`) decides whether opposed
+  recovers anything worth shipping. Evidence:
+  `tests/fixtures/evidence/hl_reconstruct_5b_2026-06-11.json`
+  (`tools/hl_reconstruct_experiment.py`); clean-room implementation
+  `lrt_cinema/_opposed_reconstruct.py` (unit-tested).
 
 **Slot 6 — false-colour suppression (after demosaic, before colour
 transform). NEW SLOT. VERDICT: NEEDED; scheme canon READ and CONVERGENT

@@ -1,0 +1,135 @@
+{
+ "design": "slot-5b opposed both placements (menon)",
+ "predictions": "P1 pre wins clipramp; P2 post worse on clipbars falsecolor; P3 clipfield parity",
+ "articles": {
+  "clipramp": {
+   "arms": {
+    "clip": {
+     "de_mean": 0.09466263506295608,
+     "de_p95": 0.5099764472917679,
+     "de_max": 1.492686142768629,
+     "dl_mean": 0.015452913006566114,
+     "dc_mean": 0.09500956130917981,
+     "clipzone_dc_mean": 0.21483723880500305,
+     "clipzone_de_mean": 0.223489725499336,
+     "falsecolor_mean": 15.711593460044696,
+     "falsecolor_p99": 32.562564162336066,
+     "clipzone_chroma_mean": 3.0262260303263844,
+     "clipzone_chroma_p99": 7.141944670357767
+    },
+    "pre-opposed": {
+     "de_mean": 0.17939741004848492,
+     "de_p95": 1.14385923910946,
+     "de_max": 2.0478235193020855,
+     "dl_mean": 0.03410808651639988,
+     "dc_mean": 0.17937956874908426,
+     "clipzone_dc_mean": 0.6981470539159221,
+     "clipzone_de_mean": 0.7145882847618862,
+     "falsecolor_mean": 15.820449380356633,
+     "falsecolor_p99": 32.562564162336066,
+     "clipzone_chroma_mean": 3.5220172205662927,
+     "clipzone_chroma_p99": 7.141944670357767
+    },
+    "post-opposed": {
+     "de_mean": 0.17898358042554674,
+     "de_p95": 1.14385923910946,
+     "de_max": 2.0478235193020855,
+     "dl_mean": 0.03405917246320427,
+     "dc_mean": 0.178948833813638,
+     "clipzone_dc_mean": 0.6963364663684567,
+     "clipzone_de_mean": 0.7128487584304808,
+     "falsecolor_mean": 15.820023023326755,
+     "falsecolor_p99": 32.562564162336066,
+     "clipzone_chroma_mean": 3.5202250354764213,
+     "clipzone_chroma_p99": 7.141944670357767
+    }
+   }
+  },
+  "clipfield": {
+   "arms": {
+    "clip": {
+     "de_mean": 0.19461350810971864,
+     "de_p95": 1.27391913636661,
+     "de_max": 1.5633695900671418,
+     "dl_mean": 0.07421982554469782,
+     "dc_mean": 0.1350108469905628,
+     "clipzone_dc_mean": 0.692901416450632,
+     "clipzone_de_mean": 1.012062208458754,
+     "falsecolor_mean": 0.03114490884902242,
+     "falsecolor_p99": 0.7422050137513719,
+     "clipzone_chroma_mean": 0.008498487609448557,
+     "clipzone_chroma_p99": 0.008498487609448548
+    },
+    "pre-opposed": {
+     "de_mean": 0.19461350810971864,
+     "de_p95": 1.27391913636661,
+     "de_max": 1.5633695900671418,
+     "dl_mean": 0.07421982554469782,
+     "dc_mean": 0.1350108469905628,
+     "clipzone_dc_mean": 0.692901416450632,
+     "clipzone_de_mean": 1.012062208458754,
+     "falsecolor_mean": 0.03114490884902242,
+     "falsecolor_p99": 0.7422050137513719,
+     "clipzone_chroma_mean": 0.008498487609448557,
+     "clipzone_chroma_p99": 0.008498487609448548
+    },
+    "post-opposed": {
+     "de_mean": 0.04880781629231059,
+     "de_p95": 0.5259109708691734,
+     "de_max": 1.5633695900671418,
+     "dl_mean": 0.014932354698087392,
+     "dc_mean": 0.03553494586827408,
+     "clipzone_dc_mean": 0.1312690780243043,
+     "clipzone_de_mean": 0.18885587680049196,
+     "falsecolor_mean": 0.13038570817088516,
+     "falsecolor_p99": 0.8755754294531245,
+     "clipzone_chroma_mean": 0.5688034615942198,
+     "clipzone_chroma_p99": 0.8755754294531245
+    }
+   }
+  },
+  "clipbars": {
+   "arms": {
+    "clip": {
+     "de_mean": 1.1633889711482248,
+     "de_p95": 1.27391913636661,
+     "de_max": 63.78950180287023,
+     "dl_mean": 0.6360141252005077,
+     "dc_mean": 1.5438576716652197,
+     "clipzone_dc_mean": 1.7724558009827989,
+     "clipzone_de_mean": 1.7301855792837986,
+     "falsecolor_mean": 1.1186262837670244,
+     "falsecolor_p99": 31.359042387999516,
+     "clipzone_chroma_mean": 0.9225178972705961,
+     "clipzone_chroma_p99": 24.372569325504085
+    },
+    "pre-opposed": {
+     "de_mean": 6.483569609109134,
+     "de_p95": 32.94193868660745,
+     "de_max": 63.78950180287023,
+     "dl_mean": 2.303279379896591,
+     "dc_mean": 17.417369799382634,
+     "clipzone_dc_mean": 1.6139036378166902,
+     "clipzone_de_mean": 1.495872719630727,
+     "falsecolor_mean": 17.155620380960457,
+     "falsecolor_p99": 132.3388633573587,
+     "clipzone_chroma_mean": 1.0897080675637596,
+     "clipzone_chroma_p99": 24.308353662719654
+    },
+    "post-opposed": {
+     "de_mean": 8.741894545412054,
+     "de_p95": 48.80556272039187,
+     "de_max": 63.78950180287023,
+     "dl_mean": 5.071288631900441,
+     "dc_mean": 21.092948261809735,
+     "clipzone_dc_mean": 1.0162651043149287,
+     "clipzone_de_mean": 0.5876613048903708,
+     "falsecolor_mean": 21.454916121377494,
+     "falsecolor_p99": 129.93338499526243,
+     "clipzone_chroma_mean": 1.7340406872370702,
+     "clipzone_chroma_p99": 24.308353662719654
+    }
+   }
+  }
+ }
+}
