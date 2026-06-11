@@ -38,7 +38,8 @@
     "de_max": 49.29364113120376,
     "dl_mean": 0.037286958687540894,
     "dc_mean": 0.1869060568788575
-   }
+   },
+   "lr_product_invariants": {}
   },
   "clipramp": {
    "clip_frac": 0.23789787798408488,
@@ -95,6 +96,10 @@
     "clipzone_de_mean": 0.19502358168487854,
     "clipzone_chroma_mean": 3.0036918081482384,
     "clipzone_chroma_p99": 7.141944670357767
+   },
+   "lr_product_invariants": {
+    "clipzone_chroma_mean": 1.0664380039083703,
+    "clipzone_chroma_p99": 1.8501703108330634
    }
   },
   "bars": {
@@ -144,6 +149,10 @@
     "dc_mean": 20.335312039839682,
     "falsecolor_mean": 20.339010142117225,
     "falsecolor_p99": 132.03010275407254
+   },
+   "lr_product_invariants": {
+    "falsecolor_mean": 2.030820610228181,
+    "falsecolor_p99": 40.531304086354815
    }
   },
   "clipbars": {
@@ -213,6 +222,12 @@
     "falsecolor_p99": 133.51612792327253,
     "clipzone_chroma_mean": 4.788893642093341,
     "clipzone_chroma_p99": 95.47266631469024
+   },
+   "lr_product_invariants": {
+    "falsecolor_mean": 3.338785758405183,
+    "falsecolor_p99": 38.731797603206225,
+    "clipzone_chroma_mean": 0.7823965799239233,
+    "clipzone_chroma_p99": 35.48681156873253
    }
   },
   "zoneplate": {
@@ -262,6 +277,10 @@
     "dc_mean": 1.025889516936557,
     "falsecolor_mean": 1.0230663906827133,
     "falsecolor_p99": 10.538531454287156
+   },
+   "lr_product_invariants": {
+    "falsecolor_mean": 0.02094246225571851,
+    "falsecolor_p99": 0.5146289159033713
    }
   },
   "diagbars": {
@@ -311,6 +330,10 @@
     "dc_mean": 38.83345165004712,
     "falsecolor_mean": 38.8357219186257,
     "falsecolor_p99": 132.03010275407254
+   },
+   "lr_product_invariants": {
+    "falsecolor_mean": 13.635218119289176,
+    "falsecolor_p99": 70.08785672356731
    }
   },
   "clipfield": {
@@ -380,6 +403,12 @@
     "falsecolor_p99": 0.7422050137513719,
     "clipzone_chroma_mean": 0.008498487609448557,
     "clipzone_chroma_p99": 0.008498487609448548
+   },
+   "lr_product_invariants": {
+    "falsecolor_mean": 0.016680528055863883,
+    "falsecolor_p99": 0.42909509595074796,
+    "clipzone_chroma_mean": 0.00878438411778448,
+    "clipzone_chroma_p99": 0.008498487609448548
    }
   },
   "shadowwedge": {
@@ -429,6 +458,10 @@
     "dc_mean": 0.27422272774165596,
     "falsecolor_mean": 0.23705530218743187,
     "falsecolor_p99": 0.8228812722090163
+   },
+   "lr_product_invariants": {
+    "falsecolor_mean": 0.001993018969374801,
+    "falsecolor_p99": 0.0027288007275953208
    }
   },
   "noisebars": {
@@ -478,6 +511,10 @@
     "dc_mean": 27.75880041619831,
     "falsecolor_mean": 27.759849108572045,
     "falsecolor_p99": 132.30097778579807
+   },
+   "lr_product_invariants": {
+    "falsecolor_mean": 4.251521257093256,
+    "falsecolor_p99": 27.164457906806746
    }
   },
   "slantededge": {
@@ -527,6 +564,10 @@
     "dc_mean": 0.016665916971861424,
     "falsecolor_mean": 0.023482376583058375,
     "falsecolor_p99": 0.008397248550000387
+   },
+   "lr_product_invariants": {
+    "falsecolor_mean": 0.009656010557569846,
+    "falsecolor_p99": 0.008346514590866806
    }
   },
   "clipbars_coolwb": {
@@ -565,6 +606,10 @@
      "clipzone_chroma_mean": 0.8920564510590654,
      "clipzone_chroma_p99": 19.25381651875876
     }
+   },
+   "lr_product_invariants": {
+    "clipzone_chroma_mean": 0.7823965799239233,
+    "clipzone_chroma_p99": 35.48681156873253
    }
   }
  }

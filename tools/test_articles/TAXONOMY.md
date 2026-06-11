@@ -76,9 +76,11 @@ edge behaviour. The product-grade anchors, in autonomy order:
    FC suppression, pre-demosaic highlight reconstruction). Wire as an
    invariant-scored engine arm. [next session]
 2. **libraw engine arm** — wired ✅.
-3. **LR-product one-batch export**: the article DNGs are valid DNGs; one owner
-   batch (import all, export 16-bit sRGB, no resize, sharpening off) freezes
-   product-grade anchors for every article at once. Re-export only when the
-   article set changes. [staged — see CLAIMS]
+3. **LR-product one-batch export** — ✅ DONE 2026-06-10 (`lr-anchors/*.tif`,
+   scored by `score_lr_anchors.py` into the evidence JSON). Re-export only
+   when the article set changes. Found: ACR ≈eliminates zoneplate false
+   colour (0.02), wins diagbars (13.6) + smooth-clip reconstruction (1.07);
+   WE beat the product on bars (1.15 vs 2.03) and clipbars (1.12 vs 3.34,
+   post-fallback).
 4. RawTherapee: GUI-only on macOS (CLI broken, CLAIMS) — owner-session only,
    low priority while dt-cli covers the product class.
