@@ -258,16 +258,19 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     render.add_argument(
-        "--fc-suppress", dest="fc_suppress", type=int, default=0,
+        "--fc-suppress", dest="fc_suppress", type=int, default=None,
         metavar="N",
         help=(
             "False-colour suppression passes (TARGET slot 6): the cross-engine "
-            "canon scheme (darktable color_smoothing / dcraw -m class) — per "
-            "pass, median the R-G and B-G chroma differences over 3x3 and add "
-            "G back, leaving G (detail) untouched. Suppresses demosaic-invented "
-            "colour on fine detail/grain (zoneplate/noisebars class). 0 = off "
-            "(the default; owner-gated pending eyeball), 1-5 passes "
-            "(2 recommended by the slot-6 iteration evidence)."
+            "canon scheme (darktable color_smoothing / dcraw -m class + "
+            "RT-style chroma blur) — per pass, median the R-G and B-G chroma "
+            "differences over 3x3, blur, add G back; G (detail) is never "
+            "touched. Default AUTO (owner-approved 2026-06-12): 3 passes on "
+            "display targets (visibly reduces residual edge artifacts; "
+            "noisebars at the LR-product class), OFF on the scene-linear "
+            "cinema-linear-master (the tap-7 EXR stays untouched for "
+            "grading). Pass an explicit 0 to force off, 1-5 to force a "
+            "pass count."
         ),
     )
     render.add_argument(
@@ -352,6 +355,18 @@ class _RenderJob:
     demosaic: str = "linear"      # libraw demosaic algorithm ("linear" = byte-exact)
     capture_sharpen: str = "off"  # "off"|"xmp"|"acr" (faithful capture sharpening; off=byte-exact)
     fc_suppress: int = 0          # slot-6 false-colour suppression passes (0 = off)
+
+
+def resolve_fc_suppress(explicit: int | None, preset: str) -> int:
+    """Slot-6 false-colour-suppression default resolution (owner-approved
+    2026-06-12): AUTO = 3 passes on DISPLAY presets (tone-curved tap-9
+    paths, where the owner verified the visible benefit on real frames),
+    0 (off) on the scene-linear tap-7 master — the EXR carries untouched
+    scene data; suppression belongs to the display render or the grade.
+    An explicit --fc-suppress value (including 0) always wins."""
+    if explicit is not None:
+        return explicit
+    return 0 if preset in STAGE_7_PRESETS else 3
 
 
 @dataclass
@@ -747,6 +762,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
         args.highlight_recovery if args.highlight_recovery is not None
         else (preset in STAGE_7_PRESETS)
     )
+    fc_suppress = resolve_fc_suppress(args.fc_suppress, preset)
     # Intent default is per-target (sRGB→faithful, EXR→perceptual); --render-intent
     # overrides. All creative values still come from the XMP — intent only picks
     # the grading math (DECISIONS.md §7).
@@ -812,7 +828,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
             master_look=master_look,
             demosaic=args.demosaic,
             capture_sharpen=capture_sharpen,
-            fc_suppress=args.fc_suppress,
+            fc_suppress=fc_suppress,
         ))
 
     if args.dry_run:
@@ -824,7 +840,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
             f"capture_sharpen={capture_sharpen}, "
             f"backend={backend}, preview_scale={args.preview_scale}, "
             f"highlight_recovery={highlight_recovery}, "
-            f"fc_suppress={args.fc_suppress}, "
+            f"fc_suppress={fc_suppress}, "
             f"workers={args.workers}).\n",
         )
         return 0

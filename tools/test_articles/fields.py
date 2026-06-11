@@ -194,9 +194,25 @@ ARTICLES: dict[str, dict] = {
     "clipramp": {
         "field": "clipramp",
         "peak": 1.6,
-        # warm tint: R clips first along the ramp, then G, then B — the
-        # inter-clip span IS the partial-clip hue zone, analytically known
+        # In UNBALANCED (sensor) units this tint × the gym ASN crosses clip
+        # on G ONLY (top of ramp: unbal ≈ [0.78, 1.31, 0.77]) — the original
+        # "R first, then G, then B" comment was FALSE (census 2026-06-12,
+        # CLAIMS "Partial-channel-clip physics census"). The single-channel
+        # G partial-clip regime; multi-channel staggering: clipramp_deep.
         "tint": [1.0, 0.82, 0.62],
+    },
+    "clipramp_deep": {
+        "field": "clipramp",
+        # Multi-channel STAGGERED clipping, analytically known (owner-
+        # directed 2026-06-12): tint chosen against the gym ASN ([0.5, 1.0,
+        # 0.7757]) so the UNBALANCED channels cross sensor clip at distinct
+        # ramp positions — G at 45.5 % (top unbal 2.2), R at 66.7 % (1.5),
+        # B at 83.3 % (1.2). Yields analytic 1-ch (G), 2-ch (G+R) and
+        # 3-ch zones for the held-out-truth reconstruction harness.
+        # NB: new article ⇒ the LR-product anchor batch needs a re-export
+        # (owner) before this row gets a product column.
+        "peak": 2.2,
+        "tint": [1.3636, 1.0, 0.7031],
     },
     "bars": {
         "field": "bars",

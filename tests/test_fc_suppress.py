@@ -66,6 +66,59 @@ def test_output_nonnegative_and_finite():
     assert np.isfinite(out).all() and (out >= 0).all()
 
 
+def test_resolve_fc_suppress_default_on_display_off_master():
+    """Owner-approved default (2026-06-12): AUTO = 3 passes on display
+    presets, OFF on the scene-linear master; an explicit value (incl. 0)
+    always wins. Guards the preset wiring against silent drift."""
+    from lrt_cinema.cli import resolve_fc_suppress
+    from lrt_cinema.presets import PRESETS, STAGE_7_PRESETS
+
+    for preset in PRESETS:
+        auto = resolve_fc_suppress(None, preset)
+        if preset in STAGE_7_PRESETS:
+            assert auto == 0, f"{preset}: master path must default OFF"
+        else:
+            assert auto == 3, f"{preset}: display path must default to 3"
+        assert resolve_fc_suppress(0, preset) == 0      # explicit off wins
+        assert resolve_fc_suppress(2, preset) == 2      # explicit count wins
+
+
+def test_suppression_measurably_reduces_invented_chroma_end_to_end():
+    """The owner's regression guard (2026-06-12): the ON and OFF paths are
+    BOTH measured so a future change that silently weakens (or breaks)
+    suppression — or makes it start eating real signal — fails CI.
+
+    A neutral noisy field (the noisebars grain model, seeded) is mosaicked
+    and demosaiced with menon; every bit of chroma in the result is
+    demosaic-INVENTED (the scene is neutral by construction). Suppression
+    at the production setting (3 passes + blur) must cut that invented
+    chroma by ≥25 %; G must be byte-identical; and a clean neutral step
+    edge must pass through suppression unchanged (no resolution cost)."""
+    from colour_demosaicing import demosaicing_CFA_Bayer_Menon2007
+
+    rng = np.random.default_rng(20260612)
+    h = w = 128
+    field = (0.4 + rng.normal(0.0, 0.04, (h, w))).astype(np.float32)
+    np.clip(field, 0.0, 1.0, out=field)
+    # Neutral scene → the mosaic is the field itself at every CFA site.
+    rgb = np.maximum(np.asarray(
+        demosaicing_CFA_Bayer_Menon2007(field, "RGGB"), np.float32), 0.0)
+
+    def invented_chroma(x: np.ndarray) -> float:
+        i = x[8:-8, 8:-8]
+        return float((np.abs(i[..., 0] - i[..., 1])
+                      + np.abs(i[..., 2] - i[..., 1])).mean())
+
+    off = invented_chroma(rgb)
+    on_rgb = suppress_false_colour(rgb, passes=3, blur=True)
+    on = invented_chroma(on_rgb)
+    assert off > 1e-4, "test premise broken: menon invented no chroma on grain"
+    assert on <= 0.75 * off, (
+        f"suppression effect regressed: invented chroma {off:.5f} -> {on:.5f} "
+        f"(needs >=25 % reduction)")
+    np.testing.assert_array_equal(on_rgb[..., 1], rgb[..., 1])
+
+
 def test_blur_variant_contracts_hold():
     """The RT-style blur refinement keeps every structural contract: G
     untouched, flat fields invariant, shared luma edges intact, output

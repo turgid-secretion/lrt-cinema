@@ -79,9 +79,11 @@ DCP = Path(
     "/Library/Application Support/Adobe/CameraRaw/CameraProfiles/"
     "Camera/Nikon D750/Nikon D750 Camera Standard.dcp"
 )
-SYN_WHITE = 0.6          # synthetic saturation, fraction of true white
+SYN_WHITES = (0.4, 0.6)  # synthetic saturations, fraction of true white
+                         # (0.4 = deeper truth, 2.5x over-range, more
+                         #  multi-channel clips; 0.6 = the original band)
 TRUE_CLIP = 0.99         # sites at/above this had NO truth — excluded
-ARTICLES = ("clipramp", "clipfield", "clipbars")
+ARTICLES = ("clipramp", "clipramp_deep", "clipfield", "clipbars")
 EVIDENCE = REPO / "tests/fixtures/evidence/hl_truth_harness_2026-06-12.json"
 
 
@@ -173,13 +175,13 @@ def main() -> int:
 
     results: dict = {
         "design": "held-out-truth reconstruction scoring (band-clip + analytic)",
-        "syn_white": SYN_WHITE,
+        "syn_whites": list(SYN_WHITES),
         "predictions": "Q1 pre beats clamp >=30% on partial sites, parity on "
                        "full; Q2 post <= pre; Q3 clipbars poor for all arms",
         "real_frame": {}, "articles": {},
     }
 
-    # ---- Part 1: real-frame band-clip --------------------------------------
+    # ---- Part 1: real-frame band-clip, per synthetic white -----------------
     with rawpy.imread(str(GYM_DNG)) as raw:
         cfa_norm, pattern = _extract_cfa(raw)
         colors = raw.raw_colors_visible
@@ -189,23 +191,28 @@ def main() -> int:
         asn = 1.0 / wb
         asn = asn / asn[1]
     wb_mul = _wb_mul_from_asn(asn)
-
-    truth = cfa_norm / np.float32(SYN_WHITE)          # over-range truth
-    clamped = np.minimum(truth, np.float32(1.0))      # synthetic sensor clip
-    truth_b = truth * wb_mul[chan]
-    clamped_b = clamped * wb_mul[chan]
-    band = (cfa_norm >= SYN_WHITE) & (cfa_norm < TRUE_CLIP)
     clips_b = (orc._CLIP_MAGIC * wb_mul).astype(np.float32)
-    partial = _partial_full_split(clamped_b, chan, clips_b)
-    print(f"real frame: {int(band.sum())} truth-holding clipped sites "
-          f"({band.mean()*100:.2f} % of mosaic)")
 
-    for name, rec in _arms_for(clamped_b, chan, wb_mul, pattern).items():
-        s = _score(rec, truth_b, band, chan, partial)
-        results["real_frame"][name] = s
-        print(f"  {name:16s} rel_mae={s['rel_mae']:.4f}  bias={s['bias']:+.4f}"
-              f"  partial={s.get('rel_mae_partial', float('nan')):.4f}"
-              f"  full={s.get('rel_mae_full', float('nan')):.4f}")
+    for syn_w in SYN_WHITES:
+        truth = cfa_norm / np.float32(syn_w)          # over-range truth
+        clamped = np.minimum(truth, np.float32(1.0))  # synthetic sensor clip
+        truth_b = truth * wb_mul[chan]
+        clamped_b = clamped * wb_mul[chan]
+        band = (cfa_norm >= syn_w) & (cfa_norm < TRUE_CLIP)
+        partial = _partial_full_split(clamped_b, chan, clips_b)
+        wkey = f"W{syn_w}"
+        results["real_frame"][wkey] = {}
+        print(f"real frame {wkey}: {int(band.sum())} truth-holding clipped "
+              f"sites ({band.mean()*100:.2f} % of mosaic; truth to "
+              f"{1/syn_w:.2f}x)")
+
+        for name, rec in _arms_for(clamped_b, chan, wb_mul, pattern).items():
+            s = _score(rec, truth_b, band, chan, partial)
+            results["real_frame"][wkey][name] = s
+            print(f"  {name:16s} rel_mae={s['rel_mae']:.4f}"
+                  f"  bias={s['bias']:+.4f}"
+                  f"  partial={s.get('rel_mae_partial', float('nan')):.4f}"
+                  f"  full={s.get('rel_mae_full', float('nan')):.4f}")
 
     # ---- Part 2: analytic articles ------------------------------------------
     manifest = json.loads((ART / "manifest.json").read_text())

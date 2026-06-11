@@ -31,7 +31,8 @@ row has an article (or an explicit justification for why not). Status:
 | Zipper / luminance structure at edges | bars + ΔL split; zipper-ratio metric port from demosaic_bench | 🔶 ΔL pinned; dedicated zipper metric pending |
 | Resolution / MTF | slantededge (ISO 12233:2017 eSFR, 5°) | ⬜ v2 (method exists in demosaic_bench for algorithm domain) |
 | Clip × fine detail (the production blinds class) | clipbars | ✅ THE headline: ours 17.5 vs libraw 0.88 → clip-to-common-white fallback shipped |
-| Partial-clip smooth gradients (magenta-band class) | clipramp | ✅ ours 2.85 vs libraw 12.12 (reversal) |
+| Partial-clip smooth gradients (magenta-band class) | clipramp | ✅ ours 2.85 vs libraw 12.12 (reversal). NB census 2026-06-12: G-ONLY clips as parameterized |
+| Multi-channel STAGGERED partial clip (analytic truth for the held-out reconstruction harness: G→R→B cross at 45.5/66.7/83.3 % of ramp) | clipramp_deep (peak 2.2, tint [1.364, 1.0, 0.703] vs gym ASN; owner-directed 2026-06-12) | ✅ harness scored (pre-opposed −64 % rel_mae); LR-product anchor PENDING next owner export batch |
 | Large blown region + bloom edge (window/sun) | clipfield (gaussian blob, peak ≫ clip) | ⬜ v2 |
 | WB-conditioning under develop override (H1 regression) | clipbars_coolwb (same mosaic, 4034K/+20 develop WB) | ⬜ v2 |
 | Deep-shadow / black-level / quantisation | shadowwedge (log-spaced near-black patches) | ⬜ v2 |
