@@ -530,23 +530,60 @@ def _extract_cfa(raw) -> tuple[np.ndarray, str]:
     return cfa_norm[: h - (h % 2), : w - (w % 2)], pattern
 
 
+def _mosaic_clip_mask(raw, threshold: float = 0.99, dilate: int = 2) -> np.ndarray:
+    """Per-channel boolean clip mask (H, W, 3) derived from the RAW mosaic.
+
+    A site is clipped where the linearised, black-subtracted mosaic value is
+    ≥ `threshold` of sensor saturation — measured at the SENSOR, before any
+    WB scaling or demosaic, so it cannot be fooled by either. Each channel's
+    sparse site mask is dilated by `dilate` pixels (default 2 ≈ the
+    directional-demosaic interpolation footprint), marking every full-res
+    pixel whose channel-c value was interpolated FROM a clipped site. This is
+    the mask the fringe forensics proved necessary: the post-demosaic 0.99
+    value threshold structurally misses interpolation-smeared partial clips
+    (CLAIMS.md "Fringe forensics verdict"; mechanism A used exactly this
+    2-dilated mosaic mask). Consumers: `highlight_recovery` clip detection,
+    slot-5b reconstruction.
+    """
+    from scipy.ndimage import maximum_filter
+
+    cfa = raw.raw_image_visible.astype(np.float32)
+    colors = raw.raw_colors_visible
+    black = np.asarray(raw.black_level_per_channel, dtype=np.float32)[colors]
+    white = np.float32(raw.white_level)
+    norm = (cfa - black) / (white - black)
+    clipped = norm >= np.float32(threshold)
+    chan = np.where(colors == 3, 1, colors)  # G2 → G
+    h, w = clipped.shape
+    mask = np.zeros((h, w, 3), dtype=bool)
+    size = 2 * dilate + 1
+    for c in range(3):
+        sites = clipped & (chan == c)
+        if sites.any():
+            mask[..., c] = maximum_filter(sites.astype(np.uint8), size=size) > 0
+    return mask
+
+
 def _cfa_demosaic(raw, method: str, wb_mul: np.ndarray | None = None,
                   highlights: str = "clip") -> np.ndarray:
     """Demosaic an open rawpy `raw` on the extracted CFA with a CFA-domain `method`
     ('rcd'|'mlri'|'menon'), headroom-preserving. Returns float32 (H, W, 3).
 
     `wb_mul` (3,) G-normalised WB multipliers: the CFA is scaled per-site by
-    them BEFORE interpolation and the result divided back after, so the output
-    stays unbalanced camera RGB. This is the cross-engine canonical order
-    (dcraw `scale_colors` → `*_interpolate`; libraw, RawTherapee, Lightroom
-    likewise demosaic the white-balanced mosaic): directional demosaics
+    them BEFORE interpolation and the result returned BALANCED — WB applied
+    exactly once, at the mosaic (TARGET slot 3, owner-accepted; the previous
+    divide-back shim that preserved the unbalanced contract through the H1
+    hotfix is deleted). This is the cross-engine canonical order (dcraw
+    `scale_colors` → `*_interpolate`; darktable temperature@3 → demosaic@8;
+    RT scaleColors bakes camera WB pre-demosaic): directional demosaics
     estimate edges from inter-channel comparisons, which mis-fire on
     unbalanced channels and invent saturated false colour at steep edges —
     the owner-flagged cyan "venetian blinds". Bilinear COMMUTES with the
     per-channel scale, which is exactly why the Adobe `dng_validate` gate
     (bilinear reference) never caught the wrong order — see CLAIMS.md
-    "H1 CONFIRMED" + anti-drift rule 8. Headroom: scale → demosaic → divide
-    is exact in float; >1 values survive."""
+    "H1 CONFIRMED" + anti-drift rule 8. `wb_mul=None` → unit WB, where
+    balanced ≡ unbalanced by construction (synthetic identity tests).
+    Headroom mode: >1 values survive the float chain untouched."""
     cfa, pattern = _extract_cfa(raw)
     if wb_mul is not None:
         colors = raw.raw_colors_visible
@@ -584,29 +621,28 @@ def _cfa_demosaic(raw, method: str, wb_mul: np.ndarray | None = None,
         rgb = np.maximum(out, np.float32(0.0))
     else:
         raise ValueError(f"unknown CFA demosaic method {method!r}")
-    if wb_mul is not None:
-        rgb = rgb / wb_mul[None, None, :]
     return rgb
 
 
 def _libraw_rgb(raw, rawpy_mod, half_size: bool, demosaic: str,
                 wb_mul: np.ndarray | None) -> np.ndarray:
-    """libraw `postprocess` → unbalanced linear camera RGB in [0, 1].
+    """libraw `postprocess` → BALANCED linear camera RGB.
 
     With `wb_mul`, libraw scales the CFA before interpolating (canonical
-    order — see `_postprocess_kwargs`) and the output is divided back here.
-    libraw normalises the user multipliers by their MINIMUM (verified
-    empirically: user_wb [2,1,1.5,1] scales output by exactly [2,1,1.5] when
-    min=1), so the divide-back uses `wb_mul / wb_mul.min()`. Channels clip at
-    65535 pre-divide, so a blown pixel lands at `min/wb_c` per channel —
-    which Stage-2's re-multiply maps back to NEUTRAL white (Adobe/dcraw
-    "solid white" highlight-clip behaviour; the unit-WB path instead let
-    blown pixels go to the WB colour)."""
+    order — see `_postprocess_kwargs`). libraw normalises the user
+    multipliers by their MINIMUM (verified empirically: user_wb [2,1,1.5,1]
+    scales output by exactly [2,1,1.5] when min=1), so the output here is
+    rescaled by `wb_mul.min()` (a scalar) to land on the same G-normalised
+    balanced scale as the CFA paths. Channels clip at 65535 inside libraw,
+    so a blown pixel lands at `wb_mul.min()` on every channel — NEUTRAL
+    white at the common-white clip level (Adobe/dcraw "solid white"
+    highlight-clip behaviour; the unit-WB path instead let blown pixels go
+    to the WB colour). `wb_mul=None` → unit WB, output unscaled [0, 1]."""
     rgb = raw.postprocess(
         **_postprocess_kwargs(rawpy_mod, half_size, demosaic, wb_mul),
     ).astype(np.float32) / 65535.0
     if wb_mul is not None:
-        rgb = rgb / (wb_mul / wb_mul.min())[None, None, :]
+        rgb = rgb * np.float32(wb_mul.min())
     return rgb
 
 
@@ -621,9 +657,9 @@ def _demosaic_rgb(raw, rawpy_mod, half_size: bool, demosaic: str,
     `demosaic_camera_rgb` + `_decode_raw` so they cannot drift.
 
     `wb_mul` (3,) G-normalised WB multipliers → demosaic the white-balanced
-    mosaic, divide back after (cross-engine canonical order; the H1 cyan
-    root-cause fix — see `_cfa_demosaic`). Output stays unbalanced camera RGB
-    either way."""
+    mosaic and return BALANCED camera RGB (WB applied once, at the mosaic —
+    TARGET slot 3; the H1 cyan root-cause fix). `wb_mul=None` → unit WB,
+    balanced ≡ unbalanced."""
     if demosaic in _CFA_DEMOSAICS and not half_size:
         try:
             rgb = _cfa_demosaic(raw, demosaic, wb_mul, highlights)
@@ -667,12 +703,11 @@ def demosaic_camera_rgb(
     `docs/research/dng-pipeline-findings.md` §"Verification of the LINEAR
     demosaic finding".
 
-    The mosaic is white-balance-scaled BEFORE interpolation and divided back
-    after (cross-engine canonical order; the H1 cyan fix — `_cfa_demosaic`),
-    so the return contract is unchanged: UNBALANCED linear camera RGB.
-    `wb_asn` selects the neutral used for that conditioning — default None =
-    the camera AsShotNeutral (dcraw's default); pass the develop/render
-    neutral when known so the pre-scale matches Stage 2 exactly.
+    The mosaic is white-balance-scaled BEFORE interpolation and the result
+    returned BALANCED (WB applied once, at the mosaic — TARGET slot 3; the
+    H1 cyan fix). `wb_asn` selects the render neutral — default None = the
+    camera AsShotNeutral (dcraw's default); pass the develop/render neutral
+    when known. The G-normalised multipliers are `_wb_mul_from_asn(asn)`.
 
     `half_size` (preview only): libraw's fast 2×2-bin demosaic — one output
     pixel per Bayer quad, so it skips interpolation AND returns a (H/2, W/2)
@@ -680,8 +715,8 @@ def demosaic_camera_rgb(
     proxy path needs (CLAUDE-graded full renders pass `half_size=False`). The
     binned result is NOT colour-graded for delivery — preview only.
 
-    Returns float32 (H, W, 3) in linear camera RGB, normalized [0, 1] after
-    black-level subtract.
+    Returns float32 (H, W, 3) BALANCED linear camera RGB (black-subtracted,
+    white-normalised, G-normalised WB applied at the mosaic).
     """
     import rawpy
 
@@ -693,19 +728,26 @@ def demosaic_camera_rgb(
 def _decode_raw(
     raw_path: str | Path, half_size: bool = False, demosaic: str = "linear",
     wb_asn: np.ndarray | None = None, highlights: str = "clip",
-) -> tuple[np.ndarray, np.ndarray]:
-    """Open the raw ONCE; return (linear camera RGB, camera AsShotNeutral).
+    want_clip_mask: bool = False,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    """Open the raw ONCE; return (BALANCED linear camera RGB, camera
+    AsShotNeutral, optional mosaic clip mask).
 
-    `render_frame` needs both the demosaiced pixels and the camera AsShotNeutral;
-    opening the file twice (`read_as_shot_neutral` + `demosaic_camera_rgb`) wastes
-    a full ~0.3 s raw decode per frame — dominant at high `preview_scale`, where
-    the pixel work is tiny. This folds them into a single `rawpy.imread`.
+    `render_frame` needs the demosaiced pixels, the camera AsShotNeutral and
+    (when reconstruction is on) the mosaic-derived clip mask; opening the
+    file more than once wastes a full ~0.3 s raw decode per frame. This
+    folds them into a single `rawpy.imread`.
 
-    `wb_asn`: the neutral for the demosaic WB pre-conditioning (canonical
-    scale-before-interpolate order, H1 fix). None → the camera AsShotNeutral.
-    Callers that override WB downstream (Holy-Grail kelvin) pass their final
-    neutral so the pre-scale matches Stage 2 exactly. The returned
-    AsShotNeutral is ALWAYS the camera tag (unchanged contract)."""
+    `wb_asn`: the render neutral for the at-mosaic WB (canonical
+    scale-before-interpolate order, H1 fix; WB applied ONCE — slot 3).
+    None → the camera AsShotNeutral. Callers that override WB (Holy-Grail
+    kelvin) pass their final neutral. The returned AsShotNeutral is ALWAYS
+    the camera tag (unchanged contract).
+
+    `want_clip_mask`: also compute `_mosaic_clip_mask` (sensor-saturation
+    sites, per-channel, 2-dilated) cropped to the decoded shape; None when
+    not requested or on any mask failure (callers fall back to the
+    value-threshold detection)."""
     import rawpy
 
     with rawpy.imread(str(raw_path)) as raw:
@@ -714,7 +756,13 @@ def _decode_raw(
         rgb = _demosaic_rgb(
             raw, rawpy, half_size, demosaic, _wb_mul_from_asn(asn), highlights,
         )
-    return rgb, cam_asn
+        mask: np.ndarray | None = None
+        if want_clip_mask and not half_size:
+            try:
+                mask = _mosaic_clip_mask(raw)[: rgb.shape[0], : rgb.shape[1]]
+            except Exception:  # noqa: BLE001 — mask is an enhancement, never fatal
+                mask = None
+    return rgb, cam_asn, mask
 
 
 def _block_downsample(img: np.ndarray, k: int) -> np.ndarray:
@@ -750,10 +798,16 @@ def apply_adobe_pipeline(
     default_black_render: int = 0,
     stop_after_stage: int = 9,
 ) -> np.ndarray:
-    """Apply DNG 1.7.1 §"Mapping Camera Color Space" stages 2 through
+    """Apply DNG 1.7.1 §"Mapping Camera Color Space" stages 3 through
     `stop_after_stage`.
 
-    Input: linear camera RGB (H, W, 3), [0, 1+], post-demosaic / black-subtract.
+    Input: **BALANCED** linear camera RGB (H, W, 3), [0, 1+] — white balance
+    is applied ONCE, at the mosaic, by the decode (`_demosaic_rgb` with the
+    G-normalised `_wb_mul_from_asn(as_shot_neutral)` multipliers); there is
+    no Stage-2 multiply here any more (TARGET slot 3, owner-accepted: the
+    divide-back/re-multiply shim telescoped exactly and is deleted).
+    `as_shot_neutral` is still required: the kelvin solve and the no-FM
+    ColorMatrix branch consume it.
     Output: linear ProPhoto RGB (D50), (H, W, 3), [0, 1+].
 
     `default_black_render`: 0 = Auto (Shadows=5.0), 1 = None (Shadows=0).
@@ -790,10 +844,8 @@ def apply_adobe_pipeline(
         )
     h, w, _ = camera_rgb.shape
 
-    # Stage 2: AsShotNeutral inverse → balanced camera RGB.
-    wb_mul = 1.0 / as_shot_neutral
-    wb_mul = wb_mul / wb_mul[1]
-    balanced = camera_rgb * wb_mul[None, None, :]
+    # Input arrives BALANCED (WB applied once, at the mosaic — slot 3).
+    balanced = camera_rgb
 
     # Stage 3: camera RGB → XYZ(D50).
     if profile.forward_matrix_1 is not None:
@@ -824,6 +876,9 @@ def apply_adobe_pipeline(
         # and tints every neutral (~7 ΔE). This branch is what Adobe runs for
         # FM-less embedded profiles (e.g. the dnglab-cloned synthetic DNG, whose
         # ForwardMatrix dnglab strips) and is authored to feed the LookTable.
+        # `colormatrix_camera_to_pcs` is defined on UNBALANCED camera RGB (it
+        # embeds the neutral); input here is balanced, so fold the inverse WB
+        # (unbal = bal · asn/asn_G) into the matrix — exact, no extra pass.
         import colour
         pcs_white_xy = tuple(
             float(c) for c in colour.RGB_COLOURSPACES["ProPhoto RGB"].whitepoint
@@ -831,7 +886,9 @@ def apply_adobe_pipeline(
         camera_to_pcs = colormatrix_camera_to_pcs(
             profile, as_shot_neutral, pcs_white_xy,
         )
-        xyz = camera_rgb.reshape(-1, 3) @ camera_to_pcs.T
+        asn64 = np.asarray(as_shot_neutral, dtype=np.float64)
+        camera_to_pcs = camera_to_pcs @ np.diag(asn64 / asn64[1])
+        xyz = balanced.reshape(-1, 3) @ camera_to_pcs.T
         xyz = xyz.reshape(h, w, 3).astype(np.float32)
 
     # Colorimetric tap (Stage 3): XYZ(D50) immediately post-ForwardMatrix —
@@ -993,15 +1050,16 @@ def render_frame(
     linear ProPhoto(D50) immediately post-ForwardMatrix, pre-HSM) for the
     Axis-2 absolute-accuracy harness — see `apply_adobe_pipeline`.
 
-    `highlight_recovery`: when True, run the Tier-1 raw highlight-reconstruction
-    pre-stage (`highlight_recovery.reconstruct_highlights`) on the camera RGB
-    POST-demosaic, BEFORE Stage-2 WB — recovering blown highlights from surviving
-    channels by local ratio propagation (clean white instead of dark/warm). A
-    strict byte-identical no-op when no channel clips. **Default False** so every
-    caller (incl. the gym/rose ΔE ship gate, whose gym frame is itself clipped)
-    stays byte-identical; the CLI/preset layer turns it on for production. In
-    clipped regions this intentionally diverges from `dng_validate` (which clips,
-    not reconstructs) — docs/archive/DECISIONS.md §"Highlight recovery".
+    `highlight_recovery`: when True, run the Tier-1 highlight-reconstruction
+    pre-stage (`highlight_recovery.reconstruct_highlights`) on the BALANCED
+    camera RGB post-demosaic, driven by the mosaic-derived clip mask at full
+    res — recovering blown highlights from surviving channels by local ratio
+    propagation (clean white instead of dark/warm). A strict byte-identical
+    no-op when no channel clips. **Default False** so every caller (incl.
+    the gym/rose ΔE ship gate, whose gym frame is itself clipped) stays
+    byte-identical; the CLI/preset layer turns it on for production. In
+    clipped regions this intentionally diverges from `dng_validate` (which
+    clips, not reconstructs) — docs/archive/DECISIONS.md §"Highlight recovery".
     """
     if preview_scale not in _PREVIEW_SCALES:
         raise ValueError(
@@ -1020,11 +1078,12 @@ def render_frame(
             profile, scene_kelvin, float(develop_ops.tint or 0.0),
         )
 
-    # One raw open yields both the demosaiced pixels and AsShotNeutral (the
-    # separate read wasted a full decode — costly at high preview_scale).
-    camera_rgb, cam_asn = _decode_raw(
+    # One raw open yields the demosaiced pixels, AsShotNeutral and (when
+    # reconstruction is on, full-res) the mosaic-derived clip mask.
+    camera_rgb, cam_asn, clip_mask = _decode_raw(
         raw_path, half_size=(preview_scale >= 2), demosaic=demosaic,
         wb_asn=override_asn, highlights=demosaic_highlights,
+        want_clip_mask=(highlight_recovery and preview_scale == 1),
     )
     asn = override_asn if override_asn is not None else cam_asn
     if preview_scale >= 2:
@@ -1033,23 +1092,29 @@ def render_frame(
     dng_be = read_dng_baseline_exposure(raw_path)
     dbr = read_dcp_default_black_render(dcp_path) if dcp_path is not None else 0
 
-    # Stage 1.5: Tier-1 raw highlight reconstruction (camera space, pre-WB).
-    # Uses the FINAL `asn` (incl. any Holy-Grail kelvin override above) so the
-    # fully-blown neutral interim lands neutral after the Stage-2 WB multiply.
-    # No-op (byte-identical) when no channel clips. See `highlight_recovery`.
+    # Stage 1.5: Tier-1 highlight reconstruction on BALANCED camera RGB
+    # (neutral = [1,1,1] by construction). Clip detection comes from the
+    # MOSAIC mask when available (sensor-saturation truth — the value
+    # threshold structurally misses interpolation-smeared partial clips;
+    # CLAIMS "Fringe forensics verdict"); preview falls back to the
+    # threshold. No-op (byte-identical) when nothing clips.
     if highlight_recovery:
         from lrt_cinema.highlight_recovery import reconstruct_highlights
-        camera_rgb = reconstruct_highlights(camera_rgb, asn)
+        camera_rgb = reconstruct_highlights(camera_rgb, clip=clip_mask)
 
-    # LRT mask-EV corrections (deflicker / Holy-Grail / global): a
-    # scene-referred linear gain, pre-Stage-2 — Lightroom applies
-    # LocalExposure2012 (×4, see interpolation.LR_LOCAL_EXPOSURE_SCALE)
-    # upstream of the tone pipeline; the post-curve `exposure_ev` domain
-    # measurably cannot match it (tools/cal_deflicker_factor.py, CLAIMS.md
-    # "Exact mask-exposure factor"). After highlight recovery: recovery's
-    # clip detection is sensor-referred.
-    if develop_ops is not None and develop_ops.scene_exposure_ev != 0.0:
-        camera_rgb = camera_rgb * np.float32(2.0 ** develop_ops.scene_exposure_ev)
+    # Scene-referred exposure block (slot 7): ONE linear gain combining the
+    # LRT mask-EV corrections (deflicker / Holy-Grail / global — serialized
+    # EV/4, applied ×4: interpolation.LR_LOCAL_EXPOSURE_SCALE) and the
+    # global Exposure2012 slider, which the CALEXP probe measured as the
+    # SAME scene-referred domain (cal_exposure_domain 2026-06-11: the
+    # post-curve arm fails ΔE 2.84/5.85; scene-gain lands at the base-look
+    # floor). Upstream of the colour transform per the canon; the
+    # post-curve domain measurably cannot match LR for either op class.
+    total_scene_ev = 0.0
+    if develop_ops is not None:
+        total_scene_ev = develop_ops.scene_exposure_ev + develop_ops.exposure_ev
+    if total_scene_ev != 0.0:
+        camera_rgb = camera_rgb * np.float32(2.0 ** total_scene_ev)
 
     prophoto = apply_adobe_pipeline(
         camera_rgb=camera_rgb,

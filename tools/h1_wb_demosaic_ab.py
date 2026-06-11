@@ -107,9 +107,13 @@ def main() -> int:
         # 2026-06-10 WB-before-demosaic fix) — must land on the h1 arm.
         for cond in ("current", "h1", "pipeline"):
             if cond == "current":
-                rgb = dm(cfa).astype(np.float32)
+                # Pre-fix arm: demosaic UNBALANCED, then emulate the
+                # deleted Stage-2 multiply (the historical wrong order).
+                rgb = (dm(cfa) * wb_mul[None, None, :]).astype(np.float32)
             elif cond == "h1":
-                rgb = (dm(cfa * gainmap) / wb_mul[None, None, :]).astype(np.float32)
+                # Target arm: scale -> demosaic, BALANCED output
+                # (slot-3 contract; divide-back shim deleted).
+                rgb = dm(cfa * gainmap).astype(np.float32)
             else:
                 from lrt_cinema.pipeline import _cfa_demosaic
                 with rawpy.imread(str(DNG)) as raw2:

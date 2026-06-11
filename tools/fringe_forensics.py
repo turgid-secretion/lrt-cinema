@@ -199,18 +199,20 @@ def _window_arms(tops: list[tuple[int, int]], mask: np.ndarray) -> dict:
                      cx - B + MARGIN:cx - B + MARGIN + WIN]
         for arm in arms:
             algo = arm.split("-")[0]
-            rgb = demosaic(algo, sub * subgain, pattern) / wb_mul[None, None, :]
+            # Slot-3 contract: demosaic the WB-scaled mosaic, output stays
+            # BALANCED (the divide-back shim is deleted from the pipeline).
+            rgb = demosaic(algo, sub * subgain, pattern)
             if arm == "menon-clipneutral":
                 # Diagnostic ONLY (not a fix): hue-neutralize every pixel in
                 # the 2-dilated mosaic clip mask — if the fringe dies here,
                 # the mechanism is clip-adjacent hue error, full stop.
-                # "Neutral" must be neutral AFTER Stage-2 WB, i.e. ∝ asn in
-                # unbalanced camera space (first version set all channels
-                # equal pre-WB — the very domain-error class under test —
-                # and measurably WORSENED the fringe; kept in evidence r1).
+                # In BALANCED camera RGB (slot-3 contract) neutral IS
+                # channels-equal; the unbalanced-space version had to aim
+                # along asn (and the r1 channels-equal-pre-WB mistake is
+                # exactly what the balanced contract abolishes).
                 nm = binary_dilation(subclip, iterations=2)
                 mx = rgb.max(axis=-1, keepdims=True)
-                neutral = mx * (asn / float(asn.max()))[None, None, :]
+                neutral = np.repeat(mx, 3, axis=-1)
                 rgb = np.where(nm[..., None], neutral.astype(rgb.dtype), rgb)
             if arm == "menon-chromamed":
                 # Canonical false-colour-suppression class (dcraw -m /

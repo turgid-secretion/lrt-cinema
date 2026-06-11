@@ -1,6 +1,6 @@
 # Pressure-suite results — ours vs reference engines
 
-Generated from `tests/fixtures/evidence/pressure_2026-06-10.json` by `report_table.py`;
+Generated from `tests/fixtures/evidence/pressure_2026-06-11.json` by `report_table.py`;
 regenerate after every pressure run. Anchor caveats: dng_validate's
 reference demosaic is BILINEAR (colour-math anchor, not product edge
 behaviour); LR-product = the owner's LR Classic export of the same

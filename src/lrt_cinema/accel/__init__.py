@@ -319,7 +319,7 @@ def mlx_render_frame_to_srgb(raw_path, profile, develop_ops=None,
         override_asn = P.kelvin_to_neutral(
             profile, scene_kelvin, float(ops.tint or 0.0),
         )
-    cam, cam_asn = P._decode_raw(
+    cam, cam_asn, _ = P._decode_raw(
         raw_path, half_size=(preview_scale >= 2), wb_asn=override_asn,
     )
     asn = override_asn if override_asn is not None else cam_asn

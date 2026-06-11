@@ -292,10 +292,10 @@ class MlxFaithfulRenderer:
         return np.clip(solver.evaluate(xs), 0.0, 1.0).astype(np.float32)
 
     def _frame_matrix(self, asn, scene_kelvin):
-        """Staged stages 2-4 collapsed to one 3x3 (cam→ProPhoto), matching the
-        FM mired-blend in pipeline.apply_adobe_pipeline. Cheap CPU 3x3."""
-        wb = 1.0 / np.asarray(asn, np.float64)
-        wb = wb / wb[1]
+        """Stages 3-4 collapsed to one 3x3 (BALANCED cam→ProPhoto), matching
+        the FM mired-blend in pipeline.apply_adobe_pipeline. Input camera RGB
+        arrives WB-balanced from the decode (slot 3 — WB once, at the
+        mosaic), so no diag(wb) is folded in any more. Cheap CPU 3x3."""
         fm1, fm2 = self._fm1, self._fm2
         if fm2 is not None and not np.allclose(fm1, fm2):
             k_lo, k_hi = sorted([self._k1, self._k2])
@@ -312,8 +312,8 @@ class MlxFaithfulRenderer:
                 fm = (1 - f) * fm_lo + f * fm_hi
         else:
             fm = fm1
-        return (self._m_xyz_pp.astype(np.float64) @ fm.astype(np.float64)
-                @ np.diag(wb)).astype(np.float32)
+        return (self._m_xyz_pp.astype(np.float64)
+                @ fm.astype(np.float64)).astype(np.float32)
 
     def _stage12_params(self, ops):
         """Per-frame Stage-12 CPU constants (tints, per-band arrays, LUT)."""
@@ -354,10 +354,13 @@ class MlxFaithfulRenderer:
         M = mx.array(self._frame_matrix(asn, scene_kelvin))
         x = mx.array(np.ascontiguousarray(camera_rgb.reshape(-1, 3), np.float32))
 
-        # LRT mask-EV corrections: scene-referred gain pre-Stage-2, mirroring
-        # pipeline.render_frame (CLAIMS.md "Exact mask-exposure factor").
-        if ops.scene_exposure_ev != 0.0:
-            x = x * (2.0 ** ops.scene_exposure_ev)
+        # Scene-referred exposure block (slot 7): mask EVs + global
+        # Exposure2012 as ONE linear gain, mirroring pipeline.render_frame
+        # (CLAIMS "Exact mask-exposure factor" + "Global Exposure2012 is
+        # SCENE-REFERRED").
+        total_ev = ops.scene_exposure_ev + ops.exposure_ev
+        if total_ev != 0.0:
+            x = x * (2.0 ** total_ev)
 
         pp = x @ M.T                                              # stages 2-4
         # stage 7 ExposureRamp (support_overrange=False, clamp linear to 1)
@@ -377,9 +380,7 @@ class MlxFaithfulRenderer:
             pp = _apply_cube(pp, self.g_cube, self._hd, self._sd, self._vd, self._cube_srgb)
         # stage 9 ProfileToneCurve
         pp = _apply_rgb_tone(pp, self.g_ptc_lut)
-        # stage 11 exposure / blacks
-        if ops.exposure_ev != 0.0:
-            pp = pp * (2.0 ** ops.exposure_ev)
+        # stage 11 blacks (exposure_ev moved to the scene-referred gain above)
         if ops.blacks != 0.0:
             pp = mx.maximum(pp + ops.blacks * 0.0005, 0.0)
         # stage 12 faithful: ToneCurve → Sat → Vib → HSL → ColorGrade → Contrast

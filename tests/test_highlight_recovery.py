@@ -1,21 +1,24 @@
-"""Tier-1 raw highlight reconstruction — synthetic, fixture-free (CI).
+"""Tier-1 highlight reconstruction — synthetic, fixture-free (CI).
 
-Builds camera-RGB fields with clipped highlights of KNOWN pre-clip colour, each
-embedding recoverable same-chromaticity neighbours (ratio propagation has nothing
-to learn from an isolated uniform clip), and asserts:
+Operates on BALANCED camera RGB (the decode's output contract since the
+slot-3 WB-once migration, 2026-06-11): WB is applied at the mosaic, so the
+neutral direction is [1, 1, 1] by construction and the default "clip" decode
+plateaus uniformly. Builds balanced fields with clipped highlights of KNOWN
+pre-clip colour, each embedding recoverable same-chromaticity neighbours
+(ratio propagation has nothing to learn from an isolated uniform clip), and
+asserts:
 
   * single- and double-channel clips are reconstructed with the LOCAL CHANNEL
     RATIO restored (recovered chromaticity ≈ the true pre-clip chromaticity),
-    lifted well above the libraw clip;
-  * fully-blown (no surviving channel) pixels get a NEUTRAL interim — neutral
-    *after* the asymmetric white-balance multiply, i.e. NOT magenta;
+    lifted well above the clip;
+  * fully-blown (no surviving channel) pixels get a NEUTRAL interim
+    ([1, 1, 1]·clip_level in balanced space — NOT a colour cast);
   * a spatial step edge is reconstructed without halo overshoot;
+  * an explicit (mosaic-style) clip mask drives detection when supplied —
+    the production contract (`pipeline._mosaic_clip_mask`);
   * no negatives / NaN / Inf, output stays sane;
   * a no-clip field is a byte-identical no-op (returns the input object) — the
     guarantee that keeps the ΔE ship gate unmoved on unclipped content.
-
-The post-WB checks use the gym-realistic AsShotNeutral ([0.5, 1.0, 0.776] ↔ WB
-multipliers [2.0, 1.0, 1.289]) so "neutral after WB" is a real asymmetric test.
 """
 
 from __future__ import annotations
@@ -28,16 +31,6 @@ from lrt_cinema.highlight_recovery import (
     clip_mask,
     reconstruct_highlights,
 )
-
-# Gym-realistic camera neutral: WB = 1/ASN normalised to G = [2.0, 1.0, 1.289].
-_ASN = np.array([0.5, 1.0, 0.7759], dtype=np.float32)
-_WB_MUL = (1.0 / _ASN) / (1.0 / _ASN)[1]  # Stage-2 multiplier, G-normalised
-
-
-def _post_wb(cam: np.ndarray) -> np.ndarray:
-    """Apply the Stage-2 white-balance the pipeline applies right after this
-    stage — so "neutral / chromaticity after WB" can be checked directly."""
-    return cam * _WB_MUL[None, None, :]
 
 
 def _chroma(rgb: np.ndarray) -> np.ndarray:
@@ -71,7 +64,7 @@ def test_single_channel_clip_restores_ratio():
     assert clip_mask(clipped)[48, 48, 0]          # R flagged clipped
     assert not clip_mask(clipped)[48, 48, 1]      # G survives
 
-    out = reconstruct_highlights(clipped, _ASN)
+    out = reconstruct_highlights(clipped)
     px = out[48, 48]
     assert px[0] > 1.4, f"R not recovered (got {px[0]:.3f}, clipped was 1.0)"
     # surviving channels untouched
@@ -96,34 +89,33 @@ def test_double_channel_clip_restores_ratio_via_single_survivor():
     m = clip_mask(clipped)[48, 48]
     assert m[0] and m[1] and not m[2]  # R,G clipped; B survives
 
-    out = reconstruct_highlights(clipped, _ASN)
+    out = reconstruct_highlights(clipped)
     px = out[48, 48]
     assert px[0] > 1.4 and px[1] > 1.05, f"R/G not recovered: {px}"
     np.testing.assert_allclose(px[2], true_hi[2], rtol=1e-5)  # B untouched
     np.testing.assert_allclose(_chroma(px), _chroma(true_hi), atol=0.03)
 
 
-# --- fully blown: no survivor → neutral interim (NOT magenta) ------------------
+# --- fully blown: no survivor → neutral interim --------------------------------
 
 
-def test_fully_blown_is_neutral_after_wb_not_magenta():
-    """All three channels clipped → the Tier-1 interim sets the pixel ∝ ASN, so
-    it is NEUTRAL after the asymmetric WB. The bug this guards: leaving camera
-    [1,1,1] → post-WB [2, 1, 1.289] = the warm/magenta cast."""
+def test_fully_blown_is_neutral_in_balanced_space():
+    """All three channels clipped → the Tier-1 interim sets the pixel to the
+    NEUTRAL direction, which in BALANCED camera RGB is [1, 1, 1] (×clip
+    level). The bug class this guards (CLAIMS "fringe forensics" domain-error
+    lesson): reconstructing toward a non-neutral direction tints every blown
+    region after the colour transform."""
     bg_lo = np.array([0.3, 0.3, 0.3], dtype=np.float32)
     field = _uniform_field(bg_lo)
     _embed(field, [3.0, 3.0, 3.0], 44, 52, 44, 52)  # all-clipped blob
 
     clipped = np.minimum(field, 1.0).astype(np.float32)
     assert np.all(clip_mask(clipped)[48, 48]), "patch should be fully clipped"
-    out = reconstruct_highlights(clipped, _ASN)
+    out = reconstruct_highlights(clipped)
 
-    # interim ∝ ASN at the clip level → neutral after WB
-    wb = _post_wb(out[None, 48:49, 48:49])[0, 0, 0]
-    assert wb.max() - wb.min() < 0.02 * wb.mean(), f"post-WB not neutral: {wb}"
-    # explicitly NOT the camera-[1,1,1] magenta failure (post-WB R>>G)
-    cam_one_wb = _post_wb(np.ones((1, 1, 3), np.float32))[0, 0]
-    assert (cam_one_wb[0] - cam_one_wb[1]) > 0.5  # the failure we avoid is real
+    px = out[48, 48]
+    assert px.max() - px.min() < 0.02 * px.mean(), f"interim not neutral: {px}"
+    np.testing.assert_allclose(px, DEFAULT_CLIP_LEVEL, atol=0.02)
 
 
 # --- spatial edge: no halo overshoot ------------------------------------------
@@ -142,7 +134,7 @@ def test_edge_recovers_without_overshoot_halo():
     _embed(field, true_hi, 45, 51, 45, 51)  # 6x6 patch (has an interior + edge)
 
     clipped = np.minimum(field, 1.0).astype(np.float32)
-    out = reconstruct_highlights(clipped, _ASN)
+    out = reconstruct_highlights(clipped)
 
     r = out[..., 0]
     assert r.max() <= true_hi[0] * 1.05, f"halo overshoot above true ({r.max():.3f})"
@@ -151,13 +143,43 @@ def test_edge_recovers_without_overshoot_halo():
     np.testing.assert_array_equal(out[:36], clipped[:36])
 
 
+# --- explicit (mosaic-style) clip mask drives detection ------------------------
+
+
+def test_explicit_clip_mask_supersedes_value_threshold():
+    """The production contract: a mosaic-derived mask flags partial clips the
+    value threshold misses (interpolation-smeared sites sitting BELOW 0.99).
+    Supplying the mask must reconstruct those pixels even though the value
+    threshold alone would no-op."""
+    bg = np.array([0.4, 0.2, 0.1], dtype=np.float32)
+    field = _uniform_field(bg)
+    # An interpolation-smeared partial clip: R sits at 0.9 — below the value
+    # threshold — but the (synthetic) mosaic mask knows the site clipped.
+    _embed(field, [0.9, 0.2, 0.1], 47, 49, 47, 49)
+    field = field.astype(np.float32)
+
+    assert not clip_mask(field).any(), "value threshold must miss this case"
+    assert reconstruct_highlights(field) is field  # no mask → no-op
+
+    mask = np.zeros(field.shape, dtype=bool)
+    mask[47:49, 47:49, 0] = True  # the mosaic knew R clipped here
+    out = reconstruct_highlights(field, clip=mask)
+    assert out is not field
+    # ratio anchor: same-chroma background → R lifts toward 2×G = 0.4·2 = 0.8…
+    # it must at minimum not LOSE value and must move off the smeared 0.9 only
+    # upward (never decrease a flagged channel).
+    assert out[48, 48, 0] >= field[48, 48, 0] - 1e-6
+    # unmasked, unclipped pixels byte-identical
+    np.testing.assert_array_equal(out[:40], field[:40])
+
+
 # --- guards: finite, non-negative, in-gamut-feasible --------------------------
 
 
 def test_no_negatives_no_nan_on_mixed_field():
     rng = np.random.default_rng(0)
     field = (rng.random((48, 48, 3), dtype=np.float32) * 1.4).astype(np.float32)
-    out = reconstruct_highlights(field, _ASN)
+    out = reconstruct_highlights(field)
     assert np.all(np.isfinite(out)), "non-finite output"
     assert np.all(out >= 0.0), "negative output"
     assert out.dtype == np.float32
@@ -170,20 +192,20 @@ def test_no_clip_field_is_byte_identical_noop():
     rng = np.random.default_rng(1)
     field = (rng.random((40, 40, 3), dtype=np.float32) * 0.9).astype(np.float32)
     assert field.max() < DEFAULT_CLIP_LEVEL
-    out = reconstruct_highlights(field, _ASN)
+    out = reconstruct_highlights(field)
     assert out is field, "no-clip field must return the SAME object (no-op)"
 
 
 def test_disabled_is_byte_identical_noop():
     field = _uniform_field([1.5, 1.5, 1.5], shape=(16, 16)).astype(np.float32)
-    out = reconstruct_highlights(field, _ASN, enable=False)
+    out = reconstruct_highlights(field, enable=False)
     assert out is field, "enable=False must be a strict no-op"
 
 
 def test_tier2_mask_flags_fully_blown_not_well_recovered():
     """Tier-2 hand-off contract: the residual mask flags fully-blown pixels (no
     survivor → neutral interim) AND under-recovered clips, but NOT a cleanly
-    ratio-recovered partial clip. Phase 2 (Poisson) consumes this mask."""
+    ratio-recovered partial clip. The slot-5b reconstruction consumes this."""
     # SAME-chroma sparse single-clip (R) → cleanly recovers above the clip;
     # plus a fully-blown all-channel blob → neutral interim, Tier 2's job.
     bg = np.array([0.4, 0.2, 0.1], dtype=np.float32)        # chroma 2:1:0.5
@@ -193,7 +215,7 @@ def test_tier2_mask_flags_fully_blown_not_well_recovered():
     clipped = np.minimum(field, 1.0).astype(np.float32)
 
     out, tier2 = _tier1_ratio_propagation(
-        clipped, clip_mask(clipped), _ASN, clip_level=DEFAULT_CLIP_LEVEL, radius=8,
+        clipped, clip_mask(clipped), clip_level=DEFAULT_CLIP_LEVEL, radius=8,
     )
     assert tier2[64, 64], "fully-blown blob must be flagged for Tier 2"
     assert out[21, 21, 0] > 1.0, "single-clip R should lift above the clip"
@@ -211,6 +233,6 @@ def test_unclipped_channels_are_preserved_exactly():
     _embed(field, true_hi, 46, 50, 46, 50)
     clipped = np.minimum(field, 1.0).astype(np.float32)
 
-    out = reconstruct_highlights(clipped, _ASN)
+    out = reconstruct_highlights(clipped)
     unclipped = ~clip_mask(clipped)
     np.testing.assert_array_equal(out[unclipped], clipped[unclipped])

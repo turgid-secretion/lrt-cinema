@@ -72,10 +72,22 @@ def _ramp_ops() -> list[DevelopOps]:
     return [interpolate(seq, i) for i in range(_N)]
 
 
+def _apply_grade(chart: np.ndarray, ops: DevelopOps,
+                 intent: RenderIntent) -> np.ndarray:
+    """Mirror the production op placement: the exposure class
+    (scene_exposure_ev + Exposure2012) is a SCENE-REFERRED gain upstream of
+    the colour transform (render_frame's fold; CLAIMS "Global Exposure2012
+    is SCENE-REFERRED"), then the develop layer applies the rest."""
+    total_ev = ops.scene_exposure_ev + ops.exposure_ev
+    if total_ev != 0.0:
+        chart = chart * np.float32(2.0 ** total_ev)
+    return apply_develop_ops(chart, ops, intent)
+
+
 def _emit_sequence(per_frame: list[DevelopOps]) -> np.ndarray:
     chart = _well_behaved_chart()
     return np.stack([
-        vl.emit_acescg(apply_develop_ops(chart, ops, RenderIntent.PERCEPTUAL))
+        vl.emit_acescg(_apply_grade(chart, ops, RenderIntent.PERCEPTUAL))
         for ops in per_frame
     ])
 
@@ -116,7 +128,7 @@ def test_exposure_ramp_emission_valid_every_frame():
     for i in range(_N):
         ev = -2.0 + 5.0 * i / (_N - 1)
         ace = vl.emit_acescg(
-            apply_develop_ops(chart, DevelopOps(exposure_ev=ev), RenderIntent.PERCEPTUAL))
+            _apply_grade(chart, DevelopOps(exposure_ev=ev), RenderIntent.PERCEPTUAL))
         assert np.isfinite(ace).all(), f"EV={ev:.2f}: non-finite"
         assert ace.min() >= 0.0, f"EV={ev:.2f}: negative AP1"
 

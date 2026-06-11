@@ -71,6 +71,19 @@ def interpolate_pair(a: DevelopOps, b: DevelopOps, t: float) -> DevelopOps:
     return a.blend(b, t)
 
 
+def _apply_grade(chart: np.ndarray, ops: DevelopOps,
+                 intent: RenderIntent) -> np.ndarray:
+    """Mirror the production op placement: the exposure class
+    (scene_exposure_ev + Exposure2012) is a SCENE-REFERRED gain upstream of
+    the colour transform (render_frame's fold), then the develop layer
+    applies the rest. Keeps these harnesses exercising the exposure
+    machinery where production actually runs it."""
+    total_ev = ops.scene_exposure_ev + ops.exposure_ev
+    if total_ev != 0.0:
+        chart = chart * np.float32(2.0 ** total_ev)
+    return apply_develop_ops(chart, ops, intent)
+
+
 @pytest.mark.parametrize("intent", _INTENTS, ids=lambda i: i.value)
 def test_blended_frames_render_valid_across_the_ramp(intent):
     """Every interpolated frame along an identity→grade ramp renders to a FINITE,
@@ -79,7 +92,7 @@ def test_blended_frames_render_valid_across_the_ramp(intent):
     a, b = DevelopOps(), _graded_ops()
     chart = vl.pack(vl.build_lattice()).astype(np.float32)
     for t in np.linspace(0.0, 1.0, 9):
-        out = apply_develop_ops(chart, a.blend(b, t), intent)
+        out = _apply_grade(chart, a.blend(b, t), intent)
         assert np.isfinite(out).all(), f"t={t}: non-finite"
         assert out.min() >= 0.0, f"t={t}: negative ProPhoto"
 
@@ -110,10 +123,10 @@ def test_near_identity_engaged_band_is_valid_and_continuous(intent):
     above = [p for p in vl.build_lattice()
              if float(np.array(p.rgb) @ vl._PROPHOTO_LUMINANCE) > 0.02]
     chart = vl.pack(above).astype(np.float32)
-    base = apply_develop_ops(chart, a, intent)            # exact identity output
-    assert np.isfinite(apply_develop_ops(chart, tiny, intent)).all()
+    base = _apply_grade(chart, a, intent)                 # exact identity output
+    assert np.isfinite(_apply_grade(chart, tiny, intent)).all()
 
-    deltas = [float(np.max(np.abs(apply_develop_ops(chart, a.blend(b, t), intent) - base)))
+    deltas = [float(np.max(np.abs(_apply_grade(chart, a.blend(b, t), intent) - base)))
               for t in (1e-5, 1e-4, 1e-3)]
     # Vanishes as t→0 (no boundary jump — a jump would leave delta(1e-5) finite).
     assert deltas[0] < 0.02, f"discontinuity at the identity boundary: {deltas[0]:.4f}"
@@ -145,7 +158,7 @@ def test_colorgrade_blend_keeps_wheels_valid():
     assert 0.0 <= mid.shadow_sat <= 80.0 and 0.0 <= mid.highlight_sat <= 60.0
     chart = vl.pack(vl.build_lattice()).astype(np.float32)
     for intent in _INTENTS:
-        out = apply_develop_ops(chart, DevelopOps(color_grade=mid), intent)
+        out = _apply_grade(chart, DevelopOps(color_grade=mid), intent)
         assert np.isfinite(out).all() and out.min() >= 0.0
 
 
@@ -170,7 +183,7 @@ def test_interpolate_sequence_materializes_valid_per_frame_ops():
     assert per_frame[0] == DevelopOps() and per_frame[10] == _graded_ops()
     chart = vl.pack(vl.build_lattice()).astype(np.float32)
     for i, ops in enumerate(per_frame):
-        out = apply_develop_ops(chart, ops, RenderIntent.PERCEPTUAL)
+        out = _apply_grade(chart, ops, RenderIntent.PERCEPTUAL)
         assert np.isfinite(out).all() and out.min() >= 0.0, f"frame {i} invalid"
     # interpolate() and materialize agree (same single code path).
     assert interpolate(seq, 5) == per_frame[5]

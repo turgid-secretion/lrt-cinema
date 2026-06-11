@@ -1,42 +1,39 @@
-"""Raw highlight reconstruction — a camera-RGB pre-stage (post-demosaic,
-pre-white-balance) that recovers blown highlights libraw's hard clip discards.
+"""Highlight reconstruction — a balanced-camera-RGB pre-stage (post-demosaic)
+that recovers blown highlights the at-mosaic clip discards.
 
 WHY THIS EXISTS
 ---------------
-The demosaic (`pipeline.demosaic_camera_rgb`) runs libraw with
-`HighlightMode.Clip`: every channel is hard-clamped at the raw white level
-(libraw normalises WhiteLevel → 1.0 under unit WB, so the clip point is a
-**uniform 1.0 across channels in camera space**, *before* the asymmetric
-Stage-2 white-balance multiply). A blown window therefore renders ~4 % dark and
-warm/magenta instead of clean bright white, because the clamped camera value
-``[1, 1, 1]`` becomes ``[1, 1, 1]·wb_mul`` = a coloured cast after WB.
+The decode applies WB ONCE at the mosaic (TARGET slot 3) and, on the default
+"clip" path, clamps at the common white — blown regions land NEUTRAL but lose
+the >1-multiplier channels' top highlight detail (dcraw's own documented
+trade). Adobe Camera Raw (the look we round-trip through LRTimelapse)
+reconstructs partially-clipped highlights from the channels that still carry
+signal. This module closes that gap with the **Tier 1** half of a tiered
+hybrid: cross-channel **ratio propagation**, fed by the "headroom" decode
+path (no common-white clamp) on masters.
 
-Adobe Camera Raw (the look we round-trip through LRTimelapse) reconstructs
-partially-clipped highlights from the channels that still carry signal; the open
-DNG SDK does no reconstruction at all. This module closes that gap with the
-**Tier 1** half of a tiered hybrid (research: deep-research pass, 20 sources):
-cross-channel **ratio propagation**.
+THE LOAD-BEARING INVARIANTS
+---------------------------
+1. **Balanced space, neutral = [1, 1, 1].** Input is the balanced camera RGB
+   the decode now emits — a fully-blown pixel reconstructs to the NEUTRAL
+   direction ``[1, 1, 1]`` by construction (the old unbalanced-space code
+   had to aim along AsShotNeutral to land neutral after Stage 2; that stage
+   is gone — CLAIMS "fringe forensics" recorded the domain-error class this
+   convention kills).
+2. **Clip detection from the MOSAIC, not the values.** The fringe forensics
+   proved the post-demosaic 0.99 value threshold structurally misses
+   interpolation-smeared partial clips; `pipeline._mosaic_clip_mask`
+   (sensor-saturation sites, per-channel, 2-dilated) is the production mask
+   and is passed in by `render_frame`. The value threshold remains only as
+   the fallback when no mask is available (previews, direct library calls).
 
-THE LOAD-BEARING INVARIANT (prevents magenta)
----------------------------------------------
-Reconstruct in **camera space, before WB**, where the per-channel clip point is
-uniform (1.0). The surviving channels anchor the result; the WB multiply applies
-afterwards, unchanged — so the reconstructed highlight inherits the correct
-WB-aware asymmetry for free. A fully-blown pixel (no surviving channel) is set
-**proportional to AsShotNeutral**, NOT to camera ``[1, 1, 1]``: ``cam ∝ ASN``
-maps to a neutral ``[1, 1, 1]`` *after* WB, whereas camera ``[1, 1, 1]`` maps to
-the warm cast we are trying to kill. This is RawTherapee's in-engine
-"Color"/Color-Propagation contract: WB-agnostic data, WB-aware clip points.
-
-TIER STRUCTURE (Tier 2 plugs in here)
--------------------------------------
-`reconstruct_highlights` is a strict **no-op (byte-identical) when no channel
-clips**. When clips exist it runs `_tier1_ratio_propagation`, which returns the
-recovered field **and** a boolean ``tier2_mask`` of pixels it could not anchor
-(fully-blown interiors with no surviving channel and no recoverable neighbour) —
-those get a safe neutral interim now and are the hand-off for the gradient-domain
-Poisson **Tier 2** (Phase 2). Clip-mask, insertion point and validation harness
-are all reused by Tier 2.
+TIER STRUCTURE (Tier 2 / slot-5b plugs in here)
+-----------------------------------------------
+`reconstruct_highlights` is a strict **no-op (byte-identical) when nothing
+clips**. When clips exist it runs `_tier1_ratio_propagation`, which returns
+the recovered field **and** a boolean ``tier2_mask`` of pixels it could not
+anchor — those get a safe neutral interim now and are the hand-off for
+gradient-domain / opposed reconstruction (slot 5b experiment).
 
 GATING
 ------
@@ -54,16 +51,14 @@ import numpy as np
 
 from lrt_cinema.develop_ops import _box_sum
 
-# libraw normalises the raw WhiteLevel to 1.0 (under unit WB, output_bps=16);
-# clip the threshold 1 % below it so demosaic-interpolation-softened clips (a
-# saturated photosite bilinearly mixed with an unsaturated neighbour lands just
-# under 1.0) are caught, while genuine non-clipped highlights (which would need
-# to sit within ~155 ADU of the 15520 white level) are the only false-positives
-# — and those are near-white anyway, so a ratio-consistent lift is harmless.
-# Measured stable on DSC_4053: any-channel ≥0.99 = 0.478 % of pixels vs the CFA
-# ground truth `raw ≥ white_level` = 0.386 % (the demosaic spreads clips to
-# neighbours → the threshold mask is a natural superset = free dilation, no
-# false-negatives on real clips). Uniform across channels = WB-agnostic.
+# Fallback value threshold (used ONLY when no mosaic mask is supplied).
+# In balanced space the default "clip" decode plateaus at min(wb_mul) — the
+# G-normalised minimum is 1.0 on every real WB measured — and the "headroom"
+# decode leaves blown channels at wb_mul[c] ≥ 1. A ≥0.99 threshold therefore
+# catches both, plus interpolation-softened near-clips (a saturated photosite
+# mixed with an unsaturated neighbour lands just under the plateau). False
+# positives are near-white by construction; a ratio-consistent lift there is
+# harmless. The mosaic mask (sensor truth) supersedes this wherever available.
 DEFAULT_CLIP_LEVEL = 0.99
 
 # Box radius for the local channel-ratio estimate. Large enough that a clipped
@@ -78,48 +73,51 @@ _EPS = 1e-6
 def clip_mask(
     camera_rgb: np.ndarray, clip_level: float = DEFAULT_CLIP_LEVEL,
 ) -> np.ndarray:
-    """Per-channel boolean clip mask on demosaiced camera RGB.
+    """FALLBACK per-channel boolean clip mask from pixel values.
 
-    ``mask[..., c]`` is True where channel ``c`` is at/above the camera-space
-    saturation point (``clip_level``, uniform across channels — see
-    `DEFAULT_CLIP_LEVEL`). Shape ``(H, W, 3)``. Swappable: Tier 2 may pass a
-    CFA-derived mask instead, but the algorithm only needs this contract.
+    ``mask[..., c]`` is True where channel ``c`` is at/above ``clip_level``
+    (see `DEFAULT_CLIP_LEVEL`). Shape ``(H, W, 3)``. Production passes the
+    mosaic-derived mask (`pipeline._mosaic_clip_mask`) instead — sensor
+    truth; this value threshold misses interpolation-smeared partial clips
+    (CLAIMS "Fringe forensics verdict").
     """
     return camera_rgb >= clip_level
 
 
 def reconstruct_highlights(
     camera_rgb: np.ndarray,
-    as_shot_neutral: np.ndarray,
+    clip: np.ndarray | None = None,
     *,
     clip_level: float = DEFAULT_CLIP_LEVEL,
     radius: int = DEFAULT_RADIUS,
     enable: bool = True,
 ) -> np.ndarray:
-    """Tier 1 highlight reconstruction on linear camera RGB (pre-white-balance).
+    """Tier 1 highlight reconstruction on BALANCED linear camera RGB.
 
-    `camera_rgb`: float (H, W, 3), demosaiced linear camera RGB in [0, 1+],
-    black-subtracted, NO white balance applied yet.
-    `as_shot_neutral`: the (3,) camera-neutral vector Stage 2 will divide by —
-    pass the SAME one `apply_adobe_pipeline` receives (incl. any Holy-Grail
-    kelvin override), so the neutral interim lands neutral *after* WB.
+    `camera_rgb`: float (H, W, 3), demosaiced BALANCED camera RGB in [0, 1+]
+    (WB applied at the mosaic — the decode's output contract, TARGET slot 3).
+    `clip`: optional (H, W, 3) boolean clip mask — pass the mosaic-derived
+    mask (`pipeline._mosaic_clip_mask`) for production; None falls back to
+    the `clip_level` value threshold.
 
-    Returns a new array with clipped channels reconstructed; unclipped channels
-    are byte-identical to the input. **Strict no-op**: when ``enable`` is False
-    or no channel clips, the input array is returned unchanged (same object) —
-    so unclipped content is byte-identical and the ΔE ship gate is unmoved.
+    Returns a new array with clipped channels reconstructed; unclipped
+    channels are byte-identical to the input. **Strict no-op**: when
+    ``enable`` is False or nothing clips, the input array is returned
+    unchanged (same object) — so unclipped content is byte-identical and the
+    ΔE ship gate is unmoved.
 
     Reconstructed (clipped) channels may exceed 1.0 (recovered over-white
-    headroom) — that is the point; the WB / matrix / tone stages carry it and
-    the display encoder clips to the delivery gamut. Output is finite and ≥ 0.
+    headroom) — that is the point; the matrix / tone stages carry it and the
+    display encoder clips to the delivery gamut. Output is finite and ≥ 0.
     """
     if not enable:
         return camera_rgb
-    clip = clip_mask(camera_rgb, clip_level)
+    if clip is None:
+        clip = clip_mask(camera_rgb, clip_level)
     if not clip.any():
         return camera_rgb  # STRICT byte-identical no-op (gate-safe)
     out, _tier2_mask = _tier1_ratio_propagation(
-        camera_rgb, clip, as_shot_neutral, clip_level=clip_level, radius=radius,
+        camera_rgb, clip, clip_level=clip_level, radius=radius,
     )
     return out
 
@@ -167,12 +165,11 @@ def _anchored_brightness(
 def _tier1_ratio_propagation(
     camera_rgb: np.ndarray,
     clip: np.ndarray,
-    as_shot_neutral: np.ndarray,
     *,
     clip_level: float,
     radius: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Cross-channel ratio propagation (the Tier 1 algorithm).
+    """Cross-channel ratio propagation (the Tier 1 algorithm), balanced space.
 
     For every clipped channel, restore the LOCAL channel ratio anchored by the
     channels that still carry signal:
@@ -186,23 +183,24 @@ def _tier1_ratio_propagation(
         *decrease* a channel that was, by definition, high). This handles 1- and
         2-channel clips uniformly (≥1 survivor anchors the rest).
 
-    Fallbacks, in order, for clipped channels Tier 1 can't anchor locally:
+    Fallbacks, in order, for clipped channels Tier 1 can't anchor locally
+    (input is BALANCED, so the neutral direction is ``[1, 1, 1]``):
 
-      * **ASN-neutral from survivors** — if the pixel still has ≥1 surviving
-        channel but no usable local ratio, reconstruct the clipped channel along
-        the AsShotNeutral direction anchored by the survivors
-        (``s_asn = Σ_surv cam / Σ_surv ASN``; clipped_c ← ``max(cam_c, s_asn·ASN_c)``).
-        WB-aware, magenta-free (post-WB neutral), the right "fade toward neutral".
-      * **Fully blown** (no surviving channel) — set the whole pixel
-        ``∝ ASN · clip_level`` (post-WB neutral at the clip level). These pixels
-        form ``tier2_mask``: a safe interim now, the gradient-domain Tier 2's job.
+      * **Neutral from survivors** — if the pixel still has ≥1 surviving
+        channel but no usable local ratio, reconstruct the clipped channel at
+        the survivors' mean brightness (``s = Σ_surv cam / #surv``;
+        clipped_c ← ``max(cam_c, s)``) — the balanced-space "fade toward
+        neutral".
+      * **Fully blown** (no surviving channel) — set the whole pixel to
+        neutral ``clip_level`` ([1,1,1]·level). These pixels form
+        ``tier2_mask``: a safe interim now, the slot-5b reconstruction's job.
 
     Returns ``(out, tier2_mask)``. ``out`` is float32 (H, W, 3), finite, ≥ 0,
     byte-identical to the input on unclipped channels. ``tier2_mask`` is
     ``(H, W)`` bool marking the fully-blown pixels handed to Tier 2.
     """
     cam = camera_rgb.astype(np.float32, copy=False)
-    asn = np.asarray(as_shot_neutral, dtype=np.float32).reshape(3)
+    neutral = np.ones(3, dtype=np.float32)
     valid = ~clip  # surviving (unclipped) channels, per pixel
 
     mean, has_est = _local_valid_mean(cam, valid, radius)
@@ -214,8 +212,8 @@ def _tier1_ratio_propagation(
     s_loc, s_loc_ok = _anchored_brightness(num_loc, den_loc)
     recon_loc = s_loc[..., None] * mean  # (H, W, 3)
 
-    # --- fallback: ASN-neutral brightness from ALL surviving channels
-    asn_b = asn[None, None, :]
+    # --- fallback: neutral-direction brightness from ALL surviving channels
+    asn_b = neutral[None, None, :]
     num_asn = np.sum(cam * valid, axis=-1)
     den_asn = np.sum(asn_b * valid, axis=-1)
     s_asn, s_asn_ok = _anchored_brightness(num_asn, den_asn)

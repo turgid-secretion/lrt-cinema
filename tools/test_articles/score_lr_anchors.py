@@ -34,7 +34,7 @@ from run_pressure import NEUTRAL_TRUTH, _invariants  # noqa: E402
 FIX = Path.home() / "lrt-cinema-fixtures"
 ART = FIX / "test-articles"
 ANCHORS = ART / "lr-anchors"
-EVIDENCE = REPO / "tests/fixtures/evidence/pressure_2026-06-10.json"
+EVIDENCE = sorted((REPO / "tests/fixtures/evidence").glob("pressure_*.json"))[-1]
 B = 8
 
 

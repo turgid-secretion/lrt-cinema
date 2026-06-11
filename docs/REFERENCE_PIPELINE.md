@@ -298,7 +298,19 @@ until a real-lens article (`ca_shifted`, taxonomy v3) demonstrates need;
 placement would be pre-demosaic per RT/dt.
 
 **Slot 3 — white balance, applied ONCE, before demosaic.** VERDICT:
-JUSTIFIED (position); **current IMPLEMENTATION carries a declared wart.**
+JUSTIFIED; **MIGRATED 2026-06-11 — the wart is gone.** The divide-back
+shim and the Stage-2 re-multiply are deleted: the decode returns BALANCED
+camera RGB (CFA paths return the scaled-mosaic demosaic directly; the
+libraw path rescales by the scalar `wb_mul.min()` to land on the same
+G-normalised scale), `apply_adobe_pipeline` consumes balanced input (the
+no-FM ColorMatrix branch folds `diag(asn/asn_G)` into its matrix), the
+MLX twin drops `diag(wb)` from its fused matrix, and `highlight_recovery`
+operates in balanced space (neutral = [1,1,1]) driven by the new
+mosaic-derived clip mask (`pipeline._mosaic_clip_mask` — sensor-truth
+sites, per-channel, 2-dilated; the fringe-forensics lesson). Re-pinned
+after migration: gym gate IDENTICAL (mean 0.0230 / P95 0.1931 / max
+13.578 / 99.90 % <1.0 — the shim was mathematically exact, as predicted),
+full suite green, pressure suite + production spot-check below.
 References: unanimous canon — dcraw `scale_colors` → interpolate [SRC],
 darktable temperature@3 → demosaic@8 [SRC], RT scaleColors bakes
 camera-WB into rawData pre-demosaic with the develop DELTA post-demosaic
@@ -415,8 +427,10 @@ colour transform).** Sub-slots:
   gain 1.0000/0.9995). Verdict: same domain as the mask EVs; the
   pre-registered B-vs-C highlight distinction did not materialise on
   this content (recorded honestly), so implementation folds
-  `Exposure2012` into `scene_exposure_ev` (one machinery). Migration:
-  with the slot-3 batch; zero production urgency (Exposure2012 = 0 in
+  `Exposure2012` into `scene_exposure_ev` (one machinery). **Migrated
+  2026-06-11 with the slot-3 batch**: `render_frame` (and the MLX twin)
+  apply `2^(scene_exposure_ev + exposure_ev)` pre-colour-transform;
+  Stage 11 = Blacks only. Zero production urgency (Exposure2012 = 0 in
   the sequence). Evidence:
   `tests/fixtures/evidence/cal_exposure_domain_2026-06-11.json`
   (`tools/cal_exposure_domain.py`).

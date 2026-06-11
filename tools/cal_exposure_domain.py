@@ -108,10 +108,11 @@ def main() -> int:
         ops = replace(ops, scene_exposure_ev=scene_ev)
         kelvin = float(ops.temperature_k)
         asn = kelvin_to_neutral(profile, kelvin, float(ops.tint or 0.0))
-        cam, _ = _decode_raw(DNG, demosaic="linear", wb_asn=asn)
+        cam, _, _ = _decode_raw(DNG, demosaic="linear", wb_asn=asn)
 
         def render(arm: str, ops_in, cam_in, be: float,
-                   frame=name, asn_=asn, kelvin_=kelvin) -> Path:
+                   frame=name, asn_=asn, kelvin_=kelvin,
+                   legacy_postcurve_ev: float = 0.0) -> Path:
             dst = RENDERS / f"{frame}_{arm}"
             out = dst.with_suffix(".tif")
             if out.exists():
@@ -123,12 +124,22 @@ def main() -> int:
                 stop_after_stage=9)
             pp = apply_develop_ops(pp, ops_in, RenderIntent.FAITHFUL,
                                    master_look="bake", capture_sharpen="off")
+            if legacy_postcurve_ev != 0.0:
+                # The REFUTED arm A re-creates the deleted Stage-11
+                # post-curve Exposure2012 multiply (the pipeline now folds
+                # exposure_ev scene-referred, so the legacy behaviour must
+                # be reconstructed here to keep this experiment
+                # regenerable). Exact for these frames: every other
+                # Stage-11/12 slider is zero (production XMPs), so the
+                # multiply commutes to this position.
+                pp = pp * np.float32(2.0 ** legacy_postcurve_ev)
             write_preset_output(pp, dst, "lrtimelapse")
             return out
 
         zeroed = replace(ops, exposure_ev=0.0)
         arms = {
-            "A-current-postcurve": render("A", ops, cam, base_be),
+            "A-current-postcurve": render(
+                "A", zeroed, cam, base_be, legacy_postcurve_ev=ev),
             "B-scene-puregain": render(
                 "B", zeroed, cam * np.float32(2.0 ** ev), base_be),
             "C-ramp-baselineexp": render("C", zeroed, cam, base_be + ev),

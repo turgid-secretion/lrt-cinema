@@ -28,7 +28,6 @@ from lrt_cinema.develop_ops import (
     apply_contrast_2012,
     apply_develop_ops,
     apply_dr_compression,
-    apply_exposure_2012,
     apply_hsl,
     apply_saturation,
     apply_sharpness,
@@ -41,30 +40,18 @@ from lrt_cinema.develop_ops import (
 from lrt_cinema.ir import ColorGrade, DevelopOps, HslBands, RenderIntent, TonePoint
 
 # ---------------------------------------------------------------------------
-# Stage 11 — Exposure2012
+# Stage 11 — Exposure2012 moved OUT (scene-referred; CALEXP probe 2026-06-11)
 # ---------------------------------------------------------------------------
 
 
-def test_exposure_2012_zero_is_no_op():
+def test_stage_11_does_not_apply_exposure_2012():
+    """Exposure2012 is scene-referred (CLAIMS "Global Exposure2012 is
+    SCENE-REFERRED"): render_frame folds `ops.exposure_ev` into the
+    pre-colour-transform gain. Stage 11 applying it too would DOUBLE it —
+    this guards the single-application invariant at the develop-ops end."""
     x = np.array([[[0.1, 0.5, 0.9]]], dtype=np.float32)
-    np.testing.assert_array_equal(apply_exposure_2012(x, 0.0), x)
-
-
-def test_exposure_2012_plus_one_ev_doubles():
-    x = np.array([[[0.25, 0.5, 0.75]]], dtype=np.float32)
-    out = apply_exposure_2012(x, 1.0)
-    np.testing.assert_allclose(out, x * 2.0, rtol=1e-6)
-
-
-def test_exposure_2012_minus_one_ev_halves():
-    x = np.array([[[0.5, 1.0, 2.0]]], dtype=np.float32)
-    out = apply_exposure_2012(x, -1.0)
-    np.testing.assert_allclose(out, x * 0.5, rtol=1e-6)
-
-
-def test_exposure_2012_preserves_dtype():
-    x = np.zeros((4, 4, 3), dtype=np.float32)
-    assert apply_exposure_2012(x, 2.0).dtype == np.float32
+    ops = DevelopOps(exposure_ev=1.0)
+    np.testing.assert_array_equal(apply_stage_11_linear(x, ops), x)
 
 
 # ---------------------------------------------------------------------------
@@ -566,12 +553,14 @@ def test_perceptual_color_grade_diverges_from_faithful():
 
 
 def test_apply_develop_ops_chains_in_order():
-    """All ops together: Exposure +1 then Blacks +20 then everything else
-    default. Expected: x*2 + 0.01 (since 20*0.0005=0.01)."""
+    """Stage-11 Blacks +20 with everything else default. Expected: x + 0.01
+    (20·0.0005). Exposure2012 is NOT applied here (scene-referred, folded
+    upstream in render_frame — see test_stage_11_does_not_apply_exposure_2012),
+    so a non-zero exposure_ev must leave this result unchanged."""
     x = np.array([[[0.1, 0.2, 0.3]]], dtype=np.float32)
     ops = DevelopOps(exposure_ev=1.0, blacks=20.0)
     out = apply_develop_ops(x, ops)
-    expected = x * 2.0 + 0.01
+    expected = x + 0.01
     np.testing.assert_allclose(out, expected, rtol=1e-5)
 
 

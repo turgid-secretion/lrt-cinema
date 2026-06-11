@@ -44,6 +44,7 @@ Out:  tests/fixtures/evidence/pressure_<date>.json
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import subprocess
 import sys
@@ -64,7 +65,8 @@ DCP = Path(
     "Camera/Nikon D750/Nikon D750 Camera Standard.dcp"
 )
 DNG_VALIDATE = FIX / "dng_validate"
-EVIDENCE = REPO / "tests/fixtures/evidence/pressure_2026-06-10.json"
+EVIDENCE = REPO / f"tests/fixtures/evidence/pressure_{_dt.date.today().isoformat()}.json"
+
 ARMS = ("linear", "rcd", "menon")
 NEUTRAL_TRUTH = {"bars", "clipbars", "zoneplate", "diagbars", "noisebars",
                  "clipfield", "shadowwedge", "slantededge"}
@@ -176,8 +178,14 @@ def main() -> int:
             dev_ops = DevelopOps(temperature_k=int(k), tint=int(tint))
             render_kelvin = float(k)
             render_asn = kelvin_to_neutral(profile, render_kelvin, float(tint))
+        # The pipeline consumes BALANCED camera RGB (slot-3 WB-once): balance
+        # the analytic expectation with the same G-normalised multipliers the
+        # decode derives from the render neutral. Identical to the old
+        # Stage-2 multiply on the same data — the reference is unchanged.
+        wb_mul = (1.0 / render_asn) / (1.0 / render_asn)[1]
         exp_pp = apply_adobe_pipeline(
-            camera_rgb=expected_unbal.astype(np.float32), profile=profile,
+            camera_rgb=(expected_unbal * wb_mul).astype(np.float32),
+            profile=profile,
             as_shot_neutral=render_asn, scene_kelvin=render_kelvin,
             dng_baseline_exposure=dng_be, default_black_render=dbr,
             stop_after_stage=9)

@@ -17,7 +17,7 @@ import json
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-EVIDENCE = REPO / "tests/fixtures/evidence/pressure_2026-06-10.json"
+EVIDENCE = sorted((REPO / "tests/fixtures/evidence").glob("pressure_*.json"))[-1]
 OUT = Path(__file__).resolve().parent / "RESULTS.md"
 
 

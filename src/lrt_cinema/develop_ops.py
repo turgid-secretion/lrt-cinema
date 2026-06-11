@@ -5,8 +5,12 @@ Stages 11–12 of the pipeline (per `docs/research/v06-architecture.md`
 `pipeline.apply_adobe_pipeline`.
 
 Stage 11 (linear domain — apply on raw linear ProPhoto):
-  - Exposure2012: scalar EV multiplier (`x · 2^EV`).
   - Blacks2012: linear black-point lift / crush.
+  - (Exposure2012 moved OUT 2026-06-11: the CALEXP probe measured it
+    SCENE-REFERRED — the post-curve domain fails the LR arbiter at ΔE
+    2.84/5.85 — so `render_frame` folds `ops.exposure_ev` into the
+    pre-colour-transform scene gain alongside `scene_exposure_ev`;
+    CLAIMS "Global Exposure2012 is SCENE-REFERRED".)
 
 Stage 12 (perceptual domain — apply in HSV where appropriate):
   - ToneCurvePV2012: per-channel parametric tone curve in [0, 1].
@@ -43,18 +47,6 @@ from lrt_cinema.pipeline import DngSplineSolver
 # ---------------------------------------------------------------------------
 
 
-def apply_exposure_2012(prophoto: np.ndarray, ev: float) -> np.ndarray:
-    """LR Exposure2012: scalar EV multiplier in linear domain.
-
-    `out = in × 2^EV`. EV ∈ [-5, +5] per the LR slider convention; we do
-    not clamp — the spec is silent and the seed pipeline likewise doesn't,
-    letting overrange data flow through to the next stage.
-    """
-    if ev == 0.0:
-        return prophoto
-    return prophoto * np.float32(2.0 ** ev)
-
-
 def apply_blacks_2012(prophoto: np.ndarray, blacks: float) -> np.ndarray:
     """LR Blacks2012: linear black-point shift.
 
@@ -71,9 +63,13 @@ def apply_blacks_2012(prophoto: np.ndarray, blacks: float) -> np.ndarray:
 
 
 def apply_stage_11_linear(prophoto: np.ndarray, ops: DevelopOps) -> np.ndarray:
-    """Apply all stage-11 linear-domain ops in order: Exposure then Blacks."""
-    out = apply_exposure_2012(prophoto, ops.exposure_ev)
-    return apply_blacks_2012(out, ops.blacks)
+    """Apply the stage-11 linear-domain ops: Blacks only.
+
+    Exposure2012 is NOT applied here — it is scene-referred (measured: the
+    CALEXP probe, CLAIMS "Global Exposure2012 is SCENE-REFERRED") and is
+    folded into `render_frame`'s pre-colour-transform gain with the mask
+    EVs. Applying it here too would double it."""
+    return apply_blacks_2012(prophoto, ops.blacks)
 
 
 # ---------------------------------------------------------------------------
@@ -1013,9 +1009,10 @@ def apply_develop_ops(
     `master_look` (trunk/branch model — docs/research/pipeline-overhaul-plan.md):
       - ``"bake"`` (default): apply Stage 11 + Stage 12 — the full develop chain.
         Every existing caller gets this → byte-exact, unchanged.
-      - ``"defer"``: apply **Stage 11 only** (Exposure2012 / Blacks2012 — the
-        per-frame, temporally-varying corrections, where the deflicker + Holy-Grail
-        exposure ramp ride) and DEFER the **static creative look** (Stage 12) to the
+      - ``"defer"``: apply **Stage 11 only** (Blacks2012; the per-frame
+        exposure class — deflicker / Holy-Grail / global Exposure2012 —
+        rides the scene-referred gain inside `render_frame`, upstream of
+        this function) and DEFER the **static creative look** (Stage 12) to the
         downstream colorist. Rationale: per-frame intent has **no transport** across
         an NLE handoff (DECISIONS §4 — keyframes don't survive Resolve import), so it
         MUST bake; a static sequence-wide look survives a single clip grade, so it can

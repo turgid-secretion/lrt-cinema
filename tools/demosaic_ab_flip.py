@@ -98,9 +98,15 @@ def main() -> int:
     for name, (mul, recover) in arms.items():
         with rawpy.imread(str(DNG)) as raw:
             cam = _demosaic_rgb(raw, rawpy, False, "menon", mul)
+        if mul is None:
+            # Pre-fix-bug arm: demosaic ran UNBALANCED; emulate the deleted
+            # Stage-2 multiply afterwards so this arm still reproduces the
+            # historical wrong-order conditioning (the pipeline itself now
+            # white-balances at the mosaic and has no post-demosaic WB).
+            cam = cam * wb_mul[None, None, :]
         if recover:
             from lrt_cinema.highlight_recovery import reconstruct_highlights
-            cam = reconstruct_highlights(cam, asn)
+            cam = reconstruct_highlights(cam)
         if ops.scene_exposure_ev != 0.0:
             cam = cam * np.float32(2.0 ** ops.scene_exposure_ev)
         pp = apply_adobe_pipeline(

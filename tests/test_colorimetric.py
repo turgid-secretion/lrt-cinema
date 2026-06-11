@@ -90,12 +90,16 @@ def _tap_to_lab_d50(prophoto: np.ndarray) -> np.ndarray:
 
 
 def _pipeline_tap_lab(profile: DCPProfile, reflectances: np.ndarray, illuminant: str) -> np.ndarray:
-    """Run the synthetic chart through stages 2–4 of the real pipeline and
-    return per-patch Lab(D50) at the Stage-4 tap."""
+    """Run the synthetic chart through stages 3–4 of the real pipeline and
+    return per-patch Lab(D50) at the Stage-4 tap. The pipeline consumes
+    BALANCED camera RGB (WB applied at the mosaic by the decode — slot 3),
+    so the synthetic chart is balanced here exactly as the decode would."""
     syn = sc.synthesize_camera_rgb(reflectances, illuminant)
-    cam = syn["camera_rgb"][None]                       # (1, n, 3) flat patches
+    asn = syn["as_shot_neutral"]
+    wb = (1.0 / asn) / ((1.0 / asn)[1])
+    cam = (syn["camera_rgb"] * wb)[None]                # (1, n, 3) balanced
     tap = apply_adobe_pipeline(
-        cam, profile, syn["as_shot_neutral"], sc.ILLUMINANT_CCT[illuminant],
+        cam, profile, asn, sc.ILLUMINANT_CCT[illuminant],
         stop_after_stage=4,
     )
     return _tap_to_lab_d50(tap)
@@ -200,13 +204,16 @@ def test_pipeline_camera_to_tap_matches_independent_oracle():
         cam = syn["camera_rgb"][None].astype(np.float64)
         asn = syn["as_shot_neutral"].astype(np.float64)
 
-        tap = apply_adobe_pipeline(
-            cam.astype(np.float32), prof, asn.astype(np.float32),
-            sc.ILLUMINANT_CCT[illum], stop_after_stage=4,
-        )
-        # Independent recompute: WB (G-normalised) → FM → ProPhoto.
+        # The pipeline consumes BALANCED camera RGB (WB applied at the
+        # mosaic by the decode — slot 3); balance with the same G-normalised
+        # multipliers the decode derives from the AsShotNeutral.
         wb = (1.0 / asn) / ((1.0 / asn)[1])
         balanced = cam[0] * wb
+        tap = apply_adobe_pipeline(
+            balanced[None].astype(np.float32), prof, asn.astype(np.float32),
+            sc.ILLUMINANT_CCT[illum], stop_after_stage=4,
+        )
+        # Independent recompute: FM → ProPhoto on the same balanced input.
         xyz = balanced @ fm.T
         prophoto = xyz @ colour.RGB_COLOURSPACES["ProPhoto RGB"].matrix_XYZ_to_RGB.T
         np.testing.assert_allclose(tap.reshape(-1, 3), prophoto, atol=2e-5)

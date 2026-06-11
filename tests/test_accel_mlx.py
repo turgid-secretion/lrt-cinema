@@ -55,6 +55,12 @@ def _numpy_faithful_srgb(cam, profile, asn, kelvin, ops, dng_be, dbr):
     from lrt_cinema.ir import RenderIntent
     from lrt_cinema.output import _prophoto_to_display
     from lrt_cinema.pipeline import apply_adobe_pipeline
+    # Mirror render_frame's scene-referred exposure block (mask EVs + global
+    # Exposure2012 as one pre-colour-transform gain) so the numpy twin keeps
+    # parity with the MLX renderer, which applies the same fold internally.
+    total_ev = ops.scene_exposure_ev + ops.exposure_ev
+    if total_ev != 0.0:
+        cam = cam * np.float32(2.0 ** total_ev)
     pp = apply_adobe_pipeline(
         cam, profile, asn, kelvin, dng_baseline_exposure=dng_be,
         default_black_render=dbr, stop_after_stage=9,
@@ -134,10 +140,11 @@ def test_mlx_faithful_srgb_is_display_valid_and_nearblack_neutral():
     FINITE renderer pixels that the writer clips to an in-gamut [0,1] DISPLAY
     emission, and keep a near-black NEUTRAL region neutral (no cast).
 
-    A flat ASN-balanced near-black patch (cam = k·ASN → WB → k·[1,1,1] → neutral
-    through the whole pipeline) is dropped into a corner; the rendered output
-    there must be neutral, not a saturated cast. (The renderer output itself is
-    NOT pre-clipped — scene-referred encode keeps out-of-[0,1] sRGB until the
+    A flat near-black NEUTRAL patch is dropped into a corner. The renderer
+    consumes BALANCED camera RGB (WB applied at the mosaic by the decode —
+    slot 3), so neutral is k·[1,1,1] directly; the rendered output there must
+    stay neutral, not a saturated cast. (The renderer output itself is NOT
+    pre-clipped — scene-referred encode keeps out-of-[0,1] sRGB until the
     writer clips — so [0,1] is asserted on the WRITTEN emission, not the raw
     renderer array; only finiteness is required of the renderer.)"""
     from lrt_cinema.accel._mlx_kernels import MlxFaithfulRenderer
@@ -145,7 +152,7 @@ def test_mlx_faithful_srgb_is_display_valid_and_nearblack_neutral():
     profile = _profile()
     cam = _synthetic_camera_rgb()
     asn = np.array([0.52, 1.0, 0.63], dtype=np.float32)
-    cam[:8, :8] = (0.03 * asn).astype(np.float32)   # ASN-balanced near-black neutral
+    cam[:8, :8] = np.float32(0.03)   # balanced near-black neutral = k·[1,1,1]
     # A neutral-PRESERVING faithful grade (NO ColorGrade — its split-tone tints
     # shadows by design, which would legitimately colour a near-black neutral and
     # is NOT a cast). Saturation/Vibrance/HSL/Contrast keep neutrals neutral.
