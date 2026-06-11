@@ -48,7 +48,8 @@ def _png_from_tif16(tif: Path, dst: Path, crop_border: int) -> None:
     import tifffile
     from PIL import Image
     a = tifffile.imread(tif)
-    a = a[crop_border:-crop_border, crop_border:-crop_border]
+    if crop_border:
+        a = a[crop_border:-crop_border, crop_border:-crop_border]
     Image.fromarray((a.astype(np.float32) / 65535.0 * 255.0 + 0.5).astype(np.uint8)).save(dst)
 
 
@@ -70,7 +71,10 @@ def main() -> int:
             _png_from_tif16(old, OUT / f"{name}_C-old-pipeline.png", B)
         print(f"{name}: done")
     if LR_CLASSIC.exists():
-        _png_from_tif16(LR_CLASSIC, OUT / "LRT_00001_D-lr-classic.png", B)
+        # LR's own export is ALREADY on the 4016×6016 grid — no border crop
+        # (a second crop here mis-registered the D arm by 8 px; fixed
+        # 2026-06-10 during the fringe forensics).
+        _png_from_tif16(LR_CLASSIC, OUT / "LRT_00001_D-lr-classic.png", 0)
         print("LRT_00001_D-lr-classic: done")
     print(f"\nflip-stack -> {OUT}")
     print("All images 4016×6016 native pixels (8 px alignment CROP, no resize).")
