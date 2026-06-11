@@ -425,6 +425,16 @@ guaranteed by any port.
   `tests/fixtures/evidence/hl_reconstruct_5b_2026-06-11.json`
   (`tools/hl_reconstruct_experiment.py`); clean-room implementation
   `lrt_cinema/_opposed_reconstruct.py` (unit-tested).
+  **OWNER VERDICT IN (2026-06-12, rank-1): no visible gain from either
+  placement; both create MORE colour artifacts. 5a clip default
+  CONFIRMED from both directions; reconstruction arms stay lab code.**
+  Follow-up shipped same day (owner request): the held-out-truth
+  harness (`tools/hl_truth_harness.py`) makes any future reconstruction
+  parameter deterministically judgeable — band-clipped real mosaic +
+  unclipped analytic fields as hidden truth, linear-domain `rel_mae`
+  (pre-opposed measurably recovers: −52 % on real partial clips) with
+  the pressure falsecolor metrics as the display-side guard. The two
+  families bracket the visual trade; no eyes needed in the loop.
 
 **Slot 6 — false-colour suppression (after demosaic, before colour
 transform). NEW SLOT. VERDICT: NEEDED; scheme canon READ and CONVERGENT
