@@ -1,0 +1,38 @@
+{
+ "diagbars-ahd": {
+  "de_mean": 13.301,
+  "de_p95": 50.359,
+  "de_max": 63.806,
+  "dl_mean": 8.615,
+  "dc_mean": 23.836,
+  "falsecolor_mean": 23.839,
+  "falsecolor_p99": 125.203
+ },
+ "diagbars-dcb": {
+  "de_mean": 18.056,
+  "de_p95": 54.888,
+  "de_max": 63.806,
+  "dl_mean": 12.325,
+  "dc_mean": 33.281,
+  "falsecolor_mean": 33.284,
+  "falsecolor_p99": 130.344
+ },
+ "bars-ahd": {
+  "de_mean": 3.379,
+  "de_p95": 5.687,
+  "de_max": 59.144,
+  "dl_mean": 3.886,
+  "dc_mean": 0.692,
+  "falsecolor_mean": 0.698,
+  "falsecolor_p99": 19.768
+ },
+ "bars-dcb": {
+  "de_mean": 7.878,
+  "de_p95": 34.276,
+  "de_max": 63.806,
+  "dl_mean": 5.557,
+  "dc_mean": 9.653,
+  "falsecolor_mean": 9.657,
+  "falsecolor_p99": 63.342
+ }
+}

@@ -1016,6 +1016,7 @@ def render_frame(
     highlight_recovery: bool = False,
     demosaic: str = "linear",
     demosaic_highlights: str = "clip",
+    fc_suppress: int = 0,
 ) -> FrameRenderResult:
     """End-to-end render of a single RAW frame through pipeline stages 1
     through `stop_after_stage`.
@@ -1101,6 +1102,21 @@ def render_frame(
     if highlight_recovery:
         from lrt_cinema.highlight_recovery import reconstruct_highlights
         camera_rgb = reconstruct_highlights(camera_rgb, clip=clip_mask)
+
+    # TARGET slot 6: false-colour suppression (canon chroma-difference
+    # median + RT-style chroma blur — see `_fc_suppress`), after demosaic/
+    # highlight handling, before the colour transform. 0 = off (default;
+    # owner-gated). blur=True is the measured-better variant on every
+    # slot-6 target (fc_suppress_slot6 evidence: noisebars 7.98→4.36 at 3
+    # passes, guards pass); the pure-median dcraw arm stays available via
+    # the module. Ledger order note: dcraw runs its median BEFORE highlight
+    # blending; we follow the ledger's slot order (5 then 6) so suppression
+    # also cleans reconstruction-edge chroma — revisit with the 5b verdict.
+    if fc_suppress > 0:
+        from lrt_cinema._fc_suppress import suppress_false_colour
+        camera_rgb = suppress_false_colour(
+            camera_rgb, passes=fc_suppress, blur=True,
+        )
 
     # Scene-referred exposure block (slot 7): ONE linear gain combining the
     # LRT mask-EV corrections (deflicker / Holy-Grail / global — serialized

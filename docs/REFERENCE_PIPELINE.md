@@ -348,6 +348,20 @@ port (clean-room), or accepting menon + slot-6 suppression (RT rcd.cc /
 amaze.cc now locally readable at ~/src-reading for learn-not-vendor
 study [SRC 2026-06-11]). Default-flip decision (linear→menon) is
 owner's, post-lock.
+**Diagonal-gap measurements 2026-06-11 [EMP]:** slot-6 suppression
+closes diagbars 34.2 → 23.6 (3 passes+blur) with ΔL nearly unmoved —
+the remainder is interpolation-direction error, not chroma. libraw
+alternatives through our balanced chain: AHD falsecolor 23.8 but bars
+ΔL regresses 10× (0.39 → 3.89, disqualifying); DCB worse everywhere
+(`diagbars_libraw_algos_2026-06-11.json`). RCD's tunables are
+refine-pass (suppression-family) knobs — they cannot fix H/V-only
+directional choice on diagonals. **AMaZE-class clean-room port SCOPED,
+not started** (per the handoff): RT `amaze.cc` ≈1.4 k dense lines
+(Hamilton-Adams base + diagonal gradients + Nyquist texture logic);
+estimate 1–2 focused sessions incl. numba twin + battery validation;
+anchored payoff diagbars ≈17 (libraw-AHD floor) — the LR-product 13.6
+likely needs ACR's co-designed demosaic+suppression and is not
+guaranteed by any port.
 
 **Slot 5 — highlight handling.** Two distinct sub-questions:
 - **5a, the fallback (no reconstruction): clip-to-common-white at the
@@ -426,10 +440,24 @@ c = max(0, med+G), 1–5 passes (demosaicing/basics.c:91); **dcraw/libraw**
 ACR internal (inferred: zoneplate 0.02 vs our 0.41) [EMP]. Evidence for
 need: zoneplate/noisebars/diagbars gaps are all chroma-dominated [EMP];
 our earlier probe medianed the wrong representation (fringe forensics)
-[EMP]. Plan: clean-room chroma-difference median (dt/dcraw class, the
-2-of-3 majority + simplest), iterate passes/variants against zoneplate
-(→≈0.02), noisebars (→≈4), diagbars (contribution TBD); guard
-slantededge ≈0.004 and bars ≤ LR-product 2.03.
+[EMP].
+**IMPLEMENTED + ITERATED 2026-06-11** (`lrt_cinema/_fc_suppress.py`,
+clean-room; passes sweep + RT-blur variant, pre-registered):
+noisebars 7.98 → **4.36** at 3 passes+blur (**LR-product ≈4.25 class
+reached**; beats dt's own 5.1 anchor); diagbars 34.2 → 23.6 (31 %
+closed; ΔL barely moves — the remainder is the demosaic's, slot 4);
+bars 1.15 → 1.11 and slantededge 0.004-class IMPROVE (zero resolution
+cost — P4 confirmed; G/luma untouched by construction). **P1 REFUTED
+honestly, twice**: zoneplate is INERT under both the pure median (0.414
+→ 0.410) and the +blur variant (→ 0.393) — its invented chroma is
+low-frequency banding, not impulses or alternating-phase texture; ACR's
+0.02 is demosaic-internal (frequency-aware) and OUT OF REACH for this
+scheme class. Recommended setting: **3 passes + blur** (the measured
+Pareto point; pure-median dcraw arm remains in the module). Wired:
+`render_frame(fc_suppress=N)` + CLI `--fc-suppress N` — **off by
+default, owner-gated**; on/off owner flip at
+`verify-2026-06-11/fc-flip/`. Evidence:
+`tests/fixtures/evidence/fc_suppress_slot6_2026-06-11.json`.
 
 **Slot 7 — scene-referred exposure block (linear camera RGB, before the
 colour transform).** Sub-slots:

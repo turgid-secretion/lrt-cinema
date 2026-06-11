@@ -258,6 +258,19 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     render.add_argument(
+        "--fc-suppress", dest="fc_suppress", type=int, default=0,
+        metavar="N",
+        help=(
+            "False-colour suppression passes (TARGET slot 6): the cross-engine "
+            "canon scheme (darktable color_smoothing / dcraw -m class) — per "
+            "pass, median the R-G and B-G chroma differences over 3x3 and add "
+            "G back, leaving G (detail) untouched. Suppresses demosaic-invented "
+            "colour on fine detail/grain (zoneplate/noisebars class). 0 = off "
+            "(the default; owner-gated pending eyeball), 1-5 passes "
+            "(2 recommended by the slot-6 iteration evidence)."
+        ),
+    )
+    render.add_argument(
         "--master-look", dest="master_look", default="defer",
         choices=("bake", "defer"),
         help=(
@@ -338,6 +351,7 @@ class _RenderJob:
     master_look: str = "bake"     # "bake"|"defer" (perceptual master static-look gate)
     demosaic: str = "linear"      # libraw demosaic algorithm ("linear" = byte-exact)
     capture_sharpen: str = "off"  # "off"|"xmp"|"acr" (faithful capture sharpening; off=byte-exact)
+    fc_suppress: int = 0          # slot-6 false-colour suppression passes (0 = off)
 
 
 @dataclass
@@ -394,7 +408,8 @@ def _render_one_frame(job: _RenderJob) -> _RenderResult:
                 and job.intent is RenderIntent.FAITHFUL
                 and job.demosaic == "linear"
                 and job.capture_sharpen == "off"  # USM is a CPU-only Stage-12 op
-                and not job.highlight_recovery):
+                and not job.highlight_recovery
+                and job.fc_suppress == 0):  # slot-6 median is CPU-only
             try:
                 from lrt_cinema.output import write_tiff_display
                 encoded = accel.mlx_render_frame_to_srgb(
@@ -436,6 +451,7 @@ def _render_one_frame(job: _RenderJob) -> _RenderResult:
             preview_scale=job.preview_scale,
             highlight_recovery=job.highlight_recovery, demosaic=job.demosaic,
             demosaic_highlights=("headroom" if stage7 else "clip"),
+            fc_suppress=job.fc_suppress,
         )
         with_dev_ops = apply_develop_ops(
             result.prophoto, job.ops, job.intent, master_look=job.master_look,
@@ -796,6 +812,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
             master_look=master_look,
             demosaic=args.demosaic,
             capture_sharpen=capture_sharpen,
+            fc_suppress=args.fc_suppress,
         ))
 
     if args.dry_run:
@@ -807,6 +824,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
             f"capture_sharpen={capture_sharpen}, "
             f"backend={backend}, preview_scale={args.preview_scale}, "
             f"highlight_recovery={highlight_recovery}, "
+            f"fc_suppress={args.fc_suppress}, "
             f"workers={args.workers}).\n",
         )
         return 0
