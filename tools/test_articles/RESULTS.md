@@ -1,6 +1,6 @@
 # Pressure-suite results — ours vs reference engines
 
-Generated from `tests/fixtures/evidence/pressure_2026-06-11.json` by `report_table.py`;
+Generated from `tests/fixtures/evidence/pressure_2026-06-11b-clipramp-deep.json` by `report_table.py`;
 regenerate after every pressure run. Anchor caveats: dng_validate's
 reference demosaic is BILINEAR (colour-math anchor, not product edge
 behaviour); LR-product = the owner's LR Classic export of the same
@@ -19,6 +19,7 @@ every divergence is front-end behaviour.
 |---|---|---|---|
 | flatpatches | 0.18 (0.04/0.19) | 0.15 (0.03/0.14) | 0.15 (0.03/0.14) |
 | clipramp | 0.09 (0.02/0.09) | 0.09 (0.02/0.10) | 0.09 (0.02/0.10) |
+| clipramp_deep | 0.42 (0.14/0.33) | 0.42 (0.14/0.33) | 0.42 (0.14/0.33) |
 | bars | 11.35 (7.73/18.92) | 0.98 (0.54/2.16) | 0.54 (0.39/1.14) |
 | clipbars | 9.54 (5.03/19.38) | 1.55 (0.77/2.48) | 1.16 (0.64/1.54) |
 | zoneplate | 1.09 (0.21/1.04) | 0.48 (0.10/0.40) | 0.48 (0.10/0.40) |
@@ -49,6 +50,7 @@ every divergence is front-end behaviour.
 | article | ours-menon | ours-rcd | ours-linear | Adobe-ref | libraw-AHD | darktable | LR-product |
 |---|---|---|---|---|---|---|---|
 | clipramp | 3.03 | 3.03 | 3.03 | 3.00 | 12.12 | 10.54 | 1.07 |
+| clipramp_deep | 1.98 | 1.98 | 1.98 | 1.96 | 7.39 | 10.70 | 0.47 |
 | clipbars | 0.92 | 0.71 | 6.59 | 4.79 | 0.66 | 14.42 | 0.78 |
 | clipfield | 0.01 | 0.01 | 0.01 | 0.01 | 0.01 | 1.41 | 0.01 |
 | clipbars_coolwb | 0.89 | 0.65 | 6.64 | — | — | — | 0.78 |

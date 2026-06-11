@@ -428,6 +428,14 @@ guaranteed by any port.
   **OWNER VERDICT IN (2026-06-12, rank-1): no visible gain from either
   placement; both create MORE colour artifacts. 5a clip default
   CONFIRMED from both directions; reconstruction arms stay lab code.**
+  **SLOT 5b CLOSED (owner, 2026-06-12): clip-to-common-white is the
+  decided highlight handling; `_opposed_reconstruct` is retained as lab
+  code (the truth harness proves it recovers linear signal — a future
+  method with competent chroma handling may clear the bar). Successor
+  work item, owner-commissioned: survey current industry-best
+  reconstruction methods + implementation feasibility against this
+  project's constraints (clean-room, licence, 24 MP × 250-frame
+  runtime, TEMPORAL STABILITY for timelapse, numpy/numba stack).**
   Follow-up shipped same day (owner request): the held-out-truth
   harness (`tools/hl_truth_harness.py`) makes any future reconstruction
   parameter deterministically judgeable — band-clipped real mosaic +

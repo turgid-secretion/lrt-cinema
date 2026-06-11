@@ -290,12 +290,15 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     render.add_argument(
-        "--demosaic", dest="demosaic", default="linear",
+        "--demosaic", dest="demosaic", default="menon",
         choices=("linear", "menon", "rcd", "mlri", "dcb", "ahd", "dht", "vng", "ppg", "aahd"),
         help=(
-            "Demosaic algorithm (default: linear). 'linear' = libraw bilinear, the "
+            "Demosaic algorithm (default: menon — owner-approved flip 2026-06-12, "
+            "native-res eyeball verdict 'menon looks much better than bilinear'; "
+            "render_frame's own default stays 'linear' so the dng_validate gate and "
+            "library callers are unmoved). 'linear' = libraw bilinear, the "
             "byte-exact match to the dng_validate regression tripwire (LOW quality). "
-            "'menon' = colour_demosaicing Menon2007/DDFAPD (BSD-3) — the RECOMMENDED "
+            "'menon' = colour_demosaicing Menon2007/DDFAPD (BSD-3) — the "
             "quality/delivery demosaic: measured-best on the demosaic battery (CPSNR + "
             "lowest false-colour, ties on resolution; needs `pip install .[demosaic]`). "
             "'rcd' = our clean-room RCD-family (numba-fast, headroom-preserving, "

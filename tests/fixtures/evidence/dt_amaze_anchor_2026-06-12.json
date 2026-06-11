@@ -1,0 +1,96 @@
+{
+ "design": "canonical AMaZE via dt-cli sidecar (phase 0)",
+ "articles": {
+  "diagbars": {
+   "dt-rcd": {
+    "falsecolor_mean": 20.618741914462138,
+    "falsecolor_p99": 84.92530312247005
+   },
+   "dt-amaze": {
+    "falsecolor_mean": 9.729996504444498,
+    "falsecolor_p99": 71.44863288668645
+   },
+   "dt-lmmse": {
+    "falsecolor_mean": 14.605219077682795,
+    "falsecolor_p99": 57.71092723171045
+   },
+   "dt-ppg": {
+    "falsecolor_mean": 16.273384358379833,
+    "falsecolor_p99": 80.62784899232257
+   }
+  },
+  "zoneplate": {
+   "dt-rcd": {
+    "falsecolor_mean": 0.735776999033052,
+    "falsecolor_p99": 3.351178372131057
+   },
+   "dt-amaze": {
+    "falsecolor_mean": 0.7007103094870528,
+    "falsecolor_p99": 2.7807129400896238
+   },
+   "dt-lmmse": {
+    "falsecolor_mean": 0.6190044821999975,
+    "falsecolor_p99": 1.2323473457347887
+   },
+   "dt-ppg": {
+    "falsecolor_mean": 0.6682136376881488,
+    "falsecolor_p99": 2.4510655033985627
+   }
+  },
+  "bars": {
+   "dt-rcd": {
+    "falsecolor_mean": 1.2753228496351874,
+    "falsecolor_p99": 26.36574598359591
+   },
+   "dt-amaze": {
+    "falsecolor_mean": 0.6088681373555106,
+    "falsecolor_p99": 0.689519575399939
+   },
+   "dt-lmmse": {
+    "falsecolor_mean": 0.9934577651222151,
+    "falsecolor_p99": 1.0567177627525806
+   },
+   "dt-ppg": {
+    "falsecolor_mean": 2.1273488049208895,
+    "falsecolor_p99": 80.48766593604189
+   }
+  },
+  "noisebars": {
+   "dt-rcd": {
+    "falsecolor_mean": 5.067344244530526,
+    "falsecolor_p99": 28.840543663966095
+   },
+   "dt-amaze": {
+    "falsecolor_mean": 4.173818256904921,
+    "falsecolor_p99": 19.79634888632655
+   },
+   "dt-lmmse": {
+    "falsecolor_mean": 3.3345515372365186,
+    "falsecolor_p99": 22.173319086212242
+   },
+   "dt-ppg": {
+    "falsecolor_mean": 5.387466985280693,
+    "falsecolor_p99": 40.801149326533235
+   }
+  },
+  "slantededge": {
+   "dt-rcd": {
+    "falsecolor_mean": 0.7126882054076699,
+    "falsecolor_p99": 0.77557371834809
+   },
+   "dt-amaze": {
+    "falsecolor_mean": 0.7114112553302072,
+    "falsecolor_p99": 0.77557371834809
+   },
+   "dt-lmmse": {
+    "falsecolor_mean": 0.7136890041505333,
+    "falsecolor_p99": 0.77557371834809
+   },
+   "dt-ppg": {
+    "falsecolor_mean": 0.7131031406908027,
+    "falsecolor_p99": 0.77557371834809
+   }
+  }
+ },
+ "sidecar_validation_maxdiff_16bit": 0
+}
