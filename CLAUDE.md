@@ -86,8 +86,8 @@ The active repair plan lives at
 - CLI: `lrt-cinema` (see `cli.py`); key flags: `--render-intent`, `--demosaic`,
   `--capture-sharpen`, `--master-look`, `--deflicker-scale`, `--highlight-recovery`.
   Env: `LRT_CINEMA_BACKEND`, `LRT_CINEMA_FIXTURES`, `LRT_CINEMA_PROFILES`,
-  `LRT_CINEMA_DNGLAB`; experimental gates `LRT_CINEMA_B1`,
-  `LRT_CINEMA_CHROMA_MED` (both default-off, fate decided by H1–H4).
+  `LRT_CINEMA_DNGLAB`. (`LRT_CINEMA_B1`/`LRT_CINEMA_CHROMA_MED` deleted
+  2026-06-10, owner-approved — built for the refuted pre-H1 cyan diagnosis.)
 
 ## Current state (2026-06-10) & what's next
 

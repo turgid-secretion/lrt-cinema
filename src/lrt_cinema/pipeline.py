@@ -38,7 +38,6 @@ The module-level entry point is `render_frame()`.
 
 from __future__ import annotations
 
-import os
 import struct
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -496,13 +495,13 @@ def _bayer_pattern_str(raw_pattern, color_desc) -> str | None:
 
 
 # CFA-domain demosaics (vs libraw postprocess): these run on the linearised Bayer
-# mosaic we extract ourselves (`_extract_cfa`) — full-res, headroom-preserving, and
-# the shared insertion point for the future B1 mosaic-domain highlight-recon pre-pass
-# (extract CFA → [B1] → demosaic). 'rcd'/'mlri' are clean-room (ours); 'menon' is
-# colour_demosaicing's BSD-3 Menon2007 (DDFAPD) — the measured-best on the demosaic
-# battery (docs/research/demosaic-test-fixtures.md), the recommended quality/master
-# demosaic. All three preserve over-range (>1) input (verified), so B1's recovered
-# highlights survive any of them.
+# mosaic we extract ourselves (`_extract_cfa`) — full-res, headroom-preserving.
+# 'rcd'/'mlri' are clean-room (ours); 'menon' is colour_demosaicing's BSD-3
+# Menon2007 (DDFAPD) — the measured-best on the demosaic battery
+# (docs/research/demosaic-test-fixtures.md), the recommended quality/master
+# demosaic. All three preserve over-range (>1) input (verified), so any future
+# mosaic-domain highlight reconstruction survives them (placement decided by
+# the architecture lock — docs/REFERENCE_PIPELINE.md).
 _CFA_DEMOSAICS = ("rcd", "mlri", "menon")
 
 
@@ -515,10 +514,9 @@ def _extract_cfa(raw) -> tuple[np.ndarray, str]:
     highlight headroom (>1.0) is PRESERVED. Cropped to even dims (the 2×2 Bayer
     phase). Raises ValueError on a non-2×2-Bayer sensor.
 
-    Shared by every CFA-domain demosaic AND the future **B1 mosaic-domain
-    highlight-recovery pre-pass**, which slots in between this extraction and the
-    demosaic call (extract CFA → B1(CFA) → demosaic). B1 is therefore
-    demosaic-independent: it operates here, on the mosaic, before any reconstruction.
+    Shared by every CFA-domain demosaic. Any future mosaic-domain pre-pass
+    (e.g. highlight reconstruction, placement pending the architecture lock)
+    slots between this extraction and the demosaic call, demosaic-independent.
     """
     pattern = _bayer_pattern_str(raw.raw_pattern, raw.color_desc)
     if pattern is None:
@@ -549,14 +547,6 @@ def _cfa_demosaic(raw, method: str, wb_mul: np.ndarray | None = None) -> np.ndar
     "H1 CONFIRMED" + anti-drift rule 8. Headroom: scale → demosaic → divide
     is exact in float; >1 values survive."""
     cfa, pattern = _extract_cfa(raw)
-    # B1 mosaic-domain highlight-recon pre-pass (extract CFA → [B1] → demosaic).
-    # ENV-GATED, default off → byte-exact; operates on the UN-scaled mosaic
-    # (its asn math is sensor-referred). See _b1_highlight (deletion pending —
-    # built for the refuted pre-H1 diagnosis).
-    _b1 = os.environ.get("LRT_CINEMA_B1", "off")
-    if _b1 and _b1 != "off":
-        from lrt_cinema._b1_highlight import b1_reconstruct
-        cfa = b1_reconstruct(cfa, pattern, _asn_from_wb(raw.camera_whitebalance), _b1)
     if wb_mul is not None:
         colors = raw.raw_colors_visible
         h, w = cfa.shape
@@ -629,13 +619,6 @@ def _demosaic_rgb(raw, rawpy_mod, half_size: bool, demosaic: str,
             rgb = _libraw_rgb(raw, rawpy_mod, half_size, "linear", wb_mul)
     else:
         rgb = _libraw_rgb(raw, rawpy_mod, half_size, demosaic, wb_mul)
-    # Post-demosaic chroma-difference median (env-gated, default off → byte-exact).
-    # Smooths demosaic false colour BEFORE white balance. See _b1_highlight
-    # (deletion pending — built for the refuted pre-H1 diagnosis).
-    _cm = os.environ.get("LRT_CINEMA_CHROMA_MED", "")
-    if _cm:
-        from lrt_cinema._b1_highlight import chroma_diff_median
-        rgb = chroma_diff_median(rgb, passes=int(_cm))
     return rgb
 
 
