@@ -112,14 +112,33 @@ darktable is the strongest single corroboration of the ISP canon: WB *and*
 highlight reconstruction pre-demosaic; exposure a scene-referred gain far
 upstream of tone; creative color between colorin and tone.
 
-### RawTherapee **[PEND source read; EMP anchor]**
+### RawTherapee — `rtengine/rawimagesource.cc` **[SRC-fetch 2026-06-10]**
 
-Empirical anchor (owner-run, 2026-06-10): RT at the cool develop WB
-(4034 K), multiple demosaics including RCD and bilinear, shows **no cyan
-artifact** on the production raw — consistent with WB-before-demosaic.
-The pp3 is preserved at `production/rt-experiment/DSC_4053.NEF.pp3`.
-Reading `rtengine/rawimagesource.cc` for the absolute chain is
-next-session work.
+Single-pass web fetch of the dev-branch source (verify with a local read
+before load-bearing use — the multiplier nuance below especially):
+
+```
+  preprocess():
+  1. dark frame / flat field      (copyOriginalPixels)
+  2. black level + scaling        (scaleColors)
+  3. bad pixel interpolation
+  4. raw CHROMATIC ABERRATION     ← CA_correct_RT, PRE-demosaic,
+     correction                     on the mosaic
+  5. green equilibration / line denoise / vignetting
+  demosaic():
+  6. demosaic (AMaZE/RCD/VNG4/…)
+  getImage():
+  7. develop-WB multipliers (rm/gm/bm via calculate_scale_mul)
+  8. highlight recovery           ← HLRecovery_inpaint / _opposed,
+                                    POST-demosaic
+```
+
+**Open nuance [PEND]:** which multiplier set is baked into `rawData` at
+demosaic time (camera pre-mul in `scaleColors` vs none) — i.e. whether RT
+demosaics camera-balanced or fully-unbalanced data — needs the local
+source pass. The owner's experiment (no cyan at the cool develop WB with
+RCD; pp3 at `production/rt-experiment/`) [EMP] says RT's demosaic input is
+at least approximately balanced, consistent with the canon either way.
 
 ### Adobe (DNG SDK / Lightroom) **[SRC: DNG 1.7.1 spec + our port; EMP]**
 
@@ -195,12 +214,13 @@ ops. The audit is per-op, because the correct placement differs per op:
 | Op (ours, step) | LR's placement | Status / next probe |
 |---|---|---|
 | Mask/local exposure (6) | scene-referred ×4 | **FIXED + verified** [EMP] |
-| Global `Exposure2012` (13) | scene-referred (expected: same machinery class as local) | **SUSPECT** [PEND] — zero in production, latent. Probe: CAL-style single-variable XMPs at Exposure ±1/±2, owner exports, same harness |
-| `Blacks2012` (13) | unknown | [PEND] — same harness |
+| Global `Exposure2012` (13) | scene-referred (expected: same machinery class as local) | **SUSPECT — probe PREPARED 2026-06-10**: `production/calibration/CALEXP{100,200}_4053.{NEF,xmp}` (single-variable, Exposure2012 = 1.0/2.0, xmp-diff-verified). Owner exports 16-bit sRGB TIFFs (no resize, sharpening off) → same harness as the deflicker CAL |
+| `Blacks2012` (13) | unknown | [PEND] — same harness pattern |
 | `Contrast2012`, ToneCurve (14) | tone-domain by nature; LR's pivot/space unknown | [PEND] — these may be *correctly* post-curve; needs the probe before touching |
 | HSL / ColorGrade / Sat / Vib (14) | color-domain; LR space unknown | [PEND] — lower risk (zero or constant in production), audit after exposure class |
 | Sharpness / NR | ACR detail stage | [PEND] — part of the ~0.6 base-look floor |
-| Highlight reconstruction (5) | Adobe reconstructs; darktable does it PRE-demosaic on the mosaic; dcraw post-demosaic | **BLOCKED on this lock** (owner): placement decides implementation |
+| Highlight reconstruction (5) | canon SPLITS: darktable PRE-demosaic (mosaic), dcraw & RawTherapee POST-demosaic, Adobe reconstructs in-render | **BLOCKED on this lock** (owner). Our Tier-1 post-demosaic placement is RT/dcraw-consistent; but it is ~no-op on the residual clip-edge fringes (F vs G arms: 199 px > 2/255, max 4) — whatever fixes those is NOT the current Tier-1 |
+| Raw CA correction (absent) | LR: available but **ZERO/off in this production sequence** (census [EMP]: AutoLateralCA=0, LensProfileEnable=0, Defringe=0 across all XMPs). RT: `CA_correct_RT` PRE-demosaic [SRC-fetch] | **OPEN — owner residual lead.** Owner sees fringes at highlight-to-clip boundaries in the fixed renders, plausibly genuine lateral CA. Since LR corrected nothing, genuine CA would appear in LR's render too → discriminator: flip `D-lr-classic` vs `F-menon-fixed` at the same edges. If D shows them: genuine, optional pre-demosaic CA op someday. If D is clean: still ours, investigate |
 
 ## Adjudicated divergences (the ledger)
 
@@ -220,14 +240,47 @@ ops. The audit is per-op, because the correct placement differs per op:
    (gym max-ΔE 13.6 at 0.006 % px). Resolution belongs to the highlight-
    reconstruction row above, after the lock.
 
+## Proposed TARGET architecture — DRAFT, owner lock pending
+
+Drafted 2026-06-10 from the canon above. Slots marked ◆ are settled by
+source/measurement; slots marked ? await their probe. **This is a
+proposal, not the lock** — the lock happens when the owner signs off and
+the ? slots have evidence.
+
+```
+  1. ◆ decode + linearize + black subtract        (sensor space)
+  2. ?  raw CA correction                          (mosaic; optional op,
+        only if the D-vs-F flip says the fringes are ours / wanted)
+  3. ◆ WB conditioning of the mosaic              (Stage-2 multipliers)
+  4. ◆ demosaic (directional; default decision post-lock)
+  5. ?  highlight reconstruction                   (post-demosaic camera
+        space per RT/dcraw — but must actually fix clip-edge fringes,
+        which Tier-1 today does not; may need partial-clip handling
+        in/at demosaic per Adobe behaviour)
+  6. ◆ scene-referred exposure block:             (linear camera/early)
+        scene_exposure_ev (mask EVs ×4) — shipped
+        + global Exposure2012 ?                    (pending CALEXP probe)
+  7. ◆ Stage 2–4 WB multiply + ForwardMatrix → linear ProPhoto
+  8. ◆ HSM → ExposureRamp → LookTable → ProfileToneCurve (Adobe chain)
+  9. ?  tone-domain develop ops (Contrast, ToneCurve …) — possibly
+        correctly post-curve; probe before moving anything
+ 10. ?  color-domain develop ops (HSL, ColorGrade, Sat/Vib) — audit
+        after the exposure class
+ 11. ◆ NR + sharpening (detail stage, placement vs ACR to calibrate)
+ 12. ◆ output transform + encode
+```
+
 ## Next session (the architecture lock, in order)
 
-1. RawTherapee + LibRaw source pass → upgrade [PEND]/[LIT] tags to [SRC];
-   fill the RT flowchart.
-2. The global-`Exposure2012` domain probe (CAL harness, owner exports).
-3. Declare the TARGET architecture: one flowchart, every op with an
-   absolute slot and a domain, each slot justified by canon or by a
-   measured LR-match.
-4. Migration plan for the ⚠ region + highlight-reconstruction placement.
-5. Only then: re-enable/raise anything gated on architecture (highlight
-   recovery default, EXR tap policy, demosaic default).
+1. LOCAL RawTherapee + LibRaw source pass → upgrade the [SRC-fetch] and
+   [EMP] tags to [SRC]; resolve the RT rawData-multiplier nuance.
+2. The global-`Exposure2012` domain probe — **files prepared**
+   (`CALEXP{100,200}_4053`), needs the owner's two LR exports, then the
+   existing harness.
+3. Resolve the ? slots above; owner signs the TARGET; migration plan for
+   the ⚠ region.
+4. Only then: re-enable/raise anything gated on architecture (highlight
+   recovery default, EXR tap policy, demosaic default — owner verdict on
+   menon vs bilinear is already in: menon, post-lock).
+5. Stale-prose archive audit of the four bannered docs (owner-sanctioned)
+   to reclaim context budget.

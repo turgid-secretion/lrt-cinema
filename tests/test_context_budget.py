@@ -37,7 +37,12 @@ _CLAUDE_MD_CAP = 10_240
 # in the session brief ("I pre-approve this one file"; anti-drift rule 8
 # names it as the queued artifact). Seed is 7,213 bytes; the build-out must
 # fit the allowance or archive prose elsewhere first.
-_LIVE_DOCS_BUDGET = 220_190 + 4_096 + 8_192
+# 2026-06-10 (evening): +8 KB more for the architecture-lock build-out of
+# the same file (RT source pass, CA/highlight-recon placement, TARGET
+# draft) — owner-sanctioned this round: "you are welcome to bump the
+# live-docs budget if it is meaningfully justified". Stale-prose archive
+# audit (the four bannered docs) is queued to claw bytes back.
+_LIVE_DOCS_BUDGET = 220_190 + 4_096 + 8_192 + 8_192
 
 # Rule 3 — files that existed at the freeze (grandfathered; everything else
 # under live docs/ must carry an "Owner-approved:" line).

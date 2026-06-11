@@ -83,11 +83,24 @@ def main() -> int:
     dng_be = read_dng_baseline_exposure(DNG)
     dbr = read_dcp_default_black_render(DCP)
 
-    arms = {"E-menon-prefixbug": None, "F-menon-fixed": wb_mul}
+    # Third arm (owner residual-fringe lead, 2026-06-10): same as F but with
+    # the Tier-1 highlight reconstruction enabled — discriminates "missing
+    # highlight recon" from "genuine lens CA" at highlight-to-clip boundaries
+    # (production XMPs carry ZERO CA/defringe correction, census-verified, so
+    # LR's clean edges are not CA-correction; Adobe reconstructs partial
+    # clips per the gym max-ΔE evidence).
+    arms = {
+        "E-menon-prefixbug": (None, False),
+        "F-menon-fixed": (wb_mul, False),
+        "G-menon-fixed-hlrecovery": (wb_mul, True),
+    }
     rendered: dict[str, np.ndarray] = {}
-    for name, mul in arms.items():
+    for name, (mul, recover) in arms.items():
         with rawpy.imread(str(DNG)) as raw:
             cam = _demosaic_rgb(raw, rawpy, False, "menon", mul)
+        if recover:
+            from lrt_cinema.highlight_recovery import reconstruct_highlights
+            cam = reconstruct_highlights(cam, asn)
         if ops.scene_exposure_ev != 0.0:
             cam = cam * np.float32(2.0 ** ops.scene_exposure_ev)
         pp = apply_adobe_pipeline(
