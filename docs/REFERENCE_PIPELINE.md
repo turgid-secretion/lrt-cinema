@@ -272,6 +272,19 @@ the ? slots have evidence.
  12. ◆ output transform + encode
 ```
 
+## The iteration substrate: pressure-test articles
+
+`tools/test_articles/` — analytic scenes (ISO-12233-class constructions)
+mosaicked onto real D750 DNGs with sensor-accurate clipping. Epistemics
+(owner audit 2026-06-10): the scenes are CONSTRUCTION truth (externally
+verifiable mosaic contents), the harness "expected" is internal (isolates
+the front-end), and external authority comes from independent engines
+rendering the same files (dng_validate — NB its reference demosaic is
+bilinear; libraw's own pipeline) compared on truth-anchored INVARIANTS
+(chroma invented where the scene is neutral; clip-zone chroma). The
+`clipbars` article reproduces the production blinds failure in one number —
+front-end changes iterate against these before any owner eyeball.
+
 ## Next session (the architecture lock, in order)
 
 1. LOCAL RawTherapee + LibRaw source pass → upgrade the [SRC-fetch] and
