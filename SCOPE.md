@@ -6,7 +6,7 @@ scene-linear ACEScg EXR masters (`cinema-linear-finished` γ /
 `cinema-linear-master` β) as opt-in targets. The earlier β-XML Resolve
 project-sidecar plan — and the §2.B X1–X6 increments built around it —
 was ruled out: Resolve preserves no per-frame grade keyframes through any
-documented import path (see [docs/DECISIONS.md](docs/DECISIONS.md) §4).
+documented import path (see [docs/archive/DECISIONS.md](docs/archive/DECISIONS.md) §4).
 
 See [CHANGELOG.md](CHANGELOG.md) for the release history.
 
@@ -78,7 +78,7 @@ applied as Adobe's hue/saturation-preserving `RefBaselineRGBTone` (curve the
 max+min channel, interpolate the middle) instead of per-channel. The old
 per-channel tone error fired wherever channels differ (edges + saturated
 colour) and was invisible on neutrals (r=g=b), so the flat-pixel median was
-already 0.000. See `docs/VALIDATION.md` for the decomposition.
+already 0.000. See `docs/archive/VALIDATION.md` for the decomposition.
 
 ## Floors
 
@@ -161,8 +161,8 @@ documentation + sample XMPs from LRTimelapse Pro 7.5.3. See
 - **Standalone GUI app (LRT *replacement*) — separate future track, currently
   ON HOLD / NO-GO** (needs a Vulkan/native-systems engineer and/or a design
   originator first; not part of this CLI's scope):
-  [docs/DECISIONS.md](docs/DECISIONS.md) §6.
-- [docs/PIPELINE.md](docs/PIPELINE.md) — the canonical as-built pipeline reference.
+  [docs/archive/DECISIONS.md](docs/archive/DECISIONS.md) §6.
+- [docs/archive/PIPELINE.md](docs/archive/PIPELINE.md) — the canonical as-built pipeline reference.
 - [CHANGELOG.md](CHANGELOG.md) — the empirical journey from 6.37 ΔE (dt-cli) to
   the in-process Python pipeline.
 - [CHANGELOG.md](CHANGELOG.md) — release notes.

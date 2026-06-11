@@ -45,7 +45,7 @@ incl. the gym/rose ΔE ship gate, whose gym frame *is* the clipped window frame 
 stays byte-identical with zero audit), on by default at the CLI/preset layer for
 production fidelity. In clipped regions this stage **intentionally diverges from
 `dng_validate`** (which clips, doing no reconstruction): we match the ACR/LRT
-reality, not Adobe's reference clip. See docs/DECISIONS.md §"Highlight recovery".
+reality, not Adobe's reference clip. See docs/archive/DECISIONS.md §"Highlight recovery".
 """
 
 from __future__ import annotations

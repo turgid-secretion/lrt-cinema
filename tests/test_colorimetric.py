@@ -1,6 +1,6 @@
 """Axis 2 — absolute colorimetric accuracy at the colorimetric tap.
 
-The middle axis of the validation harness (docs/VALIDATION.md §"Validation
+The middle axis of the validation harness (docs/archive/VALIDATION.md §"Validation
 axes — never conflate them"):
 
   Axis 1  implementation correctness   vs our own maths     → ~0 (test_color_oracle.py)

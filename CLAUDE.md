@@ -43,11 +43,11 @@ root-cause verdict (CLAIMS.md, H1–H4).
 
 ## Reference docs (useful, NOT authoritative)
 
-`docs/PIPELINE.md` (stage map), `docs/DECISIONS.md` (decision log),
-`docs/VALIDATION.md` (measurement methodology), `docs/LRT_ROUNDTRIP.md` — all
-carry banners: they contain unverified/stale claims pending the Phase-2
-evidence-based rewrite. `docs/archive/` holds superseded research and the old
-memory snapshot; read it only for forensic purposes, never as direction.
+`docs/REFERENCE_PIPELINE.md` is the live cross-engine canon + TARGET ledger.
+The four bannered first-sprint docs (PIPELINE, DECISIONS, VALIDATION,
+LRT_ROUNDTRIP) were archived 2026-06-11 (owner-sanctioned audit) into
+`docs/archive/`, which also holds superseded research and the old memory
+snapshot; read archive only for forensic purposes, never as direction.
 The active repair plan lives at
 `~/.claude/plans/this-repo-has-become-distributed-blanket.md`.
 

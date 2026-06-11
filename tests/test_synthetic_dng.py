@@ -136,7 +136,7 @@ def test_flat_patches_match_dng_validate():
 
     # NEUTRAL wedge — the load-bearing claim. No demosaic edges, in-gamut at
     # every level, same DCP both sides (Luther floor cancels) → the colour maths
-    # bit-match the open spec at ΔE 0.000. This is exactly docs/VALIDATION.md's
+    # bit-match the open spec at ΔE 0.000. This is exactly docs/archive/VALIDATION.md's
     # "flat-pixel median 0.000", isolated from the demosaic-edge tail that lifts
     # the real-scene mean to 0.789. Strict gate.
     assert np.median(de_neutral) < 0.05, (

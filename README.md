@@ -7,7 +7,7 @@ embedded sRGB ICC) — the only format LRT's video renderer re-ingests, so you
 take the frames straight back into LRT for video + **Motion Blur** — without
 shelling out to Lightroom or any other RAW pipeline. Scene-linear ACEScg OpenEXR
 (for DaVinci Resolve / ACES) is an opt-in target. See
-[docs/LRT_ROUNDTRIP.md](docs/LRT_ROUNDTRIP.md).
+[docs/archive/LRT_ROUNDTRIP.md](docs/archive/LRT_ROUNDTRIP.md).
 
 **Status:** Pre-alpha. Color science gates < 1 ΔE2000 mean against Adobe
 `dng_validate` on the project test scenes. Workflow polish, third-camera
@@ -40,7 +40,7 @@ LRT workflow renders those XMPs through Adobe Lightroom Classic.
 
 Per-frame color is within < 1 ΔE2000 of `dng_validate` (Adobe's own DNG
 SDK reference renderer) on the project's test scenes. See
-[docs/PIPELINE.md](docs/PIPELINE.md) for the full as-built pipeline reference
+[docs/archive/PIPELINE.md](docs/archive/PIPELINE.md) for the full as-built pipeline reference
 and [CHANGELOG.md](CHANGELOG.md) for the empirical journey from 6.37 ΔE
 (darktable) to the in-process Python pipeline.
 
@@ -155,7 +155,7 @@ GPU only *ties* the CPU (the LookTable gather is memory-bandwidth-bound and the
 M1's CPU+GPU share one bus); mlx pulls slightly ahead by keeping everything
 on-device, and scales better in a pool (CPU demosaics while the GPU renders). A
 CPU-pool + GPU-lane *split-frame* scheduler was measured and **rejected**
-(counterproductive). See [docs/PIPELINE.md](docs/PIPELINE.md) §11.
+(counterproductive). See [docs/archive/PIPELINE.md](docs/archive/PIPELINE.md) §11.
 
 For rapid grade/sequence iteration the **preview path is the answer** — and
 because it downsamples *before* the colour math, it shrinks Stage-12 grading
@@ -218,7 +218,7 @@ ProfileToneCurve as Adobe's hue/saturation-preserving `RefBaselineRGBTone`
 The old per-channel tone error fired wherever channels differ (edges and
 saturated colour) and was invisible on neutrals, which is why the flat-pixel
 median was already 0.000 before the fix. See
-[docs/VALIDATION.md](docs/VALIDATION.md).
+[docs/archive/VALIDATION.md](docs/archive/VALIDATION.md).
 
 ## License
 

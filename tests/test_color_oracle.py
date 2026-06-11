@@ -1,7 +1,7 @@
 """Layer 1 — implementation-correctness oracles for the colour/transfer path.
 
 The *certitude engine* of the deterministic validation harness (see
-`docs/VALIDATION.md`). Ground truth here is the pipeline's OWN defined maths,
+`docs/archive/VALIDATION.md`). Ground truth here is the pipeline's OWN defined maths,
 re-implemented independently from published matrices and the sRGB spec — NOT via
 `colour-science` (which `output.py` uses). So a wrong colourspace name, a
 transposed matrix, the wrong chromatic-adaptation transform, or the wrong

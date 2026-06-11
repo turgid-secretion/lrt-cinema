@@ -9,7 +9,7 @@ part of the shipped CLI surface. Run from project root with
 The project's primary colorimetric-divergence diagnostic. Compares a
 TIFF rendered by `lrt-cinema` against an LRT-generated preview JPEG.
 Produces four reports per the methodology in
-[`docs/VALIDATION.md`](../docs/VALIDATION.md):
+[`docs/archive/VALIDATION.md`](../docs/archive/VALIDATION.md):
 
 1. ΔE2000 per-pixel distribution (percentiles + bucket histogram)
 2. Spatial ΔE heatmap (JPG — locates where divergence concentrates)
@@ -22,7 +22,7 @@ Usage:
 python3 tools/diagnose_vs_lrt_preview.py <our.tif> <lrt_preview.jpg> [output_dir]
 ```
 
-Why these four and **not** mean L\*a\*b\* — see `docs/VALIDATION.md`
+Why these four and **not** mean L\*a\*b\* — see `docs/archive/VALIDATION.md`
 "Methodology — comparing two renders of the same scene." Mean is a
 misleading scalar; the four above are the recognized stack for
 two-render comparison on arbitrary scene content.

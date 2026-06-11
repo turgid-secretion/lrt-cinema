@@ -53,7 +53,7 @@ dev = [
 # per-pixel render hotspots (lrt_cinema.accel). NOT required — the renderer
 # falls back to the pure-numpy reference when numba is absent. ~7x full-res
 # single-frame, colour-identical to numpy (max ΔE2000 < 1e-4). See
-# docs/PIPELINE.md §"Compute backends & performance".
+# docs/archive/PIPELINE.md §"Compute backends & performance".
 fast = [
     "numba>=0.59",
 ]

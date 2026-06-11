@@ -64,7 +64,7 @@ so its brightness matches the faithful Adobe target. Two things to know:
 - The **manual LRT acceptance check** — load `LRT_*.tif` into LRTimelapse →
   *Render from Intermediate* → Motion Blur → confirm no colour/gamma shift. The
   only true "in-bounds" proof (LRT has no headless API). See
-  [docs/LRT_ROUNDTRIP.md](../../docs/LRT_ROUNDTRIP.md).
+  [docs/archive/LRT_ROUNDTRIP.md](../../docs/archive/LRT_ROUNDTRIP.md).
 
 ## Latent issue surfaced by this run (not yet fixed)
 **Root cause: a stale in-repo `.npz` fixture, not a code bug.** `parse_dcp` reads

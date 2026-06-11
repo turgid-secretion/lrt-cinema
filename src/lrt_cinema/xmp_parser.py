@@ -523,7 +523,7 @@ def parse_sequence(folder: Path, raw_extensions: tuple[str, ...] = (
         # returns LRT's value directly — no re-interpolation. Our own
         # linear/Catmull-Rom interp fires only for TRUE gaps (frames
         # with no per-frame intent), i.e. when the user skipped Auto
-        # Transition. See docs/VALIDATION.md "LRT interpolation
+        # Transition. See docs/archive/VALIDATION.md "LRT interpolation
         # passthrough model" for the architectural rationale.
         if is_kf or _has_meaningful_ops(ops):
             seq.keyframes.append(Keyframe(

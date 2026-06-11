@@ -14,7 +14,7 @@ Project's primary colorimetric-divergence diagnostic for the
    where in tonal/chromatic range the divergence lives (shadows vs
    midtones vs highlights, red/green/blue cast bias).
 
-Why these four and NOT mean L*a*b*: see docs/VALIDATION.md
+Why these four and NOT mean L*a*b*: see docs/archive/VALIDATION.md
 "Methodology — comparing two renders of the same scene." Mean
 collapses all spatial info into one scalar, dragged by outliers,
 and conflates uniform shifts with localized defects.
@@ -36,7 +36,7 @@ Read this with the affine-fit decomposition in mind: the *post-affine residual*
 is the structural gap to optimise; a large per-channel gain is a benign global
 grade/exposure offset. The raw gap also carries an irreducible floor — LR's
 closed-source PV5 look in the preview + 8-bit JPEG noise — that is the
-reference's, not ours. See docs/VALIDATION.md.
+reference's, not ours. See docs/archive/VALIDATION.md.
 
 Dependencies: numpy, tifffile, Pillow, colour-science, scipy.
 """

@@ -767,7 +767,7 @@ def apply_adobe_pipeline(
     `docs/research/v07-spec-revision-plan.md` §3 for the rationale.
 
     3 and 4 (v0.8) are the **colorimetric tap** — the absolute-accuracy /
-    preview measurement point per docs/VALIDATION.md §"Validation axes".
+    preview measurement point per docs/archive/VALIDATION.md §"Validation axes".
     3 returns XYZ(D50) and 4 returns linear ProPhoto(D50), both taken
     immediately post-ForwardMatrix and BEFORE HueSatMap / ExposureRamp /
     LookTable / ProfileToneCurve shape the pixels. Measuring absolute ΔE
@@ -837,7 +837,7 @@ def apply_adobe_pipeline(
     # Colorimetric tap (Stage 3): XYZ(D50) immediately post-ForwardMatrix —
     # the absolute-accuracy / preview measurement point, BEFORE any HSM /
     # ExposureRamp / LookTable / ProfileToneCurve shaping. See docstring +
-    # docs/VALIDATION.md §"Validation axes".
+    # docs/archive/VALIDATION.md §"Validation axes".
     if stop_after_stage == 3:
         return xyz
 
@@ -1001,7 +1001,7 @@ def render_frame(
     caller (incl. the gym/rose ΔE ship gate, whose gym frame is itself clipped)
     stays byte-identical; the CLI/preset layer turns it on for production. In
     clipped regions this intentionally diverges from `dng_validate` (which clips,
-    not reconstructs) — docs/DECISIONS.md §"Highlight recovery".
+    not reconstructs) — docs/archive/DECISIONS.md §"Highlight recovery".
     """
     if preview_scale not in _PREVIEW_SCALES:
         raise ValueError(

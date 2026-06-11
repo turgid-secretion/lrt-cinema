@@ -21,7 +21,7 @@ them**:
   math.
 
 So no open tool can check HSL/Color-Grade *fidelity*. The only Adobe truth is
-**Adobe Camera Raw / Lightroom itself** (consistent with `docs/VALIDATION.md`
+**Adobe Camera Raw / Lightroom itself** (consistent with `docs/archive/VALIDATION.md`
 §(a)). That splits the work into two tiers.
 
 ## Tier 0 — structural sanity (free, in CI)

@@ -6,7 +6,7 @@ colorimetric accuracy of `lrt-cinema`'s `cinema-linear` preset against
 published X-Rite ColorChecker Classic reference values under D55.
 
 Methodology and the why-of-each-piece live in
-[docs/VALIDATION.md](../../../docs/VALIDATION.md). This file is the
+[docs/archive/VALIDATION.md](../../../docs/archive/VALIDATION.md). This file is the
 operational drop-in instructions.
 
 ## What ships here today

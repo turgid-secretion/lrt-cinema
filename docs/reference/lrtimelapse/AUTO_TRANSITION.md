@@ -7,7 +7,7 @@
 > a brief description from the LRTimelapse 7.4.1 release notes
 > ("Auto Transition with 2 Keyframes functionality corrected"), and
 > this project's own empirical pre-vs-post-Auto-Transition render
-> comparison (commit `bf89107`, `docs/VALIDATION.md` §
+> comparison (commit `bf89107`, `docs/archive/VALIDATION.md` §
 > "Empirical comparison"). LRT's spline algorithm is *not* documented
 > by Wegner in any forum or tutorial we found.
 
@@ -67,7 +67,7 @@ to later keyframes"* — consistent with spline-shaped interpolation
 rather than piecewise-linear, but not a formal algorithm name.
 
 `OBSERVED 2026-05-22` (this project, commit `bf89107` /
-`docs/VALIDATION.md` Empirical comparison):
+`docs/archive/VALIDATION.md` Empirical comparison):
 
 > "Test sequence: 5033-frame Nikon D750 timelapse, 6 LRT keyframes set
 > at intervals of ~1006 frames. Two EV changes (0.0 → −0.5 → −1.0 →

@@ -112,33 +112,42 @@ darktable is the strongest single corroboration of the ISP canon: WB *and*
 highlight reconstruction pre-demosaic; exposure a scene-referred gain far
 upstream of tone; creative color between colorin and tone.
 
-### RawTherapee — `rtengine/rawimagesource.cc` **[SRC-fetch 2026-06-10]**
+### RawTherapee — `rtengine/rawimagesource.cc` **[SRC 2026-06-11, local]**
 
-Single-pass web fetch of the dev-branch source (verify with a local read
-before load-bearing use — the multiplier nuance below especially):
+Local clone read (`~/src-reading/rawtherapee`), upgrading the 2026-06-10
+web fetch:
 
 ```
   preprocess():
   1. dark frame / flat field      (copyOriginalPixels)
-  2. black level + scaling        (scaleColors)
+  2. black level + scaling        (scaleColors, rawimagesource.cc:2761)
   3. bad pixel interpolation
   4. raw CHROMATIC ABERRATION     ← CA_correct_RT, PRE-demosaic,
      correction                     on the mosaic
   5. green equilibration / line denoise / vignetting
   demosaic():
-  6. demosaic (AMaZE/RCD/VNG4/…)
+  6. demosaic (AMaZE/RCD/VNG4/…)  ← input: camera-WB-balanced rawData
   getImage():
-  7. develop-WB multipliers (rm/gm/bm via calculate_scale_mul)
+  7. develop-WB DELTA multipliers (new_scale_mul/scale_mul, :797)
   8. highlight recovery           ← HLRecovery_inpaint / _opposed,
-                                    POST-demosaic
+                                    POST-demosaic (hilite_recon.cc)
+  9. false-colour suppression     ← processFalseColorCorrection
+       (ccSteps>0, :2982): per step, 9-median over 3×3 on YIQ's I/Q
+       (Y untouched) + 3×3 box blur of I/Q; POST-demosaic
 ```
 
-**Open nuance [PEND]:** which multiplier set is baked into `rawData` at
-demosaic time (camera pre-mul in `scaleColors` vs none) — i.e. whether RT
-demosaics camera-balanced or fully-unbalanced data — needs the local
-source pass. The owner's experiment (no cyan at the cool develop WB with
-RCD; pp3 at `production/rt-experiment/`) [EMP] says RT's demosaic input is
-at least approximately balanced, consistent with the canon either way.
+**Nuance RESOLVED [SRC 2026-06-11]:** `scaleColors` bakes black subtract +
+`scale_mul[c] = (pre_mul[c]/maxpremul) · 65535/(c_white[c]−c_black[c])`
+(`calculate_scale_mul`, rawimagesource.cc:628) into `rawData` — `pre_mul`
+is the **camera/auto WB**, max-normalised. So RT demosaics
+**camera-AsShot-balanced** data; `getImage` applies only the develop-WB
+*delta* (`rm = new_scale_mul/scale_mul`, then ×develop multipliers via
+`wbMul2Camera`, :885) post-demosaic. RT therefore SPLITS WB across the
+demosaic; darktable and dcraw apply the full selected WB pre-demosaic.
+Consistent with the owner's no-cyan RT experiment [EMP]: the demosaic
+input is balanced (camera WB ≈ develop WB within the ratio directional
+algos care about). Clip levels: `clmax[c] = (c_white−c_black)·scale_mul`
+computed at scaleColors; `hlmax = clmax·(develop delta)` in getImage.
 
 ### Adobe (DNG SDK / Lightroom) **[SRC: DNG 1.7.1 spec + our port; EMP]**
 
@@ -222,7 +231,7 @@ ops. The audit is per-op, because the correct placement differs per op:
 | Highlight reconstruction (5) | canon SPLITS: darktable PRE-demosaic (mosaic), dcraw & RawTherapee POST-demosaic, Adobe reconstructs in-render | **BLOCKED on this lock** (owner). Our Tier-1 post-demosaic placement is RT/dcraw-consistent; but it is ~no-op on the residual clip-edge fringes (F vs G arms: 199 px > 2/255, max 4) — whatever fixes those is NOT the current Tier-1 |
 | Raw CA correction (absent) | LR: available but **ZERO/off in this production sequence** (census [EMP]). RT: `CA_correct_RT` PRE-demosaic [SRC-fetch] | **CLOSED for the observed fringes** — forensics refuted lens CA (bilinear arm kills the saturation; true CA would survive it). A real CA op stays optional future work, pre-demosaic per RT |
 | Partial-clip hue handling (mechanism A) | Adobe reconstructs partial clips in-render [EMP: gym census + fringe cluster 0] | **CONFIRMED defect class [EMP]** — clip-neutralization driven by a 2-dilated MOSAIC clip mask reproduces LR's cleanliness (fringe-sat 0.408→0.179 ≈ D 0.167). Tier-1's post-demosaic 0.99 threshold structurally misses interpolation-smeared partial clips → the production fix needs the mask from the mosaic. Slot 5 of the TARGET draft; implement post-lock |
-| False-colour suppression at/after demosaic (mechanism B) | canon: dcraw `-m` (median passes), libraw FBDD, RT false-colour-suppression steps, ACR bakes it into its demosaic | **CONFIRMED gap [EMP]** — directional algos (menon ≈ rcd) CREATE saturated fringe at steep edges that bilinear doesn't (0.498 vs 0.231; D between at 0.308); our quick 3×3 chroma-median ×2 probe was insufficient (0.546) — the canon's actual schemes (iteration counts, spaces) need the source read. New TARGET slot between demosaic and highlight handling; implement post-lock |
+| False-colour suppression at/after demosaic (mechanism B) | canon schemes now read [SRC 2026-06-11]: **dt** `color_smoothing` (demosaicing/basics.c:91): per pass, for R and B, 9-median of (chan−G) over 3×3 then chan = max(0, med+G), 1–5 passes; **dcraw/libraw** `median_filter` (postprocessing_aux.cpp:246): identical class — 3×3 9-median on R−G and B−G, `med_passes` iterations, post-demosaic pre-highlight-blend; **RT** `processFalseColorCorrection` (rawimagesource.cc:2982): per step, 9-median on YIQ I/Q + 3×3 box blur, Y untouched; **libraw FBDD** (dcb_demosaic.cpp:814): PRE-demosaic — green spline + impulse clamp + 2×LCh cross-pattern chroma outlier smoothing (ratio<0.85 test) | **CONFIRMED gap [EMP]; scheme canon CONVERGES** — three engines do post-demosaic 3×3 chroma-difference median (keep G/Y, median the chroma signal, N passes). Our insufficient probe medianed the wrong representation. TARGET slot 6; implement post-lock |
 
 ## Adjudicated divergences (the ledger)
 
@@ -291,8 +300,16 @@ placement would be pre-demosaic per RT/dt.
 **Slot 3 — white balance, applied ONCE, before demosaic.** VERDICT:
 JUSTIFIED (position); **current IMPLEMENTATION carries a declared wart.**
 References: unanimous canon — dcraw `scale_colors` → interpolate [SRC],
-darktable temperature@3 → demosaic@8 [SRC], RT scales before demosaic
-[EMP: owner experiment], ISP literature [LIT]. Evidence: H1 single-variable
+darktable temperature@3 → demosaic@8 [SRC], RT scaleColors bakes
+camera-WB into rawData pre-demosaic with the develop DELTA post-demosaic
+[SRC 2026-06-11 local — nuance resolved, see the RT flowchart]. RT is
+thus the one engine that SPLITS WB; we follow dt/dcraw (full render WB
+once, pre-demosaic) — justified by H1: our pre-scale uses the exact
+render WB, so directional algos see exactly-balanced channels, whereas
+a split leaves the develop-vs-camera ratio unbalanced at demosaic time
+— precisely the regime our clipbars_coolwb article measures (3.38 vs
+1.16 residual when the conditioning WB ≠ render WB) [EMP].
+ISP literature [LIT]. Evidence: H1 single-variable
 A/B (cyan P99.5 188→87, two independent demosaics; shipped arm ≡ target
 arm) [EMP]. **The wart (owner-flagged):** today we scale the mosaic,
 demosaic, DIVIDE BACK, and re-multiply at Stage 2 — WB on both sides of
@@ -315,8 +332,10 @@ clipbars [EMP]; owner eyes: menon ≫ bilinear [EMP]. Open: diagbars 34.2
 vs LR-product 13.6 — the algorithm (or a complementary suppression
 stage, slot 6) has a product-anchored 2.5× gap. Plan: post-lock
 iteration against diagbars; candidates: RCD parameter work, AMaZE-class
-port (clean-room), or accepting menon + slot-6 suppression. Default-flip
-decision (linear→menon) is owner's, post-lock.
+port (clean-room), or accepting menon + slot-6 suppression (RT rcd.cc /
+amaze.cc now locally readable at ~/src-reading for learn-not-vendor
+study [SRC 2026-06-11]). Default-flip decision (linear→menon) is
+owner's, post-lock.
 
 **Slot 5 — highlight handling.** Two distinct sub-questions:
 - **5a, the fallback (no reconstruction): clip-to-common-white at the
@@ -327,30 +346,59 @@ decision (linear→menon) is owner's, post-lock.
   inheritance; real-frame forensics confirm mechanism-A clusters gone
   [EMP]. The documented cost: >1-multiplier channels lose top highlight
   detail to the clamp (dcraw's own trade) — recovered only by 5b.
-- **5b, reconstruction placement: UNRESOLVED — the canon splits.**
-  darktable: pre-demosaic on the mosaic [SRC]; RT (`HLRecovery_*`) and
-  dcraw (`recover/blend_highlights`): post-demosaic [SRC]; LR: in-render,
-  and its smooth-clip result (clipramp clip-zone 1.07) is the best
-  measured [EMP]. Our current Tier-1 (post-demosaic, 0.99 threshold) is
-  measurably blind to interpolation-smeared partial clips [EMP: fringe
-  forensics; G≈F]. DECIDING EXPERIMENT (post-lock, autonomous): prototype
-  BOTH placements — (i) mosaic-domain reconstruction before demosaic
-  (dt-style), (ii) post-demosaic reconstruction driven by a MOSAIC-derived
-  clip mask — score on clipramp/clipfield/clipbars against the LR anchor
-  (targets ≈1.07 / ≈0.01 / ≤1.12) + owner eyeball on real blown windows.
-  Until decided, 5a is the shipped behaviour (the owner's "clean pipeline
-  either way" rationale).
+- **5b, reconstruction placement: UNRESOLVED — the canon splits, and the
+  local source pass sharpened the split [SRC 2026-06-11]:** darktable's
+  DEFAULT mode is `opposed` (enum 5, magic 0.995), PRE-demosaic on the
+  WB'd mosaic (iop/hlreconstruct/opposed.c); RawTherapee's current
+  "Inpaint opposed" is the **same darktable algorithm vendored verbatim**
+  (hilite_recon.cc:1232, "taken from darktable") but run POST-demosaic
+  on the RGB planes. One algorithm, two engine-shipped placements — the
+  deciding experiment can therefore isolate PLACEMENT with the algorithm
+  held constant. The algorithm [SRC, both engines]: per-pixel opposed
+  estimate = 3×3 neighbourhood per-channel means → cube-root → for
+  channel c, refavg = 0.5·(sum of other two channels' cube-root means) →
+  cube back to linear; global per-channel chrominance offset = mean of
+  (value − refavg) over unclipped near-clip pixels (0.2·clip < v < clip,
+  inside a dilated 3×3-superpixel clip mask; min 100 samples);
+  reconstruction: out = max(in, refavg + chrominance[c]) at clipped
+  sites only. dt's higher-end modes (guided-laplacian, segmentation)
+  are rated best-quality in dt's own code but are iterative multi-scale
+  machines — scoped OUT of this round (cost ≫ opposed; the production
+  failure modes the anchors measure are smooth/large-area clips where
+  opposed is the engines' chosen default). dcraw `recover_highlights`
+  (post-demosaic coarse ratio-map growth) and legacy RT
+  `HLRecovery_inpaint` (multi-scale directional fill) read and recorded;
+  neither is any engine's current default. LR: in-render, best measured
+  smooth-clip (clipramp clip-zone 1.07) [EMP]. Our Tier-1 (post-demosaic,
+  0.99 threshold) is measurably blind to interpolation-smeared partial
+  clips [EMP: fringe forensics; G≈F]. DECIDING EXPERIMENT (post-lock,
+  autonomous; owner addendum "best-known current methods both sides" =
+  opposed, per above): (i) opposed PRE-demosaic on the WB-scaled mosaic
+  (dt placement), (ii) opposed POST-demosaic driven by the MOSAIC-derived
+  clip mask (RT placement + our mechanism-A mask lesson) — score on
+  clipramp/clipfield/clipbars against the LR anchor (targets ≈1.07 /
+  ≈0.01 / ≤1.12) + owner eyeball on real blown windows. Until decided,
+  5a is the shipped behaviour (the owner's "clean pipeline either way"
+  rationale).
 
 **Slot 6 — false-colour suppression (after demosaic, before colour
-transform). NEW SLOT. VERDICT: NEEDED, scheme UNKNOWN.** References:
-canon-supported everywhere — dcraw `-m` median passes, libraw FBDD, RT
-false-colour-suppression steps [SRC-fetch, scheme details pending local
-read], ACR internal (inferred: zoneplate 0.02 vs our 0.41 — near-total
-suppression) [EMP]. Evidence for need: zoneplate/noisebars/diagbars gaps
-are all chroma-dominated [EMP]; our naive 3×3 chroma-median probe was
-insufficient (fringe forensics) [EMP]. Plan: read RT/dt suppression
-sources (learn, never vendor), implement clean-room, iterate against
-zoneplate (→≈0.02), noisebars (→≈4), diagbars (contribution TBD).
+transform). NEW SLOT. VERDICT: NEEDED; scheme canon READ and CONVERGENT
+[SRC 2026-06-11].** Three engines converge on the same post-demosaic
+scheme — preserve the luma-bearing signal, median the chroma signal,
+iterate: **dt** `color_smoothing`: for c∈{R,B}, 3×3 9-median of (c−G),
+c = max(0, med+G), 1–5 passes (demosaicing/basics.c:91); **dcraw/libraw**
+`median_filter`: identical (R−G, B−G, 3×3, `med_passes`)
+(postprocessing_aux.cpp:246); **RT** `processFalseColorCorrection`:
+9-median on YIQ I/Q + 3×3 box blur per step, Y untouched
+(rawimagesource.cc:2982). libraw FBDD is the pre-demosaic outlier
+(LCh impulse/chroma clamp coupled to DCB helpers) — not chosen.
+ACR internal (inferred: zoneplate 0.02 vs our 0.41) [EMP]. Evidence for
+need: zoneplate/noisebars/diagbars gaps are all chroma-dominated [EMP];
+our earlier probe medianed the wrong representation (fringe forensics)
+[EMP]. Plan: clean-room chroma-difference median (dt/dcraw class, the
+2-of-3 majority + simplest), iterate passes/variants against zoneplate
+(→≈0.02), noisebars (→≈4), diagbars (contribution TBD); guard
+slantededge ≈0.004 and bars ≤ LR-product 2.03.
 
 **Slot 7 — scene-referred exposure block (linear camera RGB, before the
 colour transform).** Sub-slots:
@@ -430,17 +478,19 @@ bilinear; libraw's own pipeline) compared on truth-anchored INVARIANTS
 `clipbars` article reproduces the production blinds failure in one number —
 front-end changes iterate against these before any owner eyeball.
 
-## Next session (the architecture lock, in order)
+## Post-lock queue (state 2026-06-11, this session)
 
-1. LOCAL RawTherapee + LibRaw source pass → upgrade the [SRC-fetch] and
-   [EMP] tags to [SRC]; resolve the RT rawData-multiplier nuance.
-2. The global-`Exposure2012` domain probe — **files prepared**
-   (`CALEXP{100,200}_4053`), needs the owner's two LR exports, then the
-   existing harness.
-3. Resolve the ? slots above; owner signs the TARGET; migration plan for
-   the ⚠ region.
-4. Only then: re-enable/raise anything gated on architecture (highlight
-   recovery default, EXR tap policy, demosaic default — owner verdict on
-   menon vs bilinear is already in: menon, post-lock).
-5. Stale-prose archive audit of the four bannered docs (owner-sanctioned)
-   to reclaim context budget.
+1. ~~LOCAL RT + LibRaw + darktable source pass~~ **DONE 2026-06-11** —
+   RT multiplier nuance resolved; opposed/suppression algorithms
+   extracted; tags upgraded above.
+2. ~~Global-`Exposure2012` domain probe~~ **DONE 2026-06-11** (slot 7).
+3. ~~Stale-prose archive audit~~ **DONE 2026-06-11** — the four bannered
+   docs are in `docs/archive/`; live-docs budget ratcheted to 110 KB.
+4. Slot-3 WB-once migration (owner-accepted plan) — this session.
+5. Slot-5b deciding experiment, both placements — this session;
+   owner verdict batch on real blown windows.
+6. Slot-6 suppression implementation + slot-4 diagbars remainder —
+   this session; off-by-default until owner eyeball.
+7. Owner-gated (do NOT do autonomously): demosaic default flip
+   (menon verdict is in), reconstruction/suppression default-on,
+   EXR/Resolve gate, Adobe-npz purge.

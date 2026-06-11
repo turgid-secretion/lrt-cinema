@@ -2,7 +2,7 @@
 
 Render path is the in-process Python Adobe DNG 1.7.1 pipeline
 (`lrt_cinema.pipeline`); the dt-cli subprocess machinery is gone. See
-`docs/PIPELINE.md` for the as-built engine reference.
+`docs/archive/PIPELINE.md` for the as-built engine reference.
 
 Flag surface:
   required:  --input  --output
@@ -254,7 +254,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "ProfileToneCurve clamps highlights to white and recovery is a no-op "
             "for non-trivial cost. Force with --highlight-recovery / "
             "--no-highlight-recovery (the latter also re-enables the MLX GPU "
-            "fast path). See docs/DECISIONS.md §'Highlight recovery'."
+            "fast path). See docs/archive/DECISIONS.md §'Highlight recovery'."
         ),
     )
     render.add_argument(
@@ -307,7 +307,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "NEVER applied to the perceptual master (it defers detail to the grade). "
             "A §9/§11 'deliberately exceed dng_validate' enhancement (no Lightroom-"
             "fidelity claim); validate vs the LRT-JPG north-star before relying on it. "
-            "See docs/DECISIONS.md §5 amendment."
+            "See docs/archive/DECISIONS.md §5 amendment."
         ),
     )
 

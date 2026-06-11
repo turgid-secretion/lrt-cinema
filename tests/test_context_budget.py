@@ -47,7 +47,14 @@ _CLAUDE_MD_CAP = 10_240
 # ("we should be able to justify every choice"): per-slot references,
 # evidence, verdicts, deciding experiments, governing strategy. The
 # archive audit remains queued to claw bytes back.
-_LIVE_DOCS_BUDGET = 220_190 + 4_096 + 8_192 + 8_192 + 12_288
+# 2026-06-11 (post-lock session): the queued stale-docs archive audit RAN —
+# the four bannered first-sprint docs (PIPELINE/DECISIONS/VALIDATION/
+# LRT_ROUNDTRIP, ~152 KB) moved to docs/archive/ per the owner's standing
+# instruction ("truly stale prose should still be removed or archived";
+# post-lock handoff step A). Live docs measured 93,781 bytes after the move;
+# budget RATCHETED DOWN to 110 KB — ~16 KB working room for the evidence-
+# based ledger/canon growth, 56% below the original freeze.
+_LIVE_DOCS_BUDGET = 112_640
 
 # Rule 3 — files that existed at the freeze (grandfathered; everything else
 # under live docs/ must carry an "Owner-approved:" line).
