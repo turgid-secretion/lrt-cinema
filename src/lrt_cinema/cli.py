@@ -290,25 +290,31 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     render.add_argument(
-        "--demosaic", dest="demosaic", default="menon",
+        "--demosaic", dest="demosaic", default="amaze",
         choices=("linear", "menon", "amaze", "rcd", "mlri", "dcb", "ahd", "dht", "vng", "ppg", "aahd"),
         help=(
-            "Demosaic algorithm (default: menon — owner-approved flip 2026-06-12, "
-            "native-res eyeball verdict 'menon looks much better than bilinear'; "
-            "render_frame's own default stays 'linear' so the dng_validate gate and "
-            "library callers are unmoved). 'linear' = libraw bilinear, the "
-            "byte-exact match to the dng_validate regression tripwire (LOW quality). "
-            "'menon' = colour_demosaicing Menon2007/DDFAPD (BSD-3) — the "
-            "quality/delivery demosaic: measured-best on the demosaic battery (CPSNR + "
-            "lowest false-colour, ties on resolution; needs `pip install .[demosaic]`). "
-            "'rcd' = our clean-room RCD-family (numba-fast, headroom-preserving, "
-            "white-box) — sharp (ties Menon on MTF) but more chroma-aliasing; the fast/"
-            "preview path. 'mlri' = clean-room MLRI (measured ≈ rcd; experiment). "
-            "'dcb'/'ahd'/'dht' = libraw alternatives. Any non-'linear' choice changes "
-            "output → validate vs the gym/rose gate + LRT-JPG before relying on it "
-            "(also forces the CPU path off MLX; menon/rcd/mlri preserve highlight "
-            "headroom for the master). Falls back to 'linear' if the choice is "
-            "unavailable. Ignored under --preview-scale>1. See "
+            "Demosaic algorithm (default: amaze — decision 2026-07-06 under the "
+            "owner-authorized criteria: best-or-tied on every pressure article "
+            "(diagbars falsecolor 34→15.6, clipbars 1.12→0.006 vs menon), gym "
+            "closer to Adobe, spot ΔE vs the LRT product ≤ menon's on every "
+            "frame, AND faster (numba twin, bit-exact vs the numpy spec, "
+            "0.33 s/24 MP; evidence seq_spot_amaze_2026-07-06 + "
+            "amaze_numba_2026-07-06). render_frame's own default stays 'linear' "
+            "so the dng_validate gate and library callers are unmoved. "
+            "'linear' = libraw bilinear, the byte-exact match to the "
+            "dng_validate regression tripwire (LOW quality). "
+            "'menon' = colour_demosaicing Menon2007/DDFAPD (BSD-3; the "
+            "2026-06-12→07-06 default; needs `pip install .[demosaic]`). "
+            "'rcd' = our clean-room RCD-family (numba-fast, headroom-preserving) "
+            "— sharp but more chroma-aliasing; the fast/preview path. "
+            "'mlri' = clean-room MLRI (measured ≈ rcd; experiment). "
+            "'dcb'/'ahd'/'dht' = libraw alternatives. Any non-'linear' choice "
+            "changes output → validate vs the gym/rose gate + LRT-JPG before "
+            "relying on it (also forces the CPU path off MLX; menon/rcd/mlri "
+            "preserve highlight headroom for the master — amaze is display/clip-"
+            "path only and falls back to menon on headroom targets, warned). "
+            "Falls back to 'linear' if the choice is unavailable. Ignored under "
+            "--preview-scale>1. See "
             "docs/research/{pipeline-overhaul-plan,demosaic-test-fixtures}.md."
         ),
     )

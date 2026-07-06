@@ -363,8 +363,16 @@ demosaic method touches it; ACR's mechanism remains out of scope).
 Gym sanity: amaze 0.433 vs menon 0.509 against dng_validate (closer to
 Adobe on the real frame). `--demosaic amaze` = display/clip-path only
 (single uniform clip point assumed; headroom master keeps menon).
-Owner-gated next: numba twin (~0.66 s/MP numpy today), then the
-amaze-default decision.
+**CLOSED 2026-07-06 [EMP]: amaze = the CLI demosaic DEFAULT.** Numba
+twin landed BIT-EXACT vs the numpy spec (max|Δ|=0 full-frame incl.
+borders) at 0.33 s/24 MP — 52.6× the numpy twin, meeting the owner's
+1/50th directive (`amaze_numba_2026-07-06.json`). Default decision ran
+owner-authorized pre-registered criteria (`seq_spot_amaze_2026-07-06`):
+spot ΔE vs the LRT product ≤ menon on every frame (0.582/0.567/0.579
+vs 0.586/0.572/0.584), gains identical, render 16.5 vs 25.0 s/frame —
+amaze wins every criterion. Native-res flips for owner verification:
+`~/lrt-cinema-fixtures/verify-2026-07-06/amaze-flip/`. render_frame
+keeps 'linear' (gym gate byte-stable).
 
 **Slot 5 — highlight handling.** Two distinct sub-questions:
 - **5a, the fallback (no reconstruction): clip-to-common-white at the

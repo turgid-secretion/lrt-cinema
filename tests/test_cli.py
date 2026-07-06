@@ -274,13 +274,14 @@ def test_master_look_dry_run_default_and_override(tmp_path, capsys):
 
 
 def test_demosaic_flag_dry_run(tmp_path, capsys):
-    """--demosaic threads to the job; CLI default 'menon' (owner-approved
-    2026-06-12; render_frame keeps 'linear' as the byte-exact library
-    default), dcb opt-in."""
+    """--demosaic threads to the job; CLI default 'amaze' (2026-07-06
+    decision under owner-authorized criteria — evidence
+    seq_spot_amaze_2026-07-06; render_frame keeps 'linear' as the
+    byte-exact library default), dcb opt-in."""
     src = _seq_input(tmp_path)
     out = tmp_path / "out"
     main(["render", "--input", str(src), "--output", str(out), "--dry-run", "--quiet"])
-    assert "demosaic=menon" in capsys.readouterr().err
+    assert "demosaic=amaze" in capsys.readouterr().err
     main(["render", "--input", str(src), "--output", str(out),
           "--demosaic", "dcb", "--dry-run", "--quiet"])
     assert "demosaic=dcb" in capsys.readouterr().err
