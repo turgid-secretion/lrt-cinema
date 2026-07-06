@@ -37,6 +37,48 @@ import numpy as np
 # use 1–3). Guard rail only — callers pass an explicit count.
 MAX_PASSES = 5
 
+try:
+    from numba import njit, prange
+    _NUMBA = True
+except Exception:  # pragma: no cover - exercised only without numba
+    _NUMBA = False
+
+
+if _NUMBA:
+    @njit(cache=True, parallel=True)
+    def _median3x3_nearest(src, dst, h, w):
+        """3×3 median with edge-replicate (scipy mode='nearest') — BIT-EXACT
+        vs scipy.ndimage.median_filter(size=3): a median is value selection,
+        no arithmetic, so any correct algorithm returns identical bytes.
+        The scipy call was 8.6 s/frame at 24 MP (single-threaded rank
+        filter) — the top production-profile cost after the AMaZE twin."""
+        for y in prange(h):
+            win = np.empty(9, np.float32)
+            ym = y - 1 if y > 0 else 0
+            yp_ = y + 1 if y < h - 1 else h - 1
+            for x in range(w):
+                xm = x - 1 if x > 0 else 0
+                xp = x + 1 if x < w - 1 else w - 1
+                win[0] = src[ym, xm]
+                win[1] = src[ym, x]
+                win[2] = src[ym, xp]
+                win[3] = src[y, xm]
+                win[4] = src[y, x]
+                win[5] = src[y, xp]
+                win[6] = src[yp_, xm]
+                win[7] = src[yp_, x]
+                win[8] = src[yp_, xp]
+                # insertion sort, take the middle — value selection only,
+                # so bytes match any correct median implementation
+                for i in range(1, 9):
+                    v = win[i]
+                    j = i - 1
+                    while j >= 0 and win[j] > v:
+                        win[j + 1] = win[j]
+                        j -= 1
+                    win[j + 1] = v
+                dst[y, x] = win[4]
+
 
 def suppress_false_colour(rgb: np.ndarray, passes: int = 2,
                           blur: bool = False) -> np.ndarray:
@@ -64,10 +106,17 @@ def suppress_false_colour(rgb: np.ndarray, passes: int = 2,
     from scipy.ndimage import median_filter, uniform_filter
 
     out = rgb.astype(np.float32, copy=True)
+    h, w = out.shape[:2]
+    med_dst = np.empty((h, w), np.float32) if _NUMBA else None
     for _ in range(passes):
         g = out[..., 1]
         for c in (0, 2):
-            diff = median_filter(out[..., c] - g, size=3, mode="nearest")
+            if _NUMBA:
+                _median3x3_nearest(
+                    np.ascontiguousarray(out[..., c] - g), med_dst, h, w)
+                diff = med_dst
+            else:
+                diff = median_filter(out[..., c] - g, size=3, mode="nearest")
             if blur:
                 diff = uniform_filter(diff, size=3, mode="nearest")
             out[..., c] = np.maximum(diff + g, 0.0)
