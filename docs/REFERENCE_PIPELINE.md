@@ -455,6 +455,16 @@ keeps 'linear' (gym gate byte-stable).
   ACR's own coupling of recovery to negative-exposure pulls. The 5a
   clip default is OPTIMAL for the current production; neutral recovery
   activates with EXR masters or exposure-pulled sequences.**
+  **Survey #2 EXECUTED 2026-07-06 (`_segbased_reconstruct`, dt's
+  segmentation class, clean-room): best LINEAR recovery on file —
+  truth rel_mae 0.186 → 0.0903 (candidates) → 0.0749 (+adapt
+  rebuild), beats opposed's 0.111 — but its opposed BASE inherits
+  the detail-scale invented-chroma class (clipbars falsecolor 17.16
+  ≈ opposed's 17.2; S2 refuted), so the 5a display default STANDS.
+  The designated recovery arm for EXR masters/exposure-pulled
+  renders; owner flips incl. a −1 EV pull set at
+  `verify-2026-07-06/segbased-flip/`; evidence
+  `hl_segbased_2026-07-06.json`.**
   Follow-up shipped same day (owner request): the held-out-truth
   harness (`tools/hl_truth_harness.py`) makes any future reconstruction
   parameter deterministically judgeable — band-clipped real mosaic +

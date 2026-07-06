@@ -1,0 +1,184 @@
+{
+ "design": "segmentation reconstruction vs clip baseline (menon)",
+ "predictions": "S1 truth rel_mae <= opposed; S2 clipbars fc << 17.2; S3 adapt adds only in all-clipped; S4 owner flips",
+ "articles": {
+  "clipramp": {
+   "clip": {
+    "de_mean": 0.09466263506295608,
+    "de_p95": 0.5099764472917679,
+    "de_max": 1.492686142768629,
+    "dl_mean": 0.015452913006566114,
+    "dc_mean": 0.09500956130917981,
+    "clipzone_dc_mean": 0.21483723880500305,
+    "clipzone_de_mean": 0.223489725499336,
+    "falsecolor_mean": 15.711593460044696,
+    "falsecolor_p99": 32.562564162336066,
+    "clipzone_chroma_mean": 3.0262260303263844,
+    "clipzone_chroma_p99": 7.141944670357767
+   },
+   "segb": {
+    "de_mean": 0.18119309792604446,
+    "de_p95": 1.14385923910946,
+    "de_max": 2.0478235193020855,
+    "dl_mean": 0.034570755787950554,
+    "dc_mean": 0.1814559947243985,
+    "clipzone_dc_mean": 0.7068752779459502,
+    "clipzone_de_mean": 0.7221364305998267,
+    "falsecolor_mean": 15.822553868886784,
+    "falsecolor_p99": 32.562564162336066,
+    "clipzone_chroma_mean": 3.5308634051057335,
+    "clipzone_chroma_p99": 7.141944670357767
+   },
+   "segb_adapt": {
+    "de_mean": 0.18119309792604446,
+    "de_p95": 1.14385923910946,
+    "de_max": 2.0478235193020855,
+    "dl_mean": 0.034570755787950554,
+    "dc_mean": 0.1814559947243985,
+    "clipzone_dc_mean": 0.7068752779459502,
+    "clipzone_de_mean": 0.7221364305998267,
+    "falsecolor_mean": 15.822553868886784,
+    "falsecolor_p99": 32.562564162336066,
+    "clipzone_chroma_mean": 3.5308634051057335,
+    "clipzone_chroma_p99": 7.141944670357767
+   }
+  },
+  "clipramp_deep": {
+   "clip": {
+    "de_mean": 0.4240772641716878,
+    "de_p95": 1.27391913636661,
+    "de_max": 1.27391913636661,
+    "dl_mean": 0.14397477440342088,
+    "dc_mean": 0.33060776026839067,
+    "clipzone_dc_mean": 0.36743616157787207,
+    "clipzone_de_mean": 0.4531667440535565,
+    "falsecolor_mean": 11.955443681450193,
+    "falsecolor_p99": 40.453884022309204,
+    "clipzone_chroma_mean": 1.980560385613331,
+    "clipzone_chroma_p99": 9.198977483442082
+   },
+   "segb": {
+    "de_mean": 0.5494122502094464,
+    "de_p95": 1.3635545592834488,
+    "de_max": 2.0792884738321518,
+    "dl_mean": 0.1644346378188062,
+    "dc_mean": 0.4490625736040782,
+    "clipzone_dc_mean": 0.789756134549376,
+    "clipzone_de_mean": 0.8817562163876318,
+    "falsecolor_mean": 12.099798363574493,
+    "falsecolor_p99": 40.453884022309204,
+    "clipzone_chroma_mean": 2.4081629390743227,
+    "clipzone_chroma_p99": 9.198977483442082
+   },
+   "segb_adapt": {
+    "de_mean": 0.5494122502094464,
+    "de_p95": 1.3635545592834488,
+    "de_max": 2.0792884738321518,
+    "dl_mean": 0.1644346378188062,
+    "dc_mean": 0.4490625736040782,
+    "clipzone_dc_mean": 0.789756134549376,
+    "clipzone_de_mean": 0.8817562163876318,
+    "falsecolor_mean": 12.099798363574493,
+    "falsecolor_p99": 40.453884022309204,
+    "clipzone_chroma_mean": 2.4081629390743227,
+    "clipzone_chroma_p99": 9.198977483442082
+   }
+  },
+  "clipfield": {
+   "clip": {
+    "de_mean": 0.19461350810971864,
+    "de_p95": 1.27391913636661,
+    "de_max": 1.5633695900671418,
+    "dl_mean": 0.07421982554469782,
+    "dc_mean": 0.1350108469905628,
+    "clipzone_dc_mean": 0.692901416450632,
+    "clipzone_de_mean": 1.012062208458754,
+    "falsecolor_mean": 0.03114490884902242,
+    "falsecolor_p99": 0.7422050137513719,
+    "clipzone_chroma_mean": 0.008498487609448557,
+    "clipzone_chroma_p99": 0.008498487609448548
+   },
+   "segb": {
+    "de_mean": 0.19461350810971864,
+    "de_p95": 1.27391913636661,
+    "de_max": 1.5633695900671418,
+    "dl_mean": 0.07421982554469782,
+    "dc_mean": 0.1350108469905628,
+    "clipzone_dc_mean": 0.692901416450632,
+    "clipzone_de_mean": 1.012062208458754,
+    "falsecolor_mean": 0.03114490884902242,
+    "falsecolor_p99": 0.7422050137513719,
+    "clipzone_chroma_mean": 0.008498487609448557,
+    "clipzone_chroma_p99": 0.008498487609448548
+   },
+   "segb_adapt": {
+    "de_mean": 0.19461350810971864,
+    "de_p95": 1.27391913636661,
+    "de_max": 1.5633695900671418,
+    "dl_mean": 0.07421982554469782,
+    "dc_mean": 0.1350108469905628,
+    "clipzone_dc_mean": 0.692901416450632,
+    "clipzone_de_mean": 1.012062208458754,
+    "falsecolor_mean": 0.03114490884902242,
+    "falsecolor_p99": 0.7422050137513719,
+    "clipzone_chroma_mean": 0.008498487609448557,
+    "clipzone_chroma_p99": 0.008498487609448548
+   }
+  },
+  "clipbars": {
+   "clip": {
+    "de_mean": 1.1633889711482248,
+    "de_p95": 1.27391913636661,
+    "de_max": 63.78950180287023,
+    "dl_mean": 0.6360141252005077,
+    "dc_mean": 1.5438576716652197,
+    "clipzone_dc_mean": 1.7724558009827989,
+    "clipzone_de_mean": 1.7301855792837986,
+    "falsecolor_mean": 1.1186262837670244,
+    "falsecolor_p99": 31.359042387999516,
+    "clipzone_chroma_mean": 0.9225178972705961,
+    "clipzone_chroma_p99": 24.372569325504085
+   },
+   "segb": {
+    "de_mean": 6.483569609109134,
+    "de_p95": 32.94193868660745,
+    "de_max": 63.78950180287023,
+    "dl_mean": 2.303279379896591,
+    "dc_mean": 17.417369799382634,
+    "clipzone_dc_mean": 1.6139036378166902,
+    "clipzone_de_mean": 1.495872719630727,
+    "falsecolor_mean": 17.155620380960457,
+    "falsecolor_p99": 132.3388633573587,
+    "clipzone_chroma_mean": 1.0897080675637596,
+    "clipzone_chroma_p99": 24.308353662719654
+   },
+   "segb_adapt": {
+    "de_mean": 6.483569609109134,
+    "de_p95": 32.94193868660745,
+    "de_max": 63.78950180287023,
+    "dl_mean": 2.303279379896591,
+    "dc_mean": 17.417369799382634,
+    "clipzone_dc_mean": 1.6139036378166902,
+    "clipzone_de_mean": 1.495872719630727,
+    "falsecolor_mean": 17.155620380960457,
+    "falsecolor_p99": 132.3388633573587,
+    "clipzone_chroma_mean": 1.0897080675637596,
+    "clipzone_chroma_p99": 24.308353662719654
+   }
+  }
+ },
+ "truth_harness": {
+  "clamp": {
+   "rel_mae": 0.1860014945268631,
+   "bias": -0.1860014945268631
+  },
+  "segb": {
+   "rel_mae": 0.09034261852502823,
+   "bias": -0.0844980925321579
+  },
+  "segb_adapt": {
+   "rel_mae": 0.07490517199039459,
+   "bias": -0.061081986874341965
+  }
+ }
+}

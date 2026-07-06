@@ -83,20 +83,24 @@ def _opposed_from_channel_means(means: list[np.ndarray]) -> list[np.ndarray]:
 
 def reconstruct_mosaic_opposed(
     cfa: np.ndarray, chan: np.ndarray, wb_mul: np.ndarray,
+    clip_magic: float = float(_CLIP_MAGIC),
 ) -> np.ndarray:
     """darktable-placement opposed reconstruction ON the WB-scaled mosaic.
 
     `cfa` (H, W) float32 — the BALANCED (WB-scaled) Bayer mosaic, headroom
     preserved (no common-white clamp). `chan` (H, W) int — CFA channel index
     per site (G2 already folded to 1). `wb_mul` (3,) — the G-normalised
-    multipliers; per-channel clip level is `_CLIP_MAGIC × wb_mul[c]`.
+    multipliers; per-channel clip level is `clip_magic × wb_mul[c]`
+    (default 0.995, dt's opposed magic; the segmentation arm passes its
+    own 0.987 — dt hands the segments clip to its opposed base layer).
     Returns the mosaic with clipped sites reconstructed (float32, ≥ 0);
     unclipped sites byte-identical. Runs BEFORE the demosaic, so the
     interpolator sees plausible (non-plateau) highlight structure.
     """
     from scipy.ndimage import binary_dilation
 
-    clips = (_CLIP_MAGIC * np.asarray(wb_mul, np.float32)).astype(np.float32)
+    clips = (np.float32(clip_magic)
+             * np.asarray(wb_mul, np.float32)).astype(np.float32)
     site_clip = clips[chan]
     clipped = cfa >= site_clip
     if not clipped.any():
