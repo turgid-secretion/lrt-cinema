@@ -67,7 +67,7 @@ DCP = Path(
 DNG_VALIDATE = FIX / "dng_validate"
 EVIDENCE = REPO / f"tests/fixtures/evidence/pressure_{_dt.date.today().isoformat()}.json"
 
-ARMS = ("linear", "rcd", "menon")
+ARMS = ("linear", "rcd", "menon", "amaze")
 NEUTRAL_TRUTH = {"bars", "clipbars", "zoneplate", "diagbars", "noisebars",
                  "clipfield", "shadowwedge", "slantededge"}
 CROP = 384
