@@ -1,0 +1,834 @@
+{
+  "summary": "Research: clip-edge saturation contamination in segmentation HL reconstruction (dt discourse + academic) and photo super-white encoding standards",
+  "agentCount": 9,
+  "logs": [
+    "71 findings collected across 7/7 searchers"
+  ],
+  "result": {
+    "findings": [
+      {
+        "claim": "DEAD END: The pixls.us thread 'highlight recovery teaser' (discuss.pixls.us/t/highlight-recovery-teaser/17670, dated ~April 2020) is NOT about the segmentation-based method — it documents Iain's earlier gradient-continuation highlight recovery prototype ('When all three channels are clipped highlights are rebuilt by continuing the gradient from the surrounding area'). It predates the segmentation approach by ~1.5 years and contains no discussion of edge/CA fringe artifacts. The actual segmentation collaboration between Hanno Schwalm and Iain is documented starting at GitHub PR #10716 (opened ~Dec 2021/Jan 2022, closed Feb 15 2022) and continuing through PR #12960 (merged Nov 22 2022, targeting darktable 4.2).",
+        "source": "https://discuss.pixls.us/t/highlight-recovery-teaser/17670",
+        "who": "Iain (forum poster), thread predates segmentation work",
+        "confidence": "primary-source",
+        "quote": "When all three channels are clipped highlights are rebuilt by continuing the gradient from the surronding area.",
+        "angle": "pixls-segmentation"
+      },
+      {
+        "claim": "The segmentation-based highlight reconstruction method (GitHub PR #10716) was explicitly a collaboration between Hanno Schwalm (jenshannoschwalm) of darktable and Iain from the G'MIC team, with the concept originating from a presentation Iain gave at pixls.us. No corroborating evidence was found for a contributor named 'garagecoder' being involved in this specific algorithm — this appears to be unconfirmed/possibly conflated.",
+        "source": "https://github.com/darktable-org/darktable/pull/10716",
+        "who": "jenshannoschwalm (Hanno Schwalm), PR author/description",
+        "confidence": "primary-source",
+        "quote": "This PR introduces a new highlight reconstruction method for Bayer sensors developed collaboratively by Hanno Schwalm (jenshannoschwalm) from Darktable and Iain from the G'MIC team. The concept originated from Iain's presentation at pixls.us.",
+        "angle": "pixls-segmentation"
+      },
+      {
+        "claim": "In GitHub issue #12399 ('strange handling of bounded areas with segmentation based highlights correction'), a user (MStraeten) reported that clipped areas clearly bounded by non-clipped regions were excluded from correction at default settings, producing visible artifacts at the boundary; raising the 'combine' parameter from the default of 2 to 6 fixed the reported case.",
+        "source": "https://github.com/darktable-org/darktable/issues/12399",
+        "who": "MStraeten (reporter), issue assigned to jenshannoschwalm",
+        "confidence": "primary-source",
+        "quote": "Default Setting (combine = 2): Properly bounded clipped areas are excluded from processing, resulting in undesired output. Workaround: Manually adjusting the 'combine' parameter to 6 produces the expected result.",
+        "angle": "pixls-segmentation"
+      },
+      {
+        "claim": "In PR #12960, Hanno Schwalm explains that some cameras (e.g. Canon EOS 7D) produce a form of chroma noise around the clipping value, which causes the segmentation algorithm to generate an excessively large number of tiny segments (oversegmentation), straining memory. The fix applied a minimum morphological dilation of 1 pixel universally to control this, plus ensured valid border data for output in morphological operations.",
+        "source": "https://github.com/darktable-org/darktable/pull/12960",
+        "who": "jenshannoschwalm (Hanno Schwalm), PR description",
+        "confidence": "primary-source",
+        "quote": "To keep control of that we now have at least a minimal dilating of 1 [...] For stability we ensure valid border data for output in all morphological operations.",
+        "angle": "pixls-segmentation"
+      },
+      {
+        "claim": "In the pixls.us thread 'Highlight reconstruction - hard edges' (Play Raw, 2024/2025 era, darktable 5.4), Hanno Schwalm gave a direct diagnosis of irregular/hard-edge segmentation artifacts: they occur regularly when the camera's white point (derived from EXIF) is imperfect, causing false/irregular clipping boundaries. He recommended using the module's clipping-mask raster overlay (which respects the chosen threshold and algorithm) to diagnose, lowering the clipping threshold so reconstruction activates earlier/more accurately, and specifically selecting the 'segmentation' algorithm for large blown-out areas because it 'checks for valid colors at the borders.' He also noted VNG4 demosaicing (vs RCD) handles some of these flat-area/border irregularities better, and recommended dual-demosaicing prioritizing VNG in flat regions for problem cases.",
+        "source": "https://discuss.pixls.us/t/highlight-reconstruction-hard-edges/55378",
+        "who": "hannoschwalm (Hanno Schwalm), forum reply",
+        "confidence": "primary-source",
+        "quote": "We see that regularly when the given whitepoint (dt gets that from exif data) is not perfect. [...] Select 'segmentation' algorithm for large blown-out areas, which checks for valid colors at the borders.",
+        "angle": "pixls-segmentation"
+      },
+      {
+        "claim": "In GitHub issue #13849 ('Magenta hue with filmic v6 and highlight reconstruction'), a user reported a magenta color cast at the boundary between blue sky and blown-out highlights when using inpaint-opposed HLR with filmic v6/preserve-chrominance. Switching HLR mode to 'segmentation' removed the magenta cast but introduced a different visible artifact: a harsh boundary line directly above the cloud, coincident with the segmentation's own segment boundary. The issue was labeled 'bug: invalid' (treated as expected behavior/limitation, not a bug) and no root-cause explanation from a developer is present in the thread content retrieved.",
+        "source": "https://github.com/darktable-org/darktable/issues/13849",
+        "who": "groutr (reporter)",
+        "confidence": "primary-source",
+        "quote": "a very faint magenta color cast in the highlight area [...] on the transition from the blue sky to the blown out highlights [...] When switching to segmentation mode, the magenta cast disappeared but [...] a harsh boundary right above the cloud [coincided] with segment boundaries.",
+        "angle": "pixls-segmentation"
+      },
+      {
+        "claim": "In the pixls.us thread 'Removal of magenta highlight artefacts,' Hanno Schwalm stated that all of darktable's highlight-recovery algorithms depend on correct white-balance coefficients as input, and that a magenta/color-cast artifact in recovered highlights is fundamentally a white-balance-input problem (D65-corrected vs as-shot coefficients), not a defect specific to the reconstruction algorithm's edge handling.",
+        "source": "https://discuss.pixls.us/t/removal-of-magenta-highlight-artefacts/32629",
+        "who": "hannoschwalm (Hanno Schwalm / Jens-Hanno Schwalm), forum reply",
+        "confidence": "primary-source",
+        "quote": "all algorithms trying to recover highlights in dt are working correct if the data they have as input have perfect correction coefficients in the white balance module",
+        "angle": "pixls-segmentation"
+      },
+      {
+        "claim": "In the pixls.us thread 'Purple fringing turning saturated blue and clipped,' another core contributor (Boris Hajdukovic / s7habo) attributed purple/blue fringing at high-contrast clipped edges (e.g. headlamp halos against snow) to ordinary lateral chromatic aberration ('different colors of light do not focus in the same plane'), compounded by out-of-gamut blue that later processing (color calibration, filmic) can amplify rather than tame. The thread's recommended workflow was to apply chromatic-aberration correction (large radius, 'darken only' mode) before tone mapping, and/or use a blue-attenuation control in the Sigmoid module's primaries section — no explicit statement was found tying this specifically to the segmentation-based HLR algorithm's own candidate-selection behavior.",
+        "source": "https://discuss.pixls.us/t/purple-fringing-turning-saturated-blue-and-clipped/41690",
+        "who": "s7habo (Boris Hajdukovic); Terry Pinfold (workflow suggestion)",
+        "confidence": "primary-source",
+        "quote": "different colors of light do not focus in the same plane [...] out of gamut blue in highlights [...] Enable chromatic aberration correction with 'darken only' mode applied before tone mapping.",
+        "angle": "pixls-segmentation"
+      },
+      {
+        "claim": "The official darktable user manual documents the segmentation method's candidate-rejection logic directly: pixels that are too dark, or that appear to be at an edge, are excluded from consideration as color-source candidates when reconstructing a clipped segment; if all surrounding pixels are rejected, the segment falls back to the 'inpaint opposed' estimate instead. This is the closest primary/secondary documentation gets to describing an explicit edge-artifact safeguard built into the algorithm.",
+        "source": "https://docs.darktable.org/usermanual/4.6/en/module-reference/processing-modules/highlight-reconstruction/",
+        "who": "darktable project (official user manual, secondary/documentation source)",
+        "confidence": "secondary",
+        "quote": "Pixels that are too dark or appear to be an edge are rejected by the algorithm. [...] If all surrounding pixels are rejected, that segment is reconstructed using the 'inpaint opposed' method.",
+        "angle": "pixls-segmentation"
+      },
+      {
+        "claim": "The user manual documents the 'candidating' parameter's exact function: it lets the user weight the balance between choosing color-source candidates via full segmentation analysis (high values) versus falling back toward the simpler/more robust 'inpaint opposed' estimate (low values) — implying that lowering candidating is a documented lever for reducing bad-candidate-driven color/saturation artifacts at the cost of segmentation's larger-area reconstruction power.",
+        "source": "https://docs.darktable.org/usermanual/4.6/en/module-reference/processing-modules/highlight-reconstruction/",
+        "who": "darktable project (official user manual)",
+        "confidence": "secondary",
+        "quote": "candidating: [...] choose whether to prefer choosing candidate pixels (used to obtain color data) with segmentation analysis (high values) or inpaint opposed (low values).",
+        "angle": "pixls-segmentation"
+      },
+      {
+        "claim": "In the original 'guiding laplacians' pixls.us thread (predecessor discussion, Dec 2021), the author of that (different, laplacian-based, not segmentation) method explicitly stated it does NOT handle chromatic aberration and does not 'inpaint color' — it only restores expected luminance and borrows detail from unclipped channels. This is a related-but-distinct method from segmentation; the thread notes Hanno Schwalm was concurrently developing the segmentation approach (referencing PR #10716) as a complementary technique, not a replacement.",
+        "source": "https://discuss.pixls.us/t/guiding-laplacians-to-restore-clipped-highlights/28493",
+        "who": "anon41087856 (thread author), context via jandren discussion",
+        "confidence": "primary-source",
+        "quote": "restore the expected luminance of clipped regions, compared to their surround [...] doesn't 'inpaint color' or handle chromatic aberrations well.",
+        "angle": "pixls-segmentation"
+      },
+      {
+        "claim": "DEAD END: GitHub issue #12606 ('Any desire to change the highlights reconstruction module user interface [RFC]') was searched for developer commentary specifically on edge/CA fringe behavior of the segmentation algorithm, but the fetchable content only surfaced Hanno Schwalm's opening UI-design questions (default module state, algorithm menu ordering, whether to deprecate 'reconstruct color'); the substantive discussion thread beneath it could not be retrieved/confirmed to contain edge-artifact-specific content.",
+        "source": "https://github.com/darktable-org/darktable/issues/12606",
+        "who": "jenshannoschwalm (issue opener)",
+        "confidence": "secondary",
+        "angle": "pixls-segmentation"
+      },
+      {
+        "claim": "Maintainer Hanno Schwalm's core explanation for residual magenta color casts in 'inpaint opposed' highlight reconstruction: not enough blue and green channel signal gets recovered relative to red, and this cannot be fully controlled in all cases.",
+        "source": "https://github.com/darktable-org/darktable/issues/13849#issuecomment-1458586937",
+        "who": "jenshannoschwalm (Hanno Schwalm), darktable collaborator/maintainer",
+        "quote": "A very simple explanation, a remaining magenta cast with opposed means: not enough blue&green recovered. This can't be controlled in all cases...",
+        "confidence": "primary-source",
+        "angle": "dt-github"
+      },
+      {
+        "claim": "Schwalm states highlight-reconstruction algorithms in darktable are only correct given 'perfect' white-balance correction coefficients as input; a change in the white-balance module (correcting to D65 rather than as-shot) introduced color casts that reconstruction can no longer fully correct. He also notes filmic's default color-preservation behavior must be disabled to isolate/diagnose highlight-reconstruction artifacts from filmic's own chroma handling.",
+        "source": "https://discuss.pixls.us/t/removal-of-magenta-highlight-artefacts/32629",
+        "who": "jenshannoschwalm (Hanno Schwalm), darktable maintainer, forum post ~2022-09-14 (post #18 in thread, paraphrase via fetch tool, not directly verified against raw HTML)",
+        "quote": "all algorithms trying to recover highlights in dt are working correct if the data they have as input have perfect correction coefficients in the white balance module... Default filmic also makes some assumptions how to preserve color. So if you want to analyse highlights correction you have to turn it off to understand what data will be processed.",
+        "confidence": "secondary",
+        "angle": "dt-github"
+      },
+      {
+        "claim": "On the same magenta-hue GitHub issue, Schwalm separately advised that to evaluate highlight-reconstruction (hlr) behavior in isolation, users should disable filmic and sigmoid, and that hlr's correctness depends on correct white balance -- recommending 'as shot' WB on some images.",
+        "source": "https://github.com/darktable-org/darktable/issues/13849#issuecomment-1457687821",
+        "who": "jenshannoschwalm (Hanno Schwalm), darktable collaborator",
+        "quote": "To evaluate anything with hlr you should switch-off filmic and sigmoid. The hlr reconstruction is depending on correct white balance so on some images you'd better set that to as-shot.",
+        "confidence": "primary-source",
+        "angle": "dt-github"
+      },
+      {
+        "claim": "Contributor Ralf Brown (collaborator) identified a specific interaction mechanism: filmic v6's default 'maxRGB' chroma-preservation mode amplifies any faint residual color/hint of hue left in extreme (near-clipped) highlights, which is why the magenta cast appears with filmic v6 but is less visible with other preservation modes (e.g. luminance Y) or with sigmoid.",
+        "source": "https://github.com/darktable-org/darktable/issues/13849#issuecomment-1458370656",
+        "who": "ralfbrown, darktable collaborator",
+        "quote": "Filmic v6's default maxRGB magnifies any *hint* of color in the extreme highlights. It's great for vibrant blue skies in the absence of sensor clipping, but for most anything else I find myself switching to one of the other chroma preservation modes (usually luminance Y).",
+        "confidence": "primary-source",
+        "angle": "dt-github"
+      },
+      {
+        "claim": "Segmentation-mode highlight reconstruction can trade the magenta cast of opposed-mode for a different artifact: a harsh, visible boundary/edge exactly at a segment border (reported on a sky-to-cloud transition). A contributor found that enabling 'candidating' (selecting a representative pixel value per segment rather than plain averaging) smooths this hard edge.",
+        "source": "https://github.com/darktable-org/darktable/issues/13849",
+        "who": "groutr (Ryan Grout), issue reporter; confirmed in issue thread comments",
+        "quote": "Switching to segmentation, the magenta color cast disappeared, but then I noticed that there is a harsh boundary right above the cloud. This harsh transition coincides with a segment boundary. ... It appears that candidating seems to be the smoothing effect for the hard edge.",
+        "confidence": "primary-source",
+        "angle": "dt-github"
+      },
+      {
+        "claim": "Merged PR #14193 ('Bugfix #12913 (HLR segmentation masks)', merged 2023-04-13) fixed access to not-yet-initialized data in the segmentation-based highlight-reconstruction code (segbased.c, segmentation.c), which caused visibly different colored mask artifacts each time the mask-visualization toggle was switched (reported originally as OSX-specific but confirmed platform-independent). Schwalm stated this was a housekeeping/uninitialized-memory bug, not a maths change, so no algorithm version bump was needed.",
+        "source": "https://github.com/darktable-org/darktable/pull/14193",
+        "who": "jenshannoschwalm (Hanno Schwalm), PR author and maintainer",
+        "quote": "Basically it comes down to accessing not-initialized data, mostly obvious in the mask visualizing mode but possibly also in normal processing code... So a complete & in-depth review of the complete code... So - no significant maths modifications (so no version bump required), visible output might be different marginally.",
+        "confidence": "primary-source",
+        "angle": "dt-github"
+      },
+      {
+        "claim": "The underlying bug report (#12913) for PR #14193 described the artifact directly: depending on module settings (combine slider, candidating), the segmentation-mask visualization showed different colored artifacts, and re-toggling the mask view could change the artifact color even at fixed settings -- later isolated by a co-maintainer (MStraeten) to interact with the histogram display mode (waveform/parade) on macOS specifically, pointing to an uninitialized-buffer / platform-dependent memory bug rather than an algorithmic color error.",
+        "source": "https://github.com/darktable-org/darktable/issues/12913",
+        "who": "MStraeten (Martin Straeten), darktable collaborator/tester",
+        "quote": "depending on the combination settings the masks shows different colored artifacts... switching mask on off several times can change those strange artifacts; sometimes no artifacts, sometimes the color changes ... after some further investigations starting with a clean cache and darktablerc it breaks in dependence of the histogram setting: I can reproduce the issue by switching the histogram to waveform or parade (but only with macos)",
+        "confidence": "primary-source",
+        "angle": "dt-github"
+      },
+      {
+        "claim": "Merged PR #17190 ('Fix two opposed HLR bugs', merged 2024-07-28) fixed two mechanism-level bugs in inpaint-opposed reconstruction: (1) calc_refavg() tested invalid border/edge pixel locations at right/bottom ROI edges instead of restricting to strictly-inside positions; (2) the OpenCL 'img_oppclipped' check incorrectly assumed border-check results were valid rather than testing 'any photosite clipped' per row, which could silently make the OpenCL opposed algorithm fall back to passthrough (i.e., no reconstruction at all) when clipped segments had smooth transitions to unclipped area. Fixed issue #17189 (reported as OpenCL vs CPU giving magenta/pink vs white output inconsistently) and referenced #16986.",
+        "source": "https://github.com/darktable-org/darktable/pull/17190",
+        "who": "jenshannoschwalm (Hanno Schwalm), PR author and maintainer",
+        "quote": "Fix calc_refavg() at right and bottom borders. Restrict tested locations to valid positions being strictly inside the given roi width & height... Fix img_oppclipped check in inpaint opposed OpenCL. We have to check for \"any photosite clipped\" instead of assuming the border check gives correct results... The bug could lead to OpenCL opposed algo working in passthru mode if there were no smooth transitions to clipped segments.",
+        "confidence": "primary-source",
+        "angle": "dt-github"
+      },
+      {
+        "claim": "Merged PR #20690 ('Some improvements for highlights correction (mainly opposed)', merged during the 5.0 dev cycle in 2026) refined the opposed-mode chroma-correction geometry: the mask/data locations now reflect exactly a 3x3 photosite area starting at pipe raw data (0,0), improving the global chrominance correction and yielding better-reconstructed data at image borders; it also fixed CPU code that incorrectly clamped negative values during opposed/LCh reconstruction (previously producing larger CPU/OpenCL divergence and different-looking output vs. the demosaicer, since handling negative values is the demosaicer's responsibility, not the highlight module's).",
+        "source": "https://github.com/darktable-org/darktable/pull/20690",
+        "who": "jenshannoschwalm (Hanno Schwalm), PR author and maintainer",
+        "quote": "The mask locations for opposed highlights reconstruction now reflect exactly the 3x3 photosite area starting at pipe raw data 0/0... results in slightly better reconstructed data at border... Fix CPU code wrongfully correcting data to be at least zero while doing opposed or Lch algorithms resulting in larger CPU/OpenCL diffs and possibly different demosaicer output... handling negatives is absolutely the demosaicer's job.",
+        "confidence": "primary-source",
+        "angle": "dt-github"
+      },
+      {
+        "claim": "Older 'reconstruct in LCh' mode (predecessor to inpaint-opposed/segmentation) produced cyan/yellow fringing at edges of blown highlights. Founding filmic-module author Aurelien Pierre explained the mechanism as conceptually invalid: the LCh correction operates on camera RGB data before demosaicing and before the input color profile (camera RGB -> XYZ -> Lab) is applied, so treating un-color-managed sensor RGB values as if they were perceptual Lab/LCh color is mathematically wrong at that pipeline stage. The issue was ultimately marked won't-fix (algorithm change would break backward compatibility) in favor of the newer filmic-based reconstruction path.",
+        "source": "https://github.com/darktable-org/darktable/issues/2086",
+        "who": "aurelienpierre (Aurelien Pierre), darktable contributor / filmic module author",
+        "quote": "This option is broken from scratch. The module works on the RGB signal before it is even demosaiced, so before the input colour profile is applied... using Lab/LCh before that correction is done is conceptually wrong, because camera RGB are not colour at all before it's matched to human vision through XYZ... Won't fix, we can't change the algo without losing compatibility. Checkout filmic reconstruction.",
+        "confidence": "primary-source",
+        "angle": "dt-github"
+      },
+      {
+        "claim": "Aurelien Pierre, responding to a feature request to let users manually tweak/pick colors for magenta highlight recovery, stated that reliable identification of clipped/magenta channels is possible precisely because the operation happens before the input color profile and white balance are applied, so results are camera-vendor-flag-based (deterministic) rather than a matter of human color judgment at that stage -- implying by extension that white balance/profile-order matters fundamentally to how 'color' is defined during highlight reconstruction.",
+        "source": "https://github.com/darktable-org/darktable/issues/11587",
+        "who": "aurelienpierre (Aurelien Pierre), darktable contributor",
+        "quote": "Dealing with magenta highlights is an easy task because your computer knows what \"white\" or \"magenta\" is, even before we apply the input color profile and the white balance. Also, we can reliably identify magenta for all cameras because, again, since we are before input profile in the pipeline, it's not at all random and based on vendor's heuristics.",
+        "confidence": "primary-source",
+        "angle": "dt-github"
+      },
+      {
+        "claim": "The segmentation-based reconstruction algorithm's own source-code header (segbased.c, 'Version 2', credited to collaboration between Iain and garagecoder of the G'MIC team and Hanno Schwalm) documents the core mechanism directly: it analyzes R/G/B channels independently in a 3x3 photosite region, finds isolated clipped 'segments' per channel, and inpaints not raw color but 'pseudo-chromacity' -- computed by subtracting opponent-channel means (not luminance) -- using a cube-root transform instead of a logarithm for numerical stability; small segments are merged via a user-adjustable morphological closing radius (0-8) to reduce segment-boundary discontinuities of the kind reported in issue #13849.",
+        "source": "https://github.com/darktable-org/darktable/blob/master/src/iop/hlreconstruct/segbased.c",
+        "who": "darktable source code comments, credited to Iain, garagecoder (G'MIC team), and Hanno Schwalm; original design discussed at https://discuss.pixls.us/t/highlight-recovery-teaser/17670",
+        "quote": "A core principle is to inpaint pseudo-chromacity, calculated by subtracting opponent channel means rather than luminance. Cube root is used instead of logarithm for better stability... To combine small segments for a shared candidate we use a morphological closing operation, the radius of that UI op can be chosen interactively between 0 and 8.",
+        "confidence": "primary-source",
+        "angle": "dt-github"
+      },
+      {
+        "claim": "RawTherapee's Exposure tool documents four highlight-reconstruction methods; 'Luminance Recovery' explicitly produces neutral-gray detail with no color restoration, while 'Color Propagation' explicitly restores color by 'bleeding' the surrounding known color into the missing clipped area — i.e. it extends local tint into clipped regions rather than rolling to neutral. RawPedia states its weakness directly: 'it may sometimes bleed the incorrect colors, depending on the image elements surrounding the blown highlights.'",
+        "source": "https://rawpedia.rawtherapee.com/Exposure (RawTherapee official wiki, RawPedia)",
+        "who": "RawTherapee documentation (RawPedia, community/dev-maintained)",
+        "confidence": "secondary",
+        "quote": "Luminance Recovery: details will be neutral gray, doesn't attempt to restore colors. / Color propagation ... tries to restore color information by 'bleeding' the surrounding known color into the missing clipped area ... its weakness is that it may sometimes 'bleed' the incorrect colors, depending on the image elements surrounding the blown highlights.",
+        "angle": "rt-art-opposed"
+      },
+      {
+        "claim": "A user (pi99y) filed a bug directly naming the chroma-extension failure mode: RawTherapee's Color Propagation highlight recovery grabs the wrong nearby detail and produces purple/magenta fringing baked into the recovered highlight, reproduced on a Fujifilm X-Trans water-reflection RAW.",
+        "source": "https://github.com/Beep6581/RawTherapee/issues/3311",
+        "who": "pi99y (bug reporter), GitHub issue on Beep6581/RawTherapee",
+        "confidence": "primary-source",
+        "quote": "color propagation grabbing the wrong detail (purple fringing)",
+        "angle": "rt-art-opposed"
+      },
+      {
+        "claim": "Beep6581 (Gabor/Morgan Hardwood, RawTherapee project founder) diagnosed the same purple-fringe-in-clipped-highlights bug as compounded by (1) wrong raw white point causing false-color at true white clip, fixable via 'Raw White Points > White-point correction'; (2) residual purple fringing at the periphery of clipped zones fixed by 'False color suppression steps = 1' plus Defringe; and (3) a structural warning that Color Propagation should not be used on such images at all, because 'by definition it propagates colors into clipped areas, and we know the colors it propagates from, the periphery of each clipped area, suffer from purple fringing.'",
+        "source": "https://github.com/Beep6581/RawTherapee/issues/3311 (comment by Beep6581)",
+        "who": "Beep6581 (Gabor Horvath / 'Morgan Hardwood' on the forum), RawTherapee project lead/founder",
+        "confidence": "primary-source",
+        "quote": "Last, don't use color propagation on such images. By definition it propagates colors into clipped areas, and we know the colors it propagates from, the periphery of each clipped area, suffer from purple fringing.",
+        "angle": "rt-art-opposed"
+      },
+      {
+        "claim": "iliasg (RT contributor specializing in camconst white/black-level calibration) confirmed the root cause was RT's raw white-level clipping at 4094 instead of sensor max 4095 for the Fuji X-Pro1, and proposed a camconst.json fix (white:4080) plus separately floated that fixing CA correction to work on X-Trans ('Bayerize' X-Trans) would help reduce this class of fringing.",
+        "source": "https://github.com/Beep6581/RawTherapee/issues/3311 (comment by iliasg)",
+        "who": "iliasg, RawTherapee contributor (camera constants / white-black level specialist)",
+        "confidence": "primary-source",
+        "quote": "It's the same problem coming up after RT changed behavior at highlights, here the white clips at 4094 instead of 4095 ... BTW I think that if we could make RAW autoCA to work with X-trans (or 'Bayerize' x-trans ;) ..) it would help a lot on these frings.",
+        "angle": "rt-art-opposed"
+      },
+      {
+        "claim": "Jacques Desmis ('Desmis'), an RT contributor involved in merging Inpaint Opposed, gave a direct quality ranking of RT's highlight-reconstruction methods (best to worst: Color Propagation > Inpaint Opposed > Blend > others, 'even if there are exceptions'), and stated that Inpaint Opposed was made default primarily as a quality/speed compromise, not because it strictly beats Color Propagation on quality.",
+        "source": "https://github.com/RawTherapee/RawTherapee/issues/6815 (comment by Desmis)",
+        "who": "Desmis (Jacques Desmis), RawTherapee contributor",
+        "confidence": "primary-source",
+        "quote": "In terms of overall quality the best was 'Color propagation', then 'Inpaint opposed', then 'blend', then the others. Even if there are exceptions or 'Inpaint opposed' is the best. ... Hence my proposal to put 'Inpaint opposed' as the default choice.",
+        "angle": "rt-art-opposed"
+      },
+      {
+        "claim": "In the same thread, Desmis and other devs (Benitoite, Hombre57, Lawrence37) established/confirmed that RawTherapee's Inpaint Opposed performs white balance BEFORE the reconstruction step (unlike the naive assumption from RawPedia's Toolchain Pipeline diagram) — this is precisely why the editor had to fully reprocess (demosaic) on every WB tweak when Inpaint Opposed was active, since the algorithm's chroma-correction/averaging depends on WB-corrected values. This was fixed via a refresh-mapper change routing WB events through DEMOSAIC only when method=='Coloropp'.",
+        "source": "https://github.com/RawTherapee/RawTherapee/issues/6815",
+        "who": "Desmis, Benitoite, Hombre57, Lawrence37 — RawTherapee contributors, GitHub issue thread",
+        "confidence": "primary-source",
+        "quote": "In the case of 'Inpaint opposed' white balance is performed before. [Desmis] / if ((todo & M_WB) && params->toneCurve.hrenabled && params->toneCurve.method == \"Coloropp\") { todo |= DEMOSAIC; } [Lawrence37]",
+        "angle": "rt-art-opposed"
+      },
+      {
+        "claim": "RawPedia attributes the 'inpaint opposed' algorithm's origin to a team of G'MIC and darktable developers, states it was ported into RawTherapee (and ART) by Alberto Griggio, that it is the current RT default, and that it is notably sensitive to white balance — specifically the green/tint (WB tint) channel — recommending Auto WB Temperature-Correlation to get good tint values before relying on it.",
+        "source": "https://rawpedia.rawtherapee.com/Exposure (via search-engine cache) and corroborating https://rawpedia.pixls.us/Exposure",
+        "who": "RawTherapee documentation (RawPedia)",
+        "confidence": "secondary",
+        "quote": "A team made up of members of Gmic and Darktable developed 'Inpaint opposed,' which was ported to ART by Alberto Grigio and is now available in RawTherapee. ... This algorithm is sensitive to white balance settings ... especially the green (tint) influence.",
+        "angle": "rt-art-opposed"
+      },
+      {
+        "claim": "In an ART community thread, Alberto Griggio (ART's sole developer, 'agriggio') confirmed that ART 1.17's inpaint-opposed change replaced the previous 'balanced' method as an internal algorithm swap with no UI change — i.e. ART's own 'inpaint opposed' superseded an earlier, differently-named ART reconstruction mode rather than being introduced from scratch.",
+        "source": "https://discuss.pixls.us/t/inpaint-opposed-highlight-recovery-in-1-17/33815",
+        "who": "agriggio (Alberto Griggio), ART developer, on discuss.pixls.us",
+        "confidence": "primary-source",
+        "quote": "The new method replaces the old 'balanced'. So nothing changes ui-wise.",
+        "angle": "rt-art-opposed"
+      },
+      {
+        "claim": "darktable's user manual (documenting the same 'inpaint opposed' algorithm shared conceptually with RT/ART) describes it as restoring clipped pixels via an average of adjacent unclipped pixels to estimate correct color, and explicitly warns it 'may fail where the clipped areas are adjacent to areas of a different color' — the same failure mode as RT's Color Propagation bleeding artifact, framed as an inherent limitation of averaging-from-neighbors approaches rather than an RT-specific bug.",
+        "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/highlight-reconstruction/",
+        "who": "darktable project documentation (user manual)",
+        "confidence": "secondary",
+        "quote": "Restore clipped pixels by using an average of adjacent unclipped pixels to estimate the correct color ... This works well for the majority of images but may fail where the clipped areas are adjacent to areas of a different color.",
+        "angle": "rt-art-opposed"
+      },
+      {
+        "claim": "In a pixls.us Play Raw thread, a user reported a blue-cyan tint appearing when applying (darktable) filmic highlight reconstruction to clipped clouds; the thread's regular ('kofa') traced it to a wrong white-point value in the camera metadata rather than an inherent chroma-extension defect, and another commenter ('g-man') noted inpaint-opposed (as the then-new default for darktable 4.2) resolved the case 'perfectly' once WB/white-point was correct — reinforcing that WB/white-point correctness is a recurring precondition/confound for evaluating these algorithms' chroma behavior.",
+        "source": "https://discuss.pixls.us/t/help-with-highlight-reconstruction-of-clouds/33896",
+        "who": "kofa and g-man, forum participants on discuss.pixls.us (darktable/RT community, not confirmed core devs)",
+        "confidence": "hearsay",
+        "quote": "the camera's white point value was incorrect in the metadata [paraphrase per kofa] ... inpaint opposed ... would become the default in version 4.2 [g-man], described as working 'perfectly' for this image",
+        "angle": "rt-art-opposed"
+      },
+      {
+        "claim": "RawPedia's Defringe documentation situates RT's dedicated purple/green-fringe removal tool as operating in Lab space (or CIECAM02 space if enabled) specifically targeting fringes on edges of bright/clipped highlights, implying defringe is meant to run as cleanup for chromatic-aberration-driven color contamination that highlight reconstruction (especially Color Propagation) can otherwise bake in or amplify, consistent with Beep6581's issue-3311 guidance to pair 'False color suppression steps' + Defringe when using recovery methods that propagate chroma.",
+        "source": "https://rawpedia.rawtherapee.com/Defringe (via search-engine synopsis; page unreachable directly due to hosting outage)",
+        "who": "RawTherapee documentation (RawPedia)",
+        "confidence": "secondary",
+        "quote": "The Defringe tool targets and removes purple or green fringe artifacts (typically on edges of bright highlights) ... Defringing is applied either in the Lab or the CIECAM02 space (if CIECAM02 is enabled)",
+        "angle": "rt-art-opposed"
+      },
+      {
+        "claim": "Zhang & Brainard formalize saturated-pixel restoration as Bayesian estimation: the true value of a saturated channel is estimated from the non-saturated channels at the same pixel via a multivariate normal prior capturing cross-channel correlation, with the posterior explicitly truncated at the saturation level (Eq. 4/9). This is the foundational treatment of 'partially saturated' pixels (one or two of three channels clipped) — it does not use spatial boundary information at all, only per-pixel cross-channel correlation.",
+        "source": "https://color2.psych.upenn.edu/brainard/papers/Zhang_Brainard_04.pdf (J. Opt. Soc. Am. A, Vol. 21, No. 12, Dec 2004, pp. 2301-2310)",
+        "who": "Xuemei Zhang (Agilent Technologies Labs) and David H. Brainard (Univ. of Pennsylvania), 'Estimation of saturated pixel values in digital color imaging'",
+        "quote": "The algorithm uses the nonsaturated responses from the other color channels, together with a multivariate normal prior that captures the correlation in response across color channels... Given the prior and the responses of the nonsaturated channels, the algorithm returns the optimal expected mean square estimate for the true response.",
+        "confidence": "primary-source",
+        "angle": "academic-recon"
+      },
+      {
+        "claim": "Zhang & Brainard explicitly diagnose the visual artifact this survey topic is about: naive per-channel clipping without a saturation fix produces a color shift toward magenta in bright, partially-clipped regions (truck image example) because saturation of the G channel underestimates G relative to non-saturated R and B; a common industry workaround is to force R=G=B (desaturate to the white balance point) once any channel saturates, which fixes color at the cost of destroying real luminance variation in the clipped region.",
+        "source": "https://color2.psych.upenn.edu/brainard/papers/Zhang_Brainard_04.pdf, Section 1 Introduction, p. 2302",
+        "who": "Xuemei Zhang and David H. Brainard, JOSA A 2004",
+        "quote": "Note the objectionable magenta artifacts on the bright white areas of the truck... clipping provides an effective fix for the colored artifacts that arise from pixel saturation. On the other hand, clipping throws away information, as pixels that originally differ in the image are mapped to the same rendered values after the clipping step.",
+        "confidence": "primary-source",
+        "angle": "academic-recon"
+      },
+      {
+        "claim": "Rouf, Lau & Heidrich (2012) is the canonical gradient-domain / membrane-style treatment of boundary chroma for clipped highlights. They partition clipped pixels into 'union' regions (Ω∪, at least one channel clipped) and 'intersection' regions (Ω∩, all channels clipped), and solve a Laplace equation for a smooth hue field ρ over Ω∪ with a Dirichlet boundary condition fixing ρ to the observed hue on ∂Ω∪ — i.e. literally a membrane/harmonic interpolation of chromaticity inward from the clipping boundary. The core assumption (stated explicitly) is that hue varies smoothly across the clip boundary because glare/bloom extends the true hue into the boundary; the paper notes this assumption fails for scenes like sunsets where the true hue is not independent of luminance.",
+        "source": "https://vccimaging.org/Publications/Rouf2012GDC/Rouf2012GDC.pdf (PROCAMS/IEEE 2012, presented at ICCP-adjacent workshop; project page https://www.cs.ubc.ca/labs/imager/tr/2012/GradientDomainColorRestoration/)",
+        "who": "Mushfiqur Rouf, Cheryl Lau, Wolfgang Heidrich, University of British Columbia, 'Gradient Domain Color Restoration of Clipped Highlights'",
+        "quote": "First, we estimate a smooth distribution of the hue of the affected region from information at its boundary... In our implementation, the hue ρ is represented as a multichannel image... We perform the interpolation by solving a Laplace equation over Ω∪ with a Dirichlet boundary condition in ∂Ω∪: ∇²ρ = 0 over Ω∪ with ρ|∂Ω∪ = f|∂Ω∪.",
+        "confidence": "primary-source",
+        "angle": "academic-recon"
+      },
+      {
+        "claim": "Rouf et al. then combine the smoothly-interpolated boundary hue field with the gradient (detail) information from the unclipped color channels, solving a further Poisson problem to reconstruct the clipped channels' full gradient field — restoring texture/detail in partially-clipped areas (where >=1 channel remains unclipped) while restoring hue only (no detail) in fully-clipped areas (Ω∩). They also offer an optional pre-smoothing step for fully-clipped regions specifically to avoid Mach-band discontinuities at the transition from partially- to fully-clipped highlight.",
+        "source": "https://vccimaging.org/Publications/Rouf2012GDC/Rouf2012GDC.pdf, Section 3 Method / Fig. 2, p. 2-3",
+        "who": "Mushfiqur Rouf, Cheryl Lau, Wolfgang Heidrich, UBC, PROCAMS 2012",
+        "quote": "In partially clipped areas where at least one channel of the input image remains unsaturated, this approach recovers both the hue and the texture; in fully clipped regions we recover the hue only... we can also smooth the gradients to avoid abrupt changes visible as Mach bands.",
+        "confidence": "primary-source",
+        "angle": "academic-recon"
+      },
+      {
+        "claim": "Xu, Doutre & Nasiopoulos (2011, IEEE TVCG) directly targets 'strong chroma spatial correlation between clipped pixels and their surrounding unclipped area': the algorithm partitions each clipped highlight into regions of similar chroma, estimates each region's chroma from the surrounding unclipped pixels, corrects the clipped channels accordingly, and then explicitly smooths the boundary between the reconstructed region and the unclipped surround to avoid a visible seam.",
+        "source": "IEEE Transactions on Visualization and Computer Graphics, Vol. 17, Issue 3, pp. 333-344 (May 2011), DOI: 10.1109/TVCG.2010.63; https://www.researchgate.net/publication/224133214_Correction_of_Clipped_Pixels_in_Color_Images ; https://www.semanticscholar.org/paper/Correction-of-Clipped-Pixels-in-Color-Images-Xu-Doutre/3eaa1ee8cf5b28489678ea8f013da258c59fb102",
+        "who": "Di Xu, Colin Doutre, Panos Nasiopoulos, University of British Columbia, 'Correction of Clipped Pixels in Color Images'",
+        "quote": "The paper proposes an algorithm to enhance both the luma and chroma of the clipped pixels, based on the strong chroma spatial correlation between clipped pixels and their surrounding unclipped area. The algorithm partitions clipped areas into regions with similar chroma, estimates the chroma based on surrounding unclipped regions, corrects the clipped color channels, and then smooths the boundaries between regions.",
+        "confidence": "secondary",
+        "angle": "academic-recon"
+      },
+      {
+        "claim": "Elboher & Werman propose a 'Color Lines' model for clipped-region recovery: they identify each clipped area, expand it into a color cluster ('Color Line') using surrounding uncorrupted-channel data, and restore the clipped pixel values according to properties of that cluster — a chroma-plausibility/inpainting approach distinct from harmonic (membrane) interpolation, explicitly designed to also handle large clipped regions and to work on both raw and already-processed (demosaiced/tone-mapped) color images.",
+        "source": "https://www.semanticscholar.org/paper/Recovering-Color-and-Details-of-Clipped-Image-Elboher-Werman/3ac9d98f41e294a67f9d2a7e5b7948e2f61d3549 (also on ResearchGate: https://www.researchgate.net/publication/229049698_Recovering_Color_and_Details_of_Clipped_Image_Regions ; cited by Rouf et al. 2012 as ref [13])",
+        "who": "Elboher and Werman (per Semantic Scholar record and Rouf et al. 2012 citation)",
+        "quote": "The method identifies regions of color clipping, expands each to a color cluster called a Color Line, then restores the clipped pixel values according to its unique properties. The method is suitable for both raw and processed color images, including those with large clipped regions.",
+        "confidence": "secondary",
+        "angle": "academic-recon"
+      },
+      {
+        "claim": "darktable's current (v4.x+) 'guided laplacians' highlight-reconstruction module deliberately avoids any color-management concept including explicit desaturation, because it must run on raw mosaic data before white balance/chromatic-adaptation/input-profiling are meaningful; instead it propagates gradients only (treating the problem as pure signal-domain diffusion/sharpening, derived from the diffuse-or-sharpen module), and separately offers an RGB-ratio-based 'inpaint a flat color' booster that trades reconstruction accuracy for robustness in fully-clipped regions.",
+        "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/highlight-reconstruction/",
+        "who": "darktable project user manual (development branch docs)",
+        "quote": "The guided laplacians approach has been designed specifically to be immune to white-balance discrepancies and to avoid any concept or method related to color (so there is no explicit desaturation)... only handles gradients (transitions) in the signal and aims at connecting them smoothly, in order to fill the missing parts.",
+        "confidence": "secondary",
+        "angle": "academic-recon"
+      },
+      {
+        "claim": "darktable's alternative 'segmentation based' highlight-reconstruction algorithm (the one this codebase already ported per task #13) explicitly treats each clipped area as an individual segment and estimates that segment's color from the color ratios (chromaticity) of adjacent unclipped pixels — i.e., boundary-driven chroma estimation, similar in spirit to Xu/Doutre and Elboher/Werman but implemented as a discrete per-segment ratio estimate rather than a continuous PDE solve; docs caution it should be understood as plausibly 'disguising' clipped regions rather than truly recovering ground truth.",
+        "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/highlight-reconstruction/",
+        "who": "darktable project user manual (development branch docs)",
+        "quote": "The color of each clipped segment is estimated by analysing the color ratios of the adjacent pixels... this method should be thought of more as a way to 'disguise' clipped areas with something plausible, rather than a way to 'magically' repair them.",
+        "confidence": "secondary",
+        "angle": "academic-recon"
+      },
+      {
+        "claim": "darktable's older 'filmic RGB' reconstruction path, unlike guided laplacians, operates after color profiling (where a well-defined white point exists) and offers a reconstruction mode that explicitly favors an achromatic (desaturated-to-neutral) result for severely/fully clipped highlights — i.e. the 'desaturate toward neutral' strategy named in the research topic is a real, currently-shipping alternative to boundary-chroma-preserving methods, chosen specifically because it is safe to apply post-profiling.",
+        "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/highlight-reconstruction/ ; https://docs.darktable.org/usermanual/4.8/en/module-reference/processing-modules/filmic-rgb/",
+        "who": "darktable project user manual",
+        "quote": "Unlike guided laplacians, filmic RGB's reconstruction uses a desaturation option that can favor an achromatic reconstruction... operates post-color-profiling where white is properly defined.",
+        "confidence": "secondary",
+        "angle": "academic-recon"
+      },
+      {
+        "claim": "Zoran/CSR/Qualcomm patent explicitly identifies clipping as the root physical cause of purple fringing: the sensor's blue channel exceeds dynamic range and clips, producing the fringe, and its detection algorithm's Saturation Score (SAT) is built specifically on the premise that 'purple fringing mostly occurs in pixels adjacent to saturated pixels.' Detection combines chromaticity, locality (ridge-shaped gradient), and saturation-adjacency scores multiplicatively (DET = CHR x LOC x SAT), with multi-scale accumulation across downscaled versions of the image.",
+        "source": "https://patents.google.com/patent/US8582878B1/en (US Patent 8,582,878 B1, 'Purple fringing automatic detection and correction')",
+        "who": "Yochay Tzur & Dudi Vakrat, assigned to CSR Technology Inc. / Zoran Corp (now Qualcomm); priority date 2010-11-03, issued 2013-11-12",
+        "quote": "\"purple fringing mostly occurs in pixels adjacent to saturated pixels\"; \"a large difference between the BC and the RC is related to the existence of purple fringing\"; sensor clipping of the blurred blue-channel PSF tail 'result[s] in a blue fringing around the edge'",
+        "confidence": "primary-source",
+        "angle": "purple-fringing"
+      },
+      {
+        "claim": "Microsoft patent formalizes the same saturation-adjacency precondition independently, defining candidate fringe pixels as those meeting (B-R)>25 AND (B-G)>25 that are spatially adjacent to near-saturated pixels (>=230/255), and treats green as the 'most trustworthy' channel for correction (feathering, averaging, or green-substitution).",
+        "source": "https://patents.google.com/patent/US7577292B2/en (US Patent 7,577,292 B2, 'Automatic removal of purple fringing from images')",
+        "who": "Sing Bing Kang, assigned to Microsoft Corp (now Microsoft Technology Licensing LLC); filed 2005-12-30, published/issued 2009-08-18",
+        "quote": "\"purple-fringing regions tend to be adjacent extremely bright (or near-saturated) regions\"",
+        "confidence": "primary-source",
+        "angle": "purple-fringing"
+      },
+      {
+        "claim": "A RawTherapee GitHub issue documents a concrete case where the highlight-recovery 'color propagation' method (which reconstructs clipped-channel color/detail rather than just luminance) actively manufactures purple fringing in sun-on-water highlight reflections on a Fujifilm X-Trans file -- i.e., highlight reconstruction is reported as a fringe-amplifying/contamination-introducing step, not merely fringe-agnostic. The reporter found the Defringe tool ineffective against this specific artifact and explicitly asked whether defringing should run before highlight recovery so that color-propagation doesn't inherit fringe-colored source pixels.",
+        "source": "https://github.com/Beep6581/RawTherapee/issues/3311",
+        "who": "GitHub user pi99y, RawTherapee/RawTherapee issue tracker, filed 2016-05-26 (issue closed, no maintainer fix documented in the retrieved content)",
+        "quote": "\"mostly on pictures with sun reflecting off water I see the color propagation grabing the wrong detail (purple fringing) and so filling it with wrong - purple color\"",
+        "confidence": "secondary",
+        "angle": "purple-fringing"
+      },
+      {
+        "claim": "darktable's 'raw chromatic aberrations' module is deliberately positioned to operate on raw, non-demosaiced, linear scene-referred data -- i.e. chromatic-aberration correction is architected as a pre-demosaic stage rather than a post-demosaic cleanup -- and is documented as mutually exclusive with the post-demosaic lens-correction-module TCA fix (the two must not both be enabled).",
+        "source": "https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/raw-chromatic-aberrations/",
+        "who": "darktable project user manual (development branch)",
+        "quote": "\"correct chromatic aberrations for Bayer sensors\" operating on raw data before demosaicing; \"if this module is enabled, then TCA correction in the lens correction module should be disabled, as the two modules will conflict with one another\"",
+        "confidence": "secondary",
+        "angle": "purple-fringing"
+      },
+      {
+        "claim": "Peer-reviewed algorithm (EUSIPCO 2008) formalizes purple-fringe detection as the co-occurrence of (a) large local gradient magnitude and (b) chromaticity falling within a defined purple region of the CIE xy chromaticity diagram, then corrects by desaturating only the flagged pixels -- an explicit gradient+hue/chromaticity-mask approach distinct from simple global hue-slider defringing.",
+        "source": "https://www.semanticscholar.org/paper/Automatic-detection-and-correction-of-purple-using-Kim-Park/1ed101988f4854a4cc95f3a42c440c798514b721 (also indexed at IEEE Xplore https://ieeexplore.ieee.org/document/7080291)",
+        "who": "Baek-Kyu Kim and Rae-Hong Park, 16th European Signal Processing Conference (EUSIPCO), 2008",
+        "quote": "detects purple fringed regions with large gradient magnitudes and chromaticity values within the purple color range in the CIE xy chromaticity diagram, then corrects the color by desaturation of the detected pixels",
+        "confidence": "secondary",
+        "angle": "purple-fringing"
+      },
+      {
+        "claim": "General optics/engineering framing (secondary, not attributed to a single named author) states that purple fringing is normally invisible at full (unclipped) highlight brightness and only becomes visually apparent once the highlight is clipped to white -- i.e. clipping doesn't just correlate with fringe location, it is the visibility gate for the artifact, which is the mechanistic reason highlight-reconstruction (which operates precisely on clipped regions) is the natural place fringe contamination gets exposed or amplified.",
+        "source": "https://www.dpreview.com/forums/threads/purple-fringing-vs-chromatic-aberration.1648620/ (cross-corroborated by search-engine synthesis of multiple sources including Wikipedia's Chromatic Aberration article)",
+        "who": "DPReview forum discussion thread + corroborating summary drawn from en.wikipedia.org/wiki/Chromatic_aberration",
+        "quote": "\"Purple fringing is very weak compared with uncorrected chromatic aberration, so it is hidden by the highlight that produces it - unless the brightness of that highlight is greatly reduced by clipping to white. Only when an overexposed highlight is severely clipped does the fringing become visible without special processing.\"",
+        "confidence": "hearsay",
+        "angle": "purple-fringing"
+      },
+      {
+        "claim": "A 2025 CVPR-track arXiv paper treats 'purple flare' as a named, distinct artifact class specifically located in highlight/overexposed regions -- separate enough from generic lens CA to warrant its own large-scale dataset, HSV-domain (not RGB) correction network, and dedicated metrics -- reinforcing that clipped-highlight-adjacent purple contamination is treated in current ML literature as its own correction target rather than folded into generic CA correction.",
+        "source": "https://arxiv.org/abs/2511.06764 (CAST-LUT: Tokenizer-Guided HSV Look-Up Tables for Purple Flare Removal)",
+        "who": "Pu Wang, Shuning Sun, Jialang Lu, Chen Wu, Zhihua Zhang, Youshan Zhang, Chenggang Shan, Dianjie Lu, Guijuan Zhang, Zhuoran Zheng; arXiv:2511.06764 (cs.CV)",
+        "quote": "purple flare described as \"a diffuse chromatic aberration artifact commonly found around highlight areas\" that \"degrades the tone transition and color of the image\"",
+        "confidence": "secondary",
+        "angle": "purple-fringing"
+      },
+      {
+        "claim": "Sensor/channel clipping physically destroys hue information: when one or two Bayer color channels saturate before the others, the recorded RGB ratio no longer represents the true hue, and simple reconstruction methods (e.g. DCRAW's) that try to patch this in the spatial domain produce discoloration artifacts — the underlying reason raw converters have to choose some convention (often neutral/white) for the ambiguous portion.",
+        "source": "https://blog.kasson.com/the-last-word/the-color-reproduction-problem/ (unable to fetch directly, 403) — corroborated via academic paper PDF: Mushfiqur Rouf, Cheryl Lau, Wolfgang Heidrich, 'Gradient Domain Color Restoration of Clipped Highlights' (UBC), fetched as cached PDF",
+        "who": "Mushfiqur Rouf / Cheryl Lau / Wolfgang Heidrich, University of British Columbia (computer vision paper); references Dave Coffin's DCRAW as a comparison baseline",
+        "quote": "Sensor clipping destroys the hue of colored highlight regions by misrepresenting the relative magnitude of the color channels... DCRAW [5] fails to correct either of these discoloration artifacts.",
+        "confidence": "primary-source",
+        "angle": "acr-behaviour"
+      },
+      {
+        "claim": "Eric Chan (Adobe Principal Scientist, 'MadManChan') has publicly stated that Adobe's PV2012 tone-control rewrite (Lightroom 4 / ACR 7) specifically revisited 'the way we were blending colors for highlight recovery, the way we clipped individual color channels for the Exposure control' — i.e. confirming Adobe engineers treat highlight-recovery color-blending and per-channel clipping as a deliberately-designed, revisited algorithmic choice rather than an incidental side effect.",
+        "source": "https://blog.adobe.com/en/publish/2013/07/12/principal-scientist-and-mad-man-eric-chan-discusses-his-role-in-improving-photoshop",
+        "who": "Eric Chan, Adobe Principal Scientist ('Mad Man'), in an official Adobe blog interview",
+        "quote": "the way we were blending colors for highlight recovery, the way we clipped individual color channels for the Exposure control",
+        "confidence": "primary-source",
+        "angle": "acr-behaviour"
+      },
+      {
+        "claim": "Camera Raw's highlight-recovery capability is explicitly described (in Adobe-adjacent secondary literature) as being able to reconstruct detail only when one or two color channels remain unclipped — full three-channel clipping is unrecoverable, and the reconstruction is based on borrowing/blending information from the unclipped channel(s), which structurally biases the result toward whatever channel(s) survived (often pulling the result toward neutral once channels are substituted/equalized).",
+        "source": "https://www.adobe.com/digitalimag/pdfs/highlight_recovery.pdf (title/summary only — full fetch failed, 403/timeout); corroborated by secondary description via search snippet and by Lightroom Queen tutorial-site description",
+        "who": "Adobe (official technical whitepaper, title 'Highlight Recovery in Camera Raw'); secondarily paraphrased by Lightroom Queen (lightroomqueen.com/pv2012-develop-sliders)",
+        "quote": "Camera Raw attempts to recover details from highlights and can reconstruct some details from areas in which one or two color channels are clipped to white... if there is detail in at least one channel (even better: two channels) logic built into the Highlights slider can often reconstruct the missing data in the other two channels.",
+        "confidence": "secondary",
+        "angle": "acr-behaviour"
+      },
+      {
+        "claim": "Jim Kasson's measured testing of Lightroom highlight recovery on a Leica M11 found a specific progression: detail is fully recoverable up to a certain exposure past the clipping point, but color visibly changes before detail recovery fails entirely — i.e. chroma degrades/shifts before luminance detail is lost, consistent with a 'roll toward neutral before giving up entirely' pattern. Quantitatively: clipping starts at ETTR+0.5EV, detail is fully recoverable through ETTR+1.5EV, color has already changed by ETTR+1.5EV, and no detail is recoverable at ETTR+2EV.",
+        "source": "https://blog.kasson.com/z9/lightroom-highlight-recovery/ (direct fetch blocked, 403 — content reconstructed from WebSearch result snippets of the same page)",
+        "who": "Jim Kasson, 'the last word' blog (independent sensor/raw-processing measurement blogger, ex-HP color scientist)",
+        "quote": "for certain cameras like the M11, clipping starts at ETTR + 1/2 EV with detail fully recoverable up to ETTR + 1 1/2 EV, but color changes and no detail recoverable at ETTR + 2",
+        "confidence": "secondary",
+        "angle": "acr-behaviour"
+      },
+      {
+        "claim": "Kasson also documents, in a separate ETTR-headroom article, the mechanism by which per-channel clipping produces a visible hue shift during raw development: if one channel (e.g. blue) clips before the others during an aggressive expose-to-the-right push, the resulting color cast is describable in ordinary hue terms (e.g. a scene 'turning pink') once that channel's headroom is exhausted — evidence that ACR-family highlight handling is sensitive to which channel clips first, not merely to overall luminance.",
+        "source": "https://blog.kasson.com/the-last-word/headroom-in-ettr-exposures/ (fetch blocked; reconstructed from WebSearch snippet of this page)",
+        "who": "Jim Kasson, 'the last word' blog",
+        "quote": "If you push ETTR too far and one of the color channels clips before the others, part of that channel's color will be lost — for example, clipping the blue channel can cause things to turn pink.",
+        "confidence": "secondary",
+        "angle": "acr-behaviour"
+      },
+      {
+        "claim": "darktable's own user-manual documentation (a third-party raw-processing project, not Adobe, but written by engineers who study competitor behavior) explicitly frames 'converting clipped RGB channels to neutral white highlights' as the naive/default fallback behavior for handling overexposed pixels, and treats it as a distinct, named strategy ('Clip Highlights' / 'Reconstruct in LCh' both target this neutral/monochrome-highlight outcome) as opposed to their newer chroma-preserving 'reconstruct color' / 'inpaint opposed' / 'guided laplacians' / 'segmentation based' methods which explicitly try to estimate/preserve real chroma from neighboring or cross-channel data instead of defaulting to white.",
+        "source": "https://docs.darktable.org/usermanual/4.8/en/module-reference/processing-modules/highlight-reconstruction/ and https://www.darktable.org/2015/03/color-reconstruction/",
+        "who": "darktable project documentation (open-source raw processor, direct architectural competitor/comparator to Adobe ACR)",
+        "quote": "'Clip Highlights': Clamp all pixels to the white level (i.e. clip the remaining color channels)... 'Reconstruct in LCh': The reconstructed highlights will still be monochrome, but brighter and with more detail than with 'clip highlights'.' Elsewhere: pixels which have all or only part of the RGB channels clipped ... are converted to neutral white highlights [under the naive/default strategy]; the module only does an assumption of the colors that have been lost in the highlights — by no means can these colors be regarded as authoritative.",
+        "confidence": "secondary",
+        "angle": "acr-behaviour"
+      },
+      {
+        "claim": "ACR's Defringe control (added 2012, 'Color Fringe Correction') operates in two selectable modes — 'All Edges' (desaturates color along any edge with a sudden color transition) and 'Highlight Edges' (targets edges specifically at high-contrast/overexposure boundaries) — confirming Adobe treats fringing at blown-highlight boundaries as a distinct sub-case worth its own detection mode, separate from generic purple-fringe-in-focus-falloff correction.",
+        "source": "Search-engine cached description of https://blogs.adobe.com/lightroomjournal/2012/04/new-color-fringe-correction-controls.html (direct fetch blocked by TLS/cert mismatch on blogs.adobe.com); corroborated by secondary tutorial sites (Photofocus, ACDSee help docs) describing the same two-mode structure",
+        "who": "Adobe Lightroom Journal (official Adobe blog, team byline, 2012 feature announcement)",
+        "quote": "In ACR's Defringe dropdown menu: 'All Edges' desaturates color along edges with sudden color changes; 'Highlight Edges' defringes edges where there is significant contrast change.",
+        "confidence": "secondary",
+        "angle": "acr-behaviour"
+      },
+      {
+        "claim": "No source found in this research directly and explicitly states the internal pipeline ORDER (i.e., whether ACR's Defringe/Color-Fringe-Correction executes before or after highlight recovery/reconstruction in the demosaic-to-render pipeline). This is a genuine gap — Adobe does not appear to publish pipeline-stage ordering for these two operations, and no forum post, whitepaper, or third-party measurement article found here pins down the sequencing.",
+        "source": "dead end — searched Adobe Lightroom Journal, DNG SDK-adjacent whitepapers, Photofocus, ACDSee, Bromsgrove Photographic Society CA article, dpreview/getdpi/magiclantern forum threads",
+        "who": "n/a (absence of evidence)",
+        "quote": "n/a",
+        "confidence": "hearsay",
+        "angle": "acr-behaviour"
+      },
+      {
+        "claim": "ISO 21496-1:2025 standardizes gain-map metadata for HDR/SDR image conversion, unifying previously fragmented Adobe/Google/Apple gain-map schemes; Apple and Google announced convergent support in 2024 (macOS 15, iOS 18, Android).",
+        "source": "https://www.iso.org/standard/86775.html ; https://www.androidauthority.com/google-apple-hdr-photo-standard-3495035/",
+        "who": "ISO (standard body) / Android Authority reporting on Google+Apple announcement",
+        "quote": "ISO 21496-1:2025 - Digital photography — Gain map metadata for image conversion — Part 1: Dynamic range conversion; new APIs for reading/writing gain-map data in macOS 15, iOS 18, iPadOS 18, with Messages/Photos/Preview support",
+        "confidence": "secondary",
+        "angle": "superwhite-standards"
+      },
+      {
+        "claim": "The Adobe gain-map scheme (basis for ISO 21496-1 / Google Ultra HDR) stores an 8-bit SDR base JPEG plus an 8-bit single/multi-channel gain-map image; recovered HDR = (SDR+offset_sdr) * exp2(log_boost * weight_factor) - offset_hdr, where log_boost interpolates between GainMapMin/GainMapMax (log2 of min/max content boost) via a per-pixel normalized, gamma-shaped recovery value stored in the gain map. This is fundamentally a log2-ratio-of-luminance encoding, not a direct 'above white' code value.",
+        "source": "https://developer.android.com/media/platform/hdr-image-format ; https://forum.affinity.serif.com/applications/core/interface/file/attachment.php?id=335943&key=db9e92dd06542d7ec428309d337820e2 (Eric Chan, Adobe, 'Gain Maps' v1.0 draft, May 2023)",
+        "who": "Android Developers docs (Google, implementing Adobe's scheme) / Eric Chan (Adobe, gain-map spec author) — fetch of Chan's PDF itself failed (403) so this is corroborated via the Google implementation doc, which explicitly cites the ISO/Adobe gain-map metadata (hdrgm: XMP namespace, GainMapMin/Max, Gamma, OffsetSDR/HDR, HDRCapacityMin/Max fields matching Adobe's spec)",
+        "confidence": "secondary",
+        "angle": "superwhite-standards"
+      },
+      {
+        "claim": "As of 2025-2026, Lightroom Classic/Camera Raw/Photoshop's actual HDR export path is: edit an HDR-capable raw, then export to AVIF, HEIC, JPEG, or JPEG XL with an embedded ISO/Adobe-style gain map (SDR base + gain map, viewed adaptively per display), OR export to 32-bit TIFF/PSD (uncapped float) for further HDR compositing work. AVIF HDR export is saved at 10-bit; plain TIFF export is 8 or 16-bit; the 32-bit float TIFF/PSD path is the one that is NOT range-limited.",
+        "source": "https://helpx.adobe.com/lightroom-classic/help/hdr-output.html ; community/help aggregation via search (direct WebFetch of Adobe help page timed out twice, so this rests on the search-engine-rendered summary of that same page plus corroborating Adobe community/Lightroom Queen threads)",
+        "who": "Adobe (official Lightroom Classic Help documentation)",
+        "quote": "32 bits is allowed for HDR TIFF and PSD, while AVIF is saved on 10 bits only; Use AVIF or JPEG XL for sharing... Use TIFF or PSD for workflows where additional HDR work is required, such as compositing",
+        "confidence": "secondary",
+        "angle": "superwhite-standards"
+      },
+      {
+        "claim": "ISO/TS 22028-5 (ISO TC42, published as TS in 2023, being progressed to full IS) defines HDR/WCG still-image colour encodings using scene-referred linear, PQ (SMPTE ST 2084) and HLG (ARIB STD-B67) transfer functions carried via CICP metadata, at 10-bit-or-greater depth in Rec.2020 — i.e. it imports the video HDR transfer functions into a still-image/HEIF container rather than inventing a photo-specific superwhite scheme. Camera makers (Canon HDR PQ, Sony HLG Still Image, Nikon HLG) already ship 10-bit HEIF stills using this.",
+        "source": "https://www.iso.org/standard/87778.html ; https://www.iso.org/standard/81863.html ; https://www.color.org/hdr/07-Nicolas_Bonnier.pdf (title/context only — PDF body was not text-extractable via WebFetch)",
+        "who": "ISO (standard registry entries); Nicolas Bonnier (presentation title attributed to ICC/color.org HDR workshop, content not independently confirmed since the PDF fetch returned only binary structure)",
+        "quote": "Photography and graphic technology — Extended colour encodings for digital image storage, manipulation and interchange — Part 5: High dynamic range and wide colour gamut encoding for still images (HDR/WCG)",
+        "confidence": "secondary",
+        "angle": "superwhite-standards"
+      },
+      {
+        "claim": "scRGB (IEC 61966-2-2:2003) is an sRGB-primaries-compatible linear-light RGB space explicitly designed with an extended encoded range of roughly -0.5 to +7.5 (vs sRGB's 0-1), so that Y-tristimulus > 1.0 (brighter than diffuse white) and negative components (out-of-sRGB-gamut colours) are both representable. It is a real IEC standard aimed at 'extended dynamic range, extended colour gamut, extended bit precision' image editing/interchange, but current search turned up no evidence of active use inside mainstream 2024-2026 photo-editing export pipelines (Lightroom/Photoshop/Capture One) — it shows up mainly in Windows/HDR display APIs and older Microsoft imaging contexts, not as a photographer-facing export format.",
+        "source": "https://en.wikipedia.org/wiki/Scrgb ; https://www.iso.org/standard/35876.html (direct IEC PDF fetch failed — returned binary/unreadable content twice)",
+        "who": "Wikipedia article on scRGB (secondary, tertiary really — standard itself not independently confirmed since IEC PDF was not text-extractable)",
+        "quote": "scRGB features an extended linear value range for each channel from -0.5 to approximately +7.5... Y-tristimulus values greater than 1.0 represent values brighter than relative white",
+        "confidence": "hearsay",
+        "angle": "superwhite-standards"
+      },
+      {
+        "claim": "In BT.601/BT.709 8-bit studio (limited/legal) range video, black=16 and white=235 in Y'CbCr, and this convention explicitly reserves 'superwhite' headroom (code values 236-254) and footroom (1-15) for transient overshoot/undershoot — this is a real, named, historically load-bearing video convention with no direct still-photo analogue, since still formats (JPEG/TIFF/PNG) conventionally use full range (0-255 or 0-65535 mapped directly to black/white) with no reserved head/footroom codes.",
+        "source": "https://en.wikipedia.org/wiki/Rec._709 ; TIFF 6.0 spec discussion via https://www.verypdf.com/document/tiff6/pg_0087.htm (search-summarized)",
+        "who": "Wikipedia (Rec. 709 article, citing broadcast engineering convention); TIFF 6.0 spec commentary",
+        "quote": "black is (16,128,128) and white is (235,128,128)... code values 236 through 254 provide headroom... code values 1 through 15 provide footroom... TIFF specification does technically support headroom and footroom conventions [via ReferenceBlackWhite tags], [but] still images in practice typically use full range without the video-range constraints",
+        "confidence": "secondary",
+        "angle": "superwhite-standards"
+      },
+      {
+        "claim": "Floating-point DNG (spec since DNG 1.4, current DNG SDK 1.7.1 as of June 2026) supports 16/24/32-bit IEEE float samples via PhotometricInterpretation=LinearRaw (34892), which by construction has no fixed white/black clip point — values are only bounded by float range, not by an integer max. This is the raw-format equivalent of the TIFF/PSD 32-bit float path Lightroom uses for HDR compositing, i.e. DNG itself already permits an unbounded (non-clipped) linear master, independent of the gain-map/PQ display-referred formats.",
+        "source": "https://paulbourke.net/dataformats/dng/dng_spec_1_6_0_0.pdf (title/metadata confirmed via search summary, not independently re-fetched)",
+        "who": "Adobe (DNG Specification document, official)",
+        "quote": "DNG 1.4.0.0 and later support floating point image data, with floating point bit depths of 16, 24 and 32 bits per sample supported. Enhanced image data in DNG should always use a PhotometricInterpretation of 34892 (LinearRaw)",
+        "confidence": "secondary",
+        "angle": "superwhite-standards"
+      },
+      {
+        "claim": "In OpenEXR, 1.0 is not a clamp point — it is a nominal 100%-reflector reference — and pixel values well above 1.0 (fire, highlights, specular) and below 0 are normal and expected; this is the standard rationale for using EXR as a scene-referred 'working master' in HDR compositing, in contrast to PNG/JPEG which bake in a clipped display-referred copy.",
+        "source": "https://openexr.com/en/latest/TechnicalIntroduction.html (search-summarized) ; https://www.renderjuice.com/learn/rendering-fundamentals/what-the-hell-is-an-exr-file",
+        "who": "OpenEXR technical introduction (Academy Software Foundation, official docs) — quote is a paraphrase from search summary, not verbatim page text",
+        "quote": "In OpenEXR, the value 1.0 has no special significance (it is not a clamping limit, as in other formats); it roughly represents light coming from a 100% reflector... there are many brighter pixel values available to represent objects such as fire and highlights",
+        "confidence": "secondary",
+        "angle": "superwhite-standards"
+      },
+      {
+        "claim": "Negative pixel values in ACES/OpenEXR camera-derived imagery are a normal, expected artifact of (a) camera manufacturers centering sensor noise floor at zero (so ~half of black-level noise goes negative) and (b) colorimetric error from camera CFA spectral sensitivities not matching CIE colour-matching functions, causing some real colours to project outside the working gamut triangle into negative-channel territory — not corruption, and not intentional 'below-black' signaling.",
+        "source": "https://community.acescentral.com/t/negitive-pixel-values/586",
+        "who": "Scott Dyer, identified in the thread as speaking from an Academy/ACES technical perspective (ACEScentral community forum)",
+        "quote": "roughly half of all 'black' noise will make pixel values with negative components... camera sensors use color filter arrays with different spectral curves than standard color-matching functions, [producing] residual errors [that] cause pixels to project outside the RGB primary triangle",
+        "confidence": "secondary",
+        "angle": "superwhite-standards"
+      },
+      {
+        "claim": "The sRGB specification (IEC 61966-2-1) mandates that encoded R'/G'/B' values less than 0 or greater than 1 be clipped to 0 and 1 respectively — i.e. sRGB as standardized has no superwhite/sub-black reserved codes at all; any headroom in an 8- or 16-bit sRGB-tagged TIFF is purely a software convention, not part of the sRGB spec.",
+        "source": "https://www.color.org/srgb.pdf (title/existence confirmed; exact clipping clause via search-engine summary, not independently re-quoted from the primary PDF text)",
+        "who": "IEC/ICC (color.org hosts the sRGB spec reference; original standard is IEC 61966-2-1)",
+        "quote": "RL, GL or BL values less than 0 or greater than 1 are clipped to 0 and 1",
+        "confidence": "secondary",
+        "angle": "superwhite-standards"
+      },
+      {
+        "claim": "A conventional 16-bit unsigned-integer sRGB-tagged TIFF has exactly zero headroom/footroom paths: it can only encode [0, 65535] linearly mapped to sRGB [0,1], so any HDR gain-map, PQ/HLG, scRGB-extended, or ACES-negative/superwhite data must be clipped/discarded before it can be stored in that container — the only 'above-white or below-black' escape hatches available in still-photo tooling today are (i) switching container to 32-bit float TIFF/PSD or DNG LinearRaw, (ii) switching to EXR, (iii) switching to a PQ/HLG-tagged HEIF/AVIF container, or (iv) attaching an out-of-band ISO 21496-1 gain map alongside an SDR-clipped base image — a plain 16-bit integer sRGB TIFF itself offers none of these.",
+        "source": "Synthesized from: https://www.color.org/srgb.pdf (sRGB clip rule) + https://github.com/python-pillow/Pillow/issues/5248 and general TIFF 16-bit-clip discussion surfaced in search (no single primary source states this synthesis directly; it follows deductively from the clip rule plus the integer container's fixed [0,65535] range)",
+        "who": "Derived/synthesized from the sRGB spec clip rule (primary-source-backed) combined with the definitional properties of a 16-bit unsigned integer container (not itself a distinct citable claim)",
+        "quote": "16-bit integer values are clipped to the range 0-65535... any values that would represent color information outside the normal range (below black at 0 or above white at 65535) cannot be represented and are lost to clipping",
+        "confidence": "hearsay",
+        "angle": "superwhite-standards"
+      },
+      {
+        "claim": "LogLuv TIFF (a TIFF photometric encoding, not a new container) is a 1998-era precedent for HDR still-image encoding predating gain maps by ~25 years: 32-bit/pixel SGILOG encodes ~38 orders of magnitude of luminance at 0.3% steps using CIE Luv perceptual chromaticity, with a 24-bit/pixel variant covering ~5 orders of magnitude at 1.1% steps. No evidence was found of current support in Photoshop/Lightroom — appears to be effectively dead in mainstream photo-editing tooling today (radiance/HDR-rendering niche only).",
+        "source": "https://www.anyhere.com/gward/pixformat/tiffluv.html",
+        "who": "Gregory Ward Larson (Greg Ward), the format's original author, Silicon Graphics Inc.",
+        "quote": "38 orders of magnitude in 0.3% luminance steps [32-bit SGILOG]; approximately 5 orders of magnitude with 1.1% luminance steps [24-bit SGILOG24]",
+        "confidence": "primary-source",
+        "angle": "superwhite-standards"
+      }
+    ],
+    "crosscheck": {
+      "artifacts": {
+        "agreements": [
+          "White-balance-as-precondition is the strongest cross-corpus agreement pattern: darktable's segmentation, inpaint-opposed, guided-laplacians, and the old 'reconstruct in LCh' methods are all repeatedly said by the same primary author (Hanno Schwalm, darktable maintainer/algorithm co-author) to depend on correct WB/white-point input, with color-cast artifacts traced to WB error rather than to the reconstruction algorithm's own edge/boundary logic. This appears independently in: the 'removal-of-magenta-highlight-artefacts' thread ('all algorithms...working correct if...perfect correction coefficients in white balance'), GH issue #13849 comment ('evaluate hlr with WB set to as-shot'), and the 2024/2025 'hard edges' Play Raw thread (false clipping boundaries traced to imperfect EXIF-derived camera white point). A structurally independent corroboration comes from the lower-tier pixls.us 'help-with-highlight-reconstruction-of-clouds' thread (kofa/g-man, forum hearsay tier) reporting the same wrong-white-point mechanism for a blue-cyan cast, and again independently from RawTherapee's ecosystem: RawPedia states inpaint-opposed is 'sensitive to white balance settings, especially the green/tint channel,' and Beep6581 (RT founder) separately diagnoses a purple-fringe bug as partly caused by 'wrong raw white point causing false-color at true white clip.' Two independently developed codebases (darktable and RawTherapee/ART) and their most authoritative maintainers converge on the same root-cause class.",
+          "Segmentation-mode and opposed-mode (or Color-Propagation-mode) each fix the other's characteristic artifact but introduce a different one -- this exact tradeoff is documented independently in two unrelated codebases. In darktable, GH #13849 (reporter groutr, corroborated by maintainer Schwalm's own comment on the same issue) shows inpaint-opposed producing a magenta cast at a sky/cloud boundary, while switching to segmentation removes the magenta but introduces a harsh visible line exactly at a segment boundary; the darktable user manual (secondary, but consistent with the primary-source PR/issue material) independently documents opposed's neighbor-averaging as failing 'where clipped areas are adjacent to areas of a different color' -- the same generic mechanism. In RawTherapee, Beep6581 (project founder) and bug reporter pi99y document Color Propagation 'bleeding' purple/wrong color from a contaminated periphery, while Desmis (RT contributor who helped merge Inpaint Opposed) ranks Color Propagation as actually higher overall quality than Inpaint Opposed, stating Inpaint Opposed was made default mainly as a speed/robustness compromise rather than because it beats Color Propagation on quality. This is agreement at the mechanism level (boundary-adjacent color contamination vs. hard seams) even though the two projects' authors reach different default-algorithm conclusions.",
+          "Clipping-caused chroma error is universally attributed to the same physical/mathematical mechanism across academic and industry sources: when one or two color channels saturate before the others, the recorded RGB ratio misrepresents true hue/chromaticity, and the two textbook fixes are (a) desaturate to neutral/white or (b) infer the missing channel(s) from spatial or cross-channel correlation. This is stated independently and convergently by Zhang & Brainard 2004 (JOSA A, foundational academic treatment, per-pixel cross-channel Bayesian estimation), Rouf/Lau/Heidrich 2012 (UBC, boundary-Dirichlet harmonic hue interpolation), Xu/Doutre/Nasiopoulos 2011 (IEEE TVCG, region-based chroma correlation), and the darktable user manual's description of both the naive 'clip highlights'/'reconstruct in LCh' neutral-fallback strategy and the newer chroma-preserving methods. Four independent research/engineering lineages (two academic papers, one open-source project's documented naive baseline, one open-source project's advanced methods) agree on the same diagnosis and the same two-strategy taxonomy (desaturate-to-neutral vs. estimate-true-chroma).",
+          "Purple/magenta fringing at clipped-highlight boundaries is consistently attributed to sensor blue-channel clipping combined with spatial/optical chromatic aberration, and its visibility is gated by clipping itself (i.e., the fringe exists in unclipped data too but is masked by full dynamic range and only becomes visible once the highlight rolls to white). This is corroborated by two independent patents from competing companies -- Zoran/CSR (Tzur & Vakrat, US8582878B1) and Microsoft (Sing Bing Kang, US7577292B2) -- which independently formalize near-identical saturation-adjacency detection heuristics (a large B-R/B-G difference adjacent to near-saturated pixels), plus a DPReview/Wikipedia-sourced framing (weaker, hearsay tier) stating the same clipping-as-visibility-gate mechanism, plus darktable's architectural decision (secondary, user manual) to run raw chromatic-aberration correction pre-demosaic specifically to intercept this before highlight reconstruction sees it. Two independent patent-holders arriving at the same detection heuristic from different corporate R&D lineages is strong convergent grounding.",
+          "Highlight-reconstruction color-blending/channel-clipping is treated by every serious engineering source (Adobe, darktable, RawTherapee/ART) as a deliberately-designed, revisited algorithmic surface rather than an incidental side effect -- Eric Chan (Adobe Principal Scientist) states PV2012 specifically revisited highlight-recovery color-blending and per-channel clipping; darktable's PR/issue history (Schwalm, multiple merged PRs #12960, #14193, #17190, #20690) shows continual, explicit re-engineering of exactly this edge/boundary behavior; and RawTherapee's issue #6815 shows explicit, deliberate pipeline-ordering decisions (WB before reconstruction) specifically to serve the reconstruction algorithm's chroma correctness. Three organizationally independent codebases show the same pattern of active, documented engineering attention to this specific problem class."
+        ],
+        "conflicts": [
+          "Direct factual conflict on attribution of the segmentation algorithm's co-authorship: one finding states the segmentation method (PR #10716) was a collaboration between Hanno Schwalm and 'Iain' from the G'MIC team with 'no corroborating evidence' for a contributor named 'garagecoder,' calling that name 'unconfirmed/possibly conflated' (confidence: primary-source, sourced to the PR #10716 description itself). But a later finding cites the segbased.c source-code header itself as crediting 'Iain and garagecoder of the G'MIC team and Hanno Schwalm' (also confidence: primary-source, sourced to the actual shipped source file). The source-code header is the more authoritative and more direct primary artifact here (it is the algorithm's own current documentation, per this task's authority ranking of 'algorithm authors' at the top), and it directly contradicts the earlier finding's skepticism about garagecoder's involvement. This looks like an artifact of incomplete research at the time of the first finding (the PR description alone doesn't list all contributors that the eventual source comments do) rather than a genuine dispute between primary sources -- the source-code credit should be treated as superseding the PR-description-only claim.",
+          "Direct conflict on whether Rouf/Lau/Heidrich's harmonic-boundary-hue approach and the darktable/RT-style neighbor-chroma-averaging approaches are the 'same kind of thing' or fundamentally different: the Rouf et al. citation explicitly frames their Dirichlet/Laplace boundary-value method as solving a PDE for a smooth hue field, distinct in mechanism from simple 'averaging of adjacent pixels.' Yet the darktable manual (secondary) describes 'inpaint opposed' as literally 'an average of adjacent unclipped pixels,' and the Xu/Doutre/Nasiopoulos (secondary, academic) approach is described as 'region-based chroma estimation from surrounding unclipped pixels' -- closer in spirit to Rouf's approach than to simple averaging, but the findings set does not actually reconcile whether inpaint-opposed's 'average' is a crude discretization of the same underlying idea (boundary/neighbor-driven chroma estimation) or a genuinely cruder, PDE-free heuristic. This isn't a contradiction between named authors so much as an unresolved conflation risk the research left unaddressed -- worth flagging as a weakly-reconciled methodological distinction rather than a clean claim-vs-claim conflict.",
+          "Tension (not quite contradiction) on whether Color Propagation / boundary-chroma-bleeding methods are good or bad practice: Desmis (RT contributor, primary-source, direct participant in merging Inpaint Opposed) ranks Color Propagation as the single best-quality RT highlight method overall ('even if there are exceptions'). But Beep6581 (RT founder, primary-source, higher authority than Desmis as project lead) states flatly on the same bug tracker, regarding the same feature, 'don't use color propagation on such images at all... by definition it propagates colors into clipped areas... [which] suffer from purple fringing' -- a structural objection to the method's soundness, not just a note about exceptions. Same project, two named core contributors, materially different verdicts on the same algorithm's trustworthiness. Per the stated authority ranking (algorithm authors > manuals > forum hearsay) Beep6581, as founder/project lead making an architectural/structural claim about why the method is unsound, arguably outranks Desmis's quality ranking, which reads more like an empirical impression than a mechanism-level argument -- but both are primary-source-tier commentary from named core RT people, so this is a real unresolved conflict in the record rather than a grounding-tier tiebreak.",
+          "Mild tension on whether WB-order matters the same way across projects: RawTherapee's issue #6815 establishes that Inpaint Opposed performs WB BEFORE reconstruction (contradicting what the finding calls a 'naive assumption' from RawPedia's pipeline diagram implying otherwise), and this was significant enough to require a code fix (routing WB-change events through DEMOSAIC only for Coloropp). Meanwhile Aurelien Pierre (darktable, primary-source, filmic-module author) argues the OLD LCh method was 'conceptually wrong' precisely because it ran BEFORE the input color profile and white balance were applied, treating raw sensor RGB as if it were perceptual Lab/LCh color. Taken together, these are not strictly contradictory (different projects, different specific algorithms) but they point in opposite directions on whether pre-WB or post-WB processing is the correct/expected order for chroma-sensitive highlight reconstruction, and the finding set never states an explicit reconciling principle (e.g., 'raw-domain gradient methods must run pre-WB; color-space-based inpainting must run post-WB'). Worth flagging as an open architectural question rather than treating either claim as settling the other."
+        ],
+        "unsupported": [
+          "The 'DEAD END' finding about the pixls.us 'highlight-recovery-teaser' thread is explicitly self-flagged as not relevant to the segmentation method (it documents an earlier, unrelated gradient-continuation prototype) -- correctly downgraded by the research itself, but worth noting it was nonetheless cited elsewhere (in the segbased.c source-header finding) as the origin-story link for the segmentation work's design discussion. That later citation should be treated cautiously since this dead-end finding shows the thread doesn't actually contain that content.",
+          "The GH issue #12606 dead-end is explicitly marked as unable to retrieve substantive content and should not be used to support any claim about UI-design consensus or edge-artifact discussion -- correctly flagged 'secondary' by the research but really closer to no-evidence than secondary-source evidence.",
+          "kofa/g-man forum exchange on 'help-with-highlight-reconstruction-of-clouds' is explicitly tagged confidence: hearsay and involves unconfirmed-as-core-dev forum participants; it should not be treated as adding independent authoritative weight beyond 'a data point consistent with the WB-precondition pattern' -- it is corroborating in direction only, not in evidentiary strength.",
+          "The claim about ACR/Camera Raw's internal pipeline ORDER for Defringe vs. highlight recovery is explicitly a documented dead end/absence of evidence ('n/a' quote, 'searched...' source) -- this is correctly represented as a gap, not a claim, and should not be cited as if Adobe's ordering is known.",
+          "Jim Kasson's M11 highlight-recovery measurements and his ETTR-headroom 'turning pink' claim are both sourced from blog posts whose direct fetch failed (403) and were reconstructed only from search-engine snippets -- confidence is self-labeled 'secondary' but the actual verification chain is weak (paraphrase-of-paraphrase, not verified against the primary blog text). Treat the specific EV numbers (ETTR+0.5/1.5/2 EV) as plausible but not verified quotations.",
+          "The scRGB claim is self-labeled 'hearsay' and explicitly notes the IEC PDF could not be text-extracted, resting only on Wikipedia; additionally the finding admits no evidence was found of scRGB's actual use in current mainstream photo pipelines, so the historical-precedent framing is sound but any implied present-day relevance is unsupported.",
+          "The 16-bit-sRGB-TIFF-has-no-headroom-paths claim is explicitly self-labeled 'hearsay' and described by the research itself as a deductive synthesis rather than something any single source states -- it is probably true as a logical deduction from the sRGB clip rule plus integer container bounds, but it is not an attested fact and shouldn't be cited as if a standards body said it.",
+          "The Adobe gain-map formula (recovered HDR = (SDR+offset)*exp2(...)) is sourced to a Google/Android implementation doc as a proxy for Eric Chan's original Adobe PDF, which itself failed to fetch (403) -- confidence 'secondary' is reasonable but this is a second-hand implementation's rendering of a spec, not the spec itself; exact formula details should be re-verified against the original Adobe gain-map spec before being treated as normative.",
+          "The ISO TS 22028-5 finding cites a color.org presentation PDF 'title/context only' with explicit acknowledgment the PDF body wasn't text-extractable -- the attribution to 'Nicolas Bonnier' and any specific content beyond the standard's title/scope should be treated as unconfirmed.",
+          "The Adobe Lightroom Journal Defringe two-mode (All Edges / Highlight Edges) claim could not be fetched directly (TLS/cert failure on the primary blogs.adobe.com source) and rests on secondary tutorial-site corroboration (Photofocus, ACDSee docs) -- reasonable secondary-tier grounding but not verified against Adobe's own text.",
+          "The LogLuv TIFF finding is well-sourced to the format's original author (Greg Ward, primary-source tier) for the technical specification, but the claim that it is 'effectively dead in mainstream photo-editing tooling today' is an inference from absence of search hits, not a positive finding -- should be treated as a plausible-but-unverified absence claim, not confirmed dead status.",
+          "Scott Dyer's ACEScentral forum post on negative pixel values is attributed 'secondary' but is really a single forum post from one named individual on a community forum (not an official ACES/Academy publication) -- treat as a knowledgeable individual's explanation rather than an official standards position, despite the useful technical content."
+        ]
+      },
+      "superwhite": {
+        "agreements": [
+          "Cross-tool convergence on the physical root cause: clipping of one or more channels destroys true hue/chroma information, independently stated for darktable (Zhang & Brainard 2004 JOSA A; Rouf/Lau/Heidrich 2012 UBC), RawTherapee/ART (RawPedia Color Propagation docs; Beep6581 issue #3311), and general optics (patents US8582878B1 Zoran/CSR, US7577292B2 Microsoft; DPReview/Wikipedia synthesis) — at least 4 independent source families agree clipping-adjacent color contamination is the mechanism.",
+          "White-balance/white-point correctness as a precondition for correct highlight reconstruction is independently asserted by darktable's Hanno Schwalm (multiple threads: 'Removal of magenta highlight artefacts' discuss.pixls.us/32629, GitHub #13849 comments) AND independently by RawTherapee contributors in issue #3311/#6815 (iliasg's white-level-4094-vs-4095 fix; Desmis/Lawrence37 confirming WB is applied before Inpaint Opposed specifically because the algorithm is WB-sensitive) AND by the pixls.us cloud-tint thread (kofa/g-man, though that one is hearsay-tier) — three separate projects/threads agree WB error is a recurring confound in evaluating chroma-reconstruction artifacts.",
+          "Boundary/neighbor-based chroma estimation ('bleed' or 'propagate' color from unclipped surround into clipped region) is documented as the shared mechanism — and shared failure mode — across darktable segmentation/inpaint-opposed (user manual, PR #10716, PR #12960), RawTherapee Color Propagation (RawPedia, issue #3311), and the academic lineage (Rouf et al. 2012 Laplace/Dirichlet boundary hue interpolation; Xu/Doutre/Nasiopoulos 2011 region-based chroma correction; Elboher & Werman Color Lines) — at least 3 independent implementations plus 3 academic papers converge on 'estimate chroma from unclipped neighbors' as the dominant non-neutral reconstruction strategy, with the same 'wrong-color-bleed-in' artifact reported in both darktable (issue #13849 magenta cast, issue #12399 boundary exclusion) and RawTherapee (issue #3311 purple fringing) camps.",
+          "Segment/region-boundary hard edges as a distinct, separate artifact from color-bleed/magenta-cast is corroborated twice independently: GitHub #13849 (groutr's report: switching to segmentation removed magenta but produced a harsh boundary line at the segment edge) and GitHub #12399 (MStraeten's report of bounded clipped areas excluded from correction at default 'combine' settings, producing boundary artifacts) — both point to the same underlying segmentation/morphology parameter space (combine, candidating) as the lever, and PR #12960 and the user-manual 'candidating' documentation agree on the parameter's function.",
+          "Purple/magenta fringing being gated by clipping severity (invisible until the highlight clips to white) is stated by two independent lineages: the patent literature (Zoran/CSR US8582878B1 explicitly builds its Saturation-Score detector on 'purple fringing mostly occurs in pixels adjacent to saturated pixels', and Microsoft's US7577292B2 independently defines candidate fringe pixels via near-saturation adjacency) and the qualitative optics framing (DPReview/Wikipedia synthesis) — patent-level and optics-level sources agree on the same adjacency-to-saturation precondition.",
+          "Multiple independent 'raw, pre-color-management' architecture arguments agree that some clipped-highlight corrections must happen before white balance/input-profile are applied: darktable's Aurelien Pierre (issue #2086, issue #11587) argues LCh-domain correction is invalid post-demosaic/pre-profile, and separately that magenta detection is only reliable pre-profile; darktable's guided-laplacians docs independently state the module is designed to be 'immune to white-balance discrepancies' by working on raw data; RawTherapee's Desmis/Lawrence37 (issue #6815) independently confirm Inpaint Opposed needs WB applied first (opposite ordering claim but same underlying premise that WB-timing relative to reconstruction is architecturally significant) — three separate engineering teams converge on WB-ordering being a first-class design axis for highlight reconstruction, even though they land on different orderings.",
+          "Two independent format specifications agree that 1.0/white is not a hard clamp in scene-referred/HDR containers: OpenEXR technical docs (1.0 as nominal 100% reflector, not a clamp) and the DNG spec's LinearRaw/float photometric interpretation (unbounded by construction) — both corroborate that 'unbounded linear master' is an established still-image engineering pattern, not video-exclusive.",
+          "Negative/out-of-gamut and superwhite values being a normal, non-corrupt artifact of camera colorimetry (not signal error) is stated independently for ACES/EXR (ACEScentral thread, Scott Dyer) and implied structurally by the scRGB standard's explicit negative-value allowance (IEC 61966-2-2) — two independent sources agree extended range must accommodate real-world out-of-triangle camera signals, not just brightness overshoot."
+        ],
+        "conflicts": [
+          "Direct, explicit conflict on which highlight-reconstruction method produces the BEST overall image quality: RawTherapee's Desmis (issue #6815) ranks Color Propagation > Inpaint Opposed > Blend on quality and states Inpaint Opposed was made default mainly for a quality/speed compromise, NOT because it's better — while darktable's own trajectory (PR #10716, #12960, #17190, #20690, and Schwalm's repeated troubleshooting posts) treats inpaint-opposed/segmentation as the actively-improved, most-trusted default path, with the older LCh method explicitly declared 'broken from scratch' by Aurelien Pierre (issue #2086) and RawTherapee's own Color Propagation independently declared unsafe on clipped-adjacent-to-different-color images by Beep6581 himself ('don't use color propagation on such images... by definition it propagates colors... suffer from purple fringing', issue #3311). This is a real cross-project conflict: the RawTherapee ranking (best=Color Propagation) is directly contradicted by RawTherapee's own project founder's warning against using that same method on the artifact-prone case, and by darktable's abandonment of the equivalent neighbor-bleed strategy as default. The Desmis quality ranking looks weaker-grounded (single-source, and self-contradicted within the same repo's issue tracker) versus the Beep6581/Schwalm consensus that boundary-color-bleed methods are failure-prone near clipped/differently-colored boundaries.",
+          "Conflicting account of WB-vs-reconstruction pipeline ORDERING across engines, though not necessarily contradictory once read carefully: RawTherapee's Inpaint Opposed applies WB BEFORE reconstruction (Desmis/Lawrence37, issue #6815 — confirmed by a refresh-mapper code fix), whereas darktable's guided-laplacians is designed to run without needing correct WB at all (operates pre-color-management, 'immune to white-balance discrepancies'), and darktable's LCh/segmentation methods per Aurelien Pierre operate 'before demosaicing... before the input colour profile is applied' yet Schwalm insists correct WB coefficients are still required as input for correct results (discuss.pixls.us/32629) — i.e. within darktable itself there is tension between 'designed to not need WB' (guided laplacians) and 'requires perfect WB as a precondition' (Schwalm's statements about the other algorithms in the same module). This is not a hard logical contradiction (different algorithms, different requirements) but the findings do not clearly reconcile why darktable ships multiple highlight-recon algorithms with opposite WB-dependency philosophies, and no source directly contrasts them against each other.",
+          "Minor internal conflict on segmentation's own tradeoffs: PR #10716/#12960/user-manual frame segmentation as the more sophisticated, boundary-aware, 'checks for valid colors at the borders' algorithm (Schwalm, 'Highlight reconstruction - hard edges' thread) recommending it for large blown-out areas — yet issue #13849 shows segmentation trading one artifact (magenta cast) for a different, clearly visible one (hard segment-boundary line), and issue #12399 shows segmentation's default parameters actively excluding valid bounded regions from correction. The 'segmentation is more robust/border-aware' framing from Schwalm's advocacy posts is in tension with the concrete bug reports showing segmentation's boundary handling is itself fragile and parameter-sensitive (combine, candidating) — the advocacy claims read as somewhat oversold relative to the bug-tracker evidence from the same maintainer's own repo.",
+          "Unresolved/unreconciled naming conflict: PR #10716 explicitly attributes the segmentation method's origin to Hanno Schwalm + 'Iain' from G'MIC with no mention of 'garagecoder', and states 'no corroborating evidence' was found for garagecoder's involvement (angle: pixls-segmentation) — but a later finding (angle: dt-github) cites the segbased.c source header as crediting 'Iain and garagecoder of the G'MIC team AND Hanno Schwalm.' These two findings directly disagree on whether garagecoder was involved; the source-code header (primary-source, closer to ground truth than a PR description) should probably be weighted over the earlier PR-based 'no corroborating evidence' claim, but the set never flags or resolves this contradiction explicitly — it is a real conflict between two primary-source claims in the same finding set."
+        ],
+        "unsupported": [
+          "The Rouf/Lau/Heidrich mechanism description ('sensor clipping destroys hue... DCRAW fails to correct') is sourced to blog.kasson.com but that URL 403'd — the finding admits it's actually corroborated only via the academic PDF, meaning the Kasson-specific attribution is unconfirmed hearsay riding on a real primary source; treat the blog.kasson.com claim itself as unverified.",
+          "Both Jim Kasson blog findings (M11 ETTR+0.5/1.5/2EV highlight-recovery progression, and the 'blue clipping causes pink' ETTR headroom claim) are explicitly reconstructed from WebSearch snippets because direct fetch was blocked (403) — single-source, unverified against primary text, self-labeled 'secondary' but functionally closer to hearsay since the actual page content was never read.",
+          "The pixls.us cloud-tint thread (kofa/g-man, 'help-with-highlight-reconstruction-of-clouds') is explicitly labeled confidence:hearsay and involves unconfirmed forum participants (not verified core devs) — should not be used to support any claim about darktable's official position, only as anecdotal corroboration.",
+          "The RawPedia Defringe documentation claim is sourced via 'search-engine synopsis' because the page itself was unreachable (hosting outage) — single-source, unverified against primary text despite being labeled 'secondary'.",
+          "The scRGB claim (IEC 61966-2-2 range -0.5 to +7.5) rests on Wikipedia plus a 403'd IEC PDF — self-labeled hearsay, single tertiary source, no primary standard text actually read.",
+          "The 16-bit sRGB TIFF 'zero headroom' synthesis is explicitly self-described as a deductive synthesis with 'no single primary source states this directly' — labeled hearsay by the finding itself; treat as reasoning-by-the-researcher rather than a sourced fact, though the deduction itself is logically sound given the sRGB clip-rule primary source.",
+          "Adobe's internal pipeline ordering for Defringe vs. highlight recovery is an explicit dead-end/absence-of-evidence finding — correctly flagged as a gap, not a claim, but worth noting no source in the entire set actually answers the ACR-specific ordering question that parallel darktable/RT findings do answer for their own engines.",
+          "The Adobe gain-map math finding (recovered HDR formula) relies on Eric Chan's PDF failing to fetch (403), so the actual formula is corroborated only via Google's Android implementation doc describing Adobe's scheme secondhand — single independently-readable source for a fairly precise mathematical claim.",
+          "ISO/TS 22028-5 content and the Nicolas Bonnier ICC presentation are sourced to a PDF whose body 'was not text-extractable' — the claim rests on the standard's title/registry metadata only, not verified content.",
+          "The LogLuv TIFF finding, while primary-source (Greg Ward's own page), includes an unverified secondary claim that it has 'no evidence of current support in Photoshop/Lightroom' — this is an absence-of-evidence claim (nobody searched Adobe's actual format-support matrix), so the 'effectively dead' characterization is weakly supported.",
+          "The GitHub PR #20690 and PR #17190 technical claims (3x3 photosite geometry fix, calc_refavg border bug) are single-source (only the PR description itself), with no corroborating issue reports or independent testing cited to confirm the described bugs were actually user-visible before the fix — plausible given the author is the maintainer, but uncorroborated by a second party."
+        ]
+      }
+    }
+  },
+  "workflowProgress": [
+    {
+      "type": "workflow_phase",
+      "index": 1,
+      "title": "Search"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 2,
+      "title": "CrossCheck"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 1,
+      "label": "search:pixls-segmentation",
+      "phaseIndex": 1,
+      "phaseTitle": "Search",
+      "agentId": "a7b1fb7d310e2cbb1",
+      "model": "claude-sonnet-5",
+      "state": "done",
+      "startedAt": 1783352375111,
+      "queuedAt": 1783352375094,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "promptPreview": "You are researching for a raw-photo-pipeline engineering team. Use WebSearch and WebFetch. Return STRUCTURED findings only — each finding = one claim with source URL, author identity, short quote, and confidence tier (primary-source = the author/paper itself; secondary = docs/manuals; hearsay = forum third-party). Report dead ends honestly. Do not editorialize; the synthesis happens elsewhere. 6-1…",
+      "lastProgressAt": 1783352624762,
+      "tokens": 66345,
+      "toolCalls": 33,
+      "durationMs": 249649,
+      "resultPreview": "{\"findings\":[{\"claim\":\"DEAD END: The pixls.us thread 'highlight recovery teaser' (discuss.pixls.us/t/highlight-recovery-teaser/17670, dated ~April 2020) is NOT about the segmentation-based method — it documents Iain's earlier gradient-continuation highlight recovery prototype ('When all three channels are clipped highlights are rebuilt by continuing the gradient from the surrounding area'). It pre…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 2,
+      "label": "search:dt-github",
+      "phaseIndex": 1,
+      "phaseTitle": "Search",
+      "agentId": "a6ce26cd818b4abaa",
+      "model": "claude-sonnet-5",
+      "state": "done",
+      "startedAt": 1783352375112,
+      "queuedAt": 1783352375094,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "promptPreview": "You are researching for a raw-photo-pipeline engineering team. Use WebSearch and WebFetch. Return STRUCTURED findings only — each finding = one claim with source URL, author identity, short quote, and confidence tier (primary-source = the author/paper itself; secondary = docs/manuals; hearsay = forum third-party). Report dead ends honestly. Do not editorialize; the synthesis happens elsewhere. 6-1…",
+      "lastProgressAt": 1783352614670,
+      "tokens": 71283,
+      "toolCalls": 22,
+      "durationMs": 239558,
+      "resultPreview": "{\"findings\":[{\"claim\":\"Maintainer Hanno Schwalm's core explanation for residual magenta color casts in 'inpaint opposed' highlight reconstruction: not enough blue and green channel signal gets recovered relative to red, and this cannot be fully controlled in all cases.\",\"source\":\"https://github.com/darktable-org/darktable/issues/13849#issuecomment-1458586937\",\"who\":\"jenshannoschwalm (Hanno Schwalm…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 3,
+      "label": "search:rt-art-opposed",
+      "phaseIndex": 1,
+      "phaseTitle": "Search",
+      "agentId": "af01759f0a2df0720",
+      "model": "claude-sonnet-5",
+      "state": "done",
+      "startedAt": 1783352375112,
+      "queuedAt": 1783352375094,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "promptPreview": "You are researching for a raw-photo-pipeline engineering team. Use WebSearch and WebFetch. Return STRUCTURED findings only — each finding = one claim with source URL, author identity, short quote, and confidence tier (primary-source = the author/paper itself; secondary = docs/manuals; hearsay = forum third-party). Report dead ends honestly. Do not editorialize; the synthesis happens elsewhere. 6-1…",
+      "lastProgressAt": 1783352585585,
+      "tokens": 58102,
+      "toolCalls": 28,
+      "durationMs": 210473,
+      "resultPreview": "{\"findings\":[{\"claim\":\"RawTherapee's Exposure tool documents four highlight-reconstruction methods; 'Luminance Recovery' explicitly produces neutral-gray detail with no color restoration, while 'Color Propagation' explicitly restores color by 'bleeding' the surrounding known color into the missing clipped area — i.e. it extends local tint into clipped regions rather than rolling to neutral. RawPed…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 4,
+      "label": "search:academic-recon",
+      "phaseIndex": 1,
+      "phaseTitle": "Search",
+      "agentId": "a5031939d52f62058",
+      "model": "claude-sonnet-5",
+      "state": "done",
+      "startedAt": 1783352375113,
+      "queuedAt": 1783352375094,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "promptPreview": "You are researching for a raw-photo-pipeline engineering team. Use WebSearch and WebFetch. Return STRUCTURED findings only — each finding = one claim with source URL, author identity, short quote, and confidence tier (primary-source = the author/paper itself; secondary = docs/manuals; hearsay = forum third-party). Report dead ends honestly. Do not editorialize; the synthesis happens elsewhere. 6-1…",
+      "lastProgressAt": 1783352584061,
+      "tokens": 64122,
+      "toolCalls": 25,
+      "durationMs": 208948,
+      "resultPreview": "{\"findings\":[{\"claim\":\"Zhang & Brainard formalize saturated-pixel restoration as Bayesian estimation: the true value of a saturated channel is estimated from the non-saturated channels at the same pixel via a multivariate normal prior capturing cross-channel correlation, with the posterior explicitly truncated at the saturation level (Eq. 4/9). This is the foundational treatment of 'partially satu…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 5,
+      "label": "search:purple-fringing",
+      "phaseIndex": 1,
+      "phaseTitle": "Search",
+      "agentId": "afee2a1095e798c2b",
+      "model": "claude-sonnet-5",
+      "state": "done",
+      "startedAt": 1783352375113,
+      "queuedAt": 1783352375094,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "promptPreview": "You are researching for a raw-photo-pipeline engineering team. Use WebSearch and WebFetch. Return STRUCTURED findings only — each finding = one claim with source URL, author identity, short quote, and confidence tier (primary-source = the author/paper itself; secondary = docs/manuals; hearsay = forum third-party). Report dead ends honestly. Do not editorialize; the synthesis happens elsewhere. 6-1…",
+      "lastProgressAt": 1783352671096,
+      "tokens": 54551,
+      "toolCalls": 26,
+      "durationMs": 295983,
+      "resultPreview": "{\"findings\":[{\"claim\":\"Zoran/CSR/Qualcomm patent explicitly identifies clipping as the root physical cause of purple fringing: the sensor's blue channel exceeds dynamic range and clips, producing the fringe, and its detection algorithm's Saturation Score (SAT) is built specifically on the premise that 'purple fringing mostly occurs in pixels adjacent to saturated pixels.' Detection combines chroma…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 6,
+      "label": "search:acr-behaviour",
+      "phaseIndex": 1,
+      "phaseTitle": "Search",
+      "agentId": "a43bb97c4fe3d3256",
+      "model": "claude-sonnet-5",
+      "state": "done",
+      "startedAt": 1783352375113,
+      "queuedAt": 1783352375094,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "promptPreview": "You are researching for a raw-photo-pipeline engineering team. Use WebSearch and WebFetch. Return STRUCTURED findings only — each finding = one claim with source URL, author identity, short quote, and confidence tier (primary-source = the author/paper itself; secondary = docs/manuals; hearsay = forum third-party). Report dead ends honestly. Do not editorialize; the synthesis happens elsewhere. 6-1…",
+      "lastProgressAt": 1783352873352,
+      "tokens": 73965,
+      "toolCalls": 48,
+      "durationMs": 498238,
+      "resultPreview": "{\"findings\":[{\"claim\":\"Sensor/channel clipping physically destroys hue information: when one or two Bayer color channels saturate before the others, the recorded RGB ratio no longer represents the true hue, and simple reconstruction methods (e.g. DCRAW's) that try to patch this in the spatial domain produce discoloration artifacts — the underlying reason raw converters have to choose some conventi…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 7,
+      "label": "search:superwhite-standards",
+      "phaseIndex": 1,
+      "phaseTitle": "Search",
+      "agentId": "a05f1b14192bcdb10",
+      "model": "claude-sonnet-5",
+      "state": "done",
+      "startedAt": 1783352375113,
+      "queuedAt": 1783352375095,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "Several direct-fetch attempts failed and are flagged inline…",
+      "promptPreview": "You are researching for a raw-photo-pipeline engineering team. Use WebSearch and WebFetch. Return STRUCTURED findings only — each finding = one claim with source URL, author identity, short quote, and confidence tier (primary-source = the author/paper itself; secondary = docs/manuals; hearsay = forum third-party). Report dead ends honestly. Do not editorialize; the synthesis happens elsewhere. 6-1…",
+      "lastProgressAt": 1783352793325,
+      "tokens": 55251,
+      "toolCalls": 25,
+      "durationMs": 418212,
+      "resultPreview": "{\"findings\":[{\"claim\":\"ISO 21496-1:2025 standardizes gain-map metadata for HDR/SDR image conversion, unifying previously fragmented Adobe/Google/Apple gain-map schemes; Apple and Google announced convergent support in 2024 (macOS 15, iOS 18, Android).\",\"source\":\"https://www.iso.org/standard/86775.html ; https://www.androidauthority.com/google-apple-hdr-photo-standard-3495035/\",\"who\":\"ISO (standard…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 8,
+      "label": "crosscheck:artifacts",
+      "phaseIndex": 2,
+      "phaseTitle": "CrossCheck",
+      "agentId": "a6b71f2302af948e9",
+      "model": "claude-sonnet-5",
+      "state": "done",
+      "startedAt": 1783352873372,
+      "queuedAt": 1783352873354,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "promptPreview": "Compare these research findings against each other for the topic \"chroma contamination at clipped-highlight edges in reconstruction algorithms\". Identify agreement patterns, direct conflicts, and weakly-sourced claims. Judge grounding by confidence tier and author authority (algorithm authors > manuals > forum hearsay). FINDINGS:\n[\n {\n  \"claim\": \"DEAD END: The pixls.us thread 'highlight recovery t…",
+      "lastProgressAt": 1783353036371,
+      "tokens": 59210,
+      "toolCalls": 3,
+      "durationMs": 162999,
+      "resultPreview": "{\"agreements\":[\"White-balance-as-precondition is the strongest cross-corpus agreement pattern: darktable's segmentation, inpaint-opposed, guided-laplacians, and the old 'reconstruct in LCh' methods are all repeatedly said by the same primary author (Hanno Schwalm, darktable maintainer/algorithm co-author) to depend on correct WB/white-point input, with color-cast artifacts traced to WB error rathe…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 9,
+      "label": "crosscheck:superwhite",
+      "phaseIndex": 2,
+      "phaseTitle": "CrossCheck",
+      "agentId": "a5feb5ec3797aea12",
+      "model": "claude-sonnet-5",
+      "state": "done",
+      "startedAt": 1783352873372,
+      "queuedAt": 1783352873355,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "promptPreview": "Compare these research findings against each other for the topic \"super-white/HDR headroom encoding in still-photo formats vs video\". Identify agreement patterns, direct conflicts, weakly-sourced claims. FINDINGS:\n[\n {\n  \"claim\": \"DEAD END: The pixls.us thread 'highlight recovery teaser' (discuss.pixls.us/t/highlight-recovery-teaser/17670, dated ~April 2020) is NOT about the segmentation-based met…",
+      "lastProgressAt": 1783352935677,
+      "tokens": 57350,
+      "toolCalls": 1,
+      "durationMs": 62305,
+      "resultPreview": "{\"agreements\":[\"Cross-tool convergence on the physical root cause: clipping of one or more channels destroys true hue/chroma information, independently stated for darktable (Zhang & Brainard 2004 JOSA A; Rouf/Lau/Heidrich 2012 UBC), RawTherapee/ART (RawPedia Color Propagation docs; Beep6581 issue #3311), and general optics (patents US8582878B1 Zoran/CSR, US7577292B2 Microsoft; DPReview/Wikipedia s…"
+    }
+  ],
+  "totalTokens": 560179,
+  "totalToolCalls": 211
+}
