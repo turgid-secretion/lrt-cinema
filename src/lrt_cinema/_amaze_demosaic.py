@@ -105,6 +105,25 @@ def _pad(a: np.ndarray) -> np.ndarray:
     return np.pad(a, _PAD, mode="reflect").astype(np.float32)
 
 
+def _backend() -> str:
+    """Resolve the execution backend: 'numba' (production; bit-exact twin,
+    ~50x faster) unless numba is unavailable or LRT_CINEMA_AMAZE=numpy."""
+    import os
+
+    choice = os.environ.get("LRT_CINEMA_AMAZE", "auto")
+    if choice == "numpy":
+        return "numpy"
+    try:
+        from . import _amaze_numba
+        if _amaze_numba.NUMBA_OK:
+            return "numba"
+    except Exception:
+        pass
+    if choice == "numba":
+        raise RuntimeError("LRT_CINEMA_AMAZE=numba but numba is unavailable")
+    return "numpy"
+
+
 def amaze_demosaic(cfa: np.ndarray, pattern: str,
                    clip_pt: float = 1.0) -> np.ndarray:
     """AMaZE Bayer demosaic. `cfa` (H, W) float in [0, ~1] (balanced,
@@ -125,7 +144,11 @@ def amaze_demosaic(cfa: np.ndarray, pattern: str,
     if flip_c:
         work = work[:, ::-1]
 
-    rgb = _amaze_rggb(work, np.float32(clip_pt))
+    if _backend() == "numba":
+        from ._amaze_numba import _amaze_rggb_fast
+        rgb = _amaze_rggb_fast(np.ascontiguousarray(work), np.float32(clip_pt))
+    else:
+        rgb = _amaze_rggb(work, np.float32(clip_pt))
 
     if flip_c:
         rgb = rgb[:, ::-1, :]

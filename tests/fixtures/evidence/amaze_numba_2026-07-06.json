@@ -1,0 +1,46 @@
+{
+ "gym": {
+  "frame_mp": 24.32,
+  "parity_max_abs_diff": 0.0,
+  "numba_s": [
+   0.3452,
+   0.3442,
+   0.3466,
+   0.3692,
+   0.3308
+  ],
+  "numba_best_s": 0.3308,
+  "numpy_s": 17.386,
+  "speedup": 52.6
+ },
+ "chain_identity": {
+  "diagbars": {
+   "scored": {
+    "de_mean": 8.732127346186896,
+    "de_p95": 33.44123775241061,
+    "de_max": 63.82045879538653,
+    "dl_mean": 3.765096037911679,
+    "dc_mean": 15.609512466204349,
+    "falsecolor_mean": 15.612278944939424,
+    "falsecolor_p99": 113.14656503146617
+   },
+   "pinned_max_abs_delta": 0.0
+  },
+  "clipbars": {
+   "scored": {
+    "de_mean": 0.640338664035736,
+    "de_p95": 1.27391913636661,
+    "de_max": 1.27391913636661,
+    "dl_mean": 0.26037433383271774,
+    "dc_mean": 0.43687091247553306,
+    "clipzone_dc_mean": 0.8691310501492306,
+    "clipzone_de_mean": 1.2739191363666431,
+    "falsecolor_mean": 0.006293667460945194,
+    "falsecolor_p99": 0.008498487609448548,
+    "clipzone_chroma_mean": 0.008498487609448708,
+    "clipzone_chroma_p99": 0.008498487609448548
+   },
+   "pinned_max_abs_delta": 0.0
+  }
+ }
+}
