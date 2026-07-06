@@ -502,7 +502,7 @@ def _bayer_pattern_str(raw_pattern, color_desc) -> str | None:
 # demosaic. All three preserve over-range (>1) input (verified), so any future
 # mosaic-domain highlight reconstruction survives them (placement decided by
 # the architecture lock — docs/REFERENCE_PIPELINE.md).
-_CFA_DEMOSAICS = ("rcd", "mlri", "menon")
+_CFA_DEMOSAICS = ("rcd", "mlri", "menon", "amaze")
 
 
 def _extract_cfa(raw) -> tuple[np.ndarray, str]:
@@ -619,6 +619,25 @@ def _cfa_demosaic(raw, method: str, wb_mul: np.ndarray | None = None,
         # Floor ≥0 to match the RCD/MLRI convention (directional demosaics can ring
         # slightly negative at edges); NO top clip — preserve highlight headroom.
         rgb = np.maximum(out, np.float32(0.0))
+    elif method == "amaze":
+        # Clean-room AMaZE (slot-4 diagonal-detail port, 2026-06-12).
+        # AMaZE assumes a single uniform clip point (dt runs it after its
+        # highlights module for the same reason) and clamps its output to
+        # [0, 1] — it is the DISPLAY-path (clip-mode) demosaic. The
+        # headroom master path keeps menon.
+        if highlights != "clip" and wb_mul is not None:
+            import sys
+            sys.stderr.write(
+                "warning: demosaic 'amaze' requires clip-mode highlight "
+                "conditioning; using 'menon' for the headroom path.\n")
+            from colour_demosaicing import demosaicing_CFA_Bayer_Menon2007
+            rgb = np.maximum(np.asarray(
+                demosaicing_CFA_Bayer_Menon2007(cfa, pattern),
+                dtype=np.float32), np.float32(0.0))
+        else:
+            from lrt_cinema._amaze_demosaic import amaze_demosaic
+            clip_pt = float(wb_mul.min()) if wb_mul is not None else 1.0
+            rgb = amaze_demosaic(cfa, pattern, clip_pt=clip_pt)
     else:
         raise ValueError(f"unknown CFA demosaic method {method!r}")
     return rgb

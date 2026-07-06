@@ -48,10 +48,11 @@ def test_demosaic_algos_table_excludes_rcd():
 
 def test_cfa_demosaics_table():
     """The CFA-domain methods (run on our extracted mosaic, not libraw postprocess)
-    are rcd/mlri/menon — disjoint from the libraw-algo table, routed via _cfa_demosaic."""
+    are rcd/mlri/menon/amaze — disjoint from the libraw-algo table, routed via
+    _cfa_demosaic (amaze added 2026-06-12, the slot-4 diagonal port)."""
     from lrt_cinema.pipeline import _CFA_DEMOSAICS
 
-    assert _CFA_DEMOSAICS == ("rcd", "mlri", "menon")
+    assert _CFA_DEMOSAICS == ("rcd", "mlri", "menon", "amaze")
     for m in _CFA_DEMOSAICS:
         assert m not in _DEMOSAIC_ALGOS
 

@@ -1,0 +1,56 @@
+{
+ "diagbars": {
+  "de_mean": 8.732,
+  "de_p95": 33.441,
+  "de_max": 63.82,
+  "dl_mean": 3.765,
+  "dc_mean": 15.61,
+  "falsecolor_mean": 15.612,
+  "falsecolor_p99": 113.147
+ },
+ "bars": {
+  "de_mean": 0.0,
+  "de_p95": 0.0,
+  "de_max": 0.0,
+  "dl_mean": 0.0,
+  "dc_mean": 0.0,
+  "falsecolor_mean": 0.006,
+  "falsecolor_p99": 0.008
+ },
+ "zoneplate": {
+  "de_mean": 0.489,
+  "de_p95": 3.037,
+  "de_max": 20.344,
+  "dl_mean": 0.097,
+  "dc_mean": 0.411,
+  "falsecolor_mean": 0.422,
+  "falsecolor_p99": 5.271
+ },
+ "slantededge": {
+  "de_mean": 0.0,
+  "de_p95": 0.0,
+  "de_max": 27.09,
+  "dl_mean": 0.0,
+  "dc_mean": 0.001,
+  "falsecolor_mean": 0.007,
+  "falsecolor_p99": 0.008
+ },
+ "noisebars": {
+  "de_mean": 6.494,
+  "de_p95": 21.404,
+  "de_max": 89.481,
+  "dl_mean": 1.796,
+  "dc_mean": 8.395,
+  "falsecolor_mean": 8.39,
+  "falsecolor_p99": 48.684
+ },
+ "clipbars": {
+  "de_mean": 0.64,
+  "de_p95": 1.274,
+  "de_max": 1.274,
+  "dl_mean": 0.26,
+  "dc_mean": 0.437,
+  "falsecolor_mean": 0.006,
+  "falsecolor_p99": 0.008
+ }
+}

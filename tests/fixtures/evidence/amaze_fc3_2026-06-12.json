@@ -1,0 +1,38 @@
+{
+ "diagbars": {
+  "de_mean": 5.756,
+  "de_p95": 31.471,
+  "de_max": 76.741,
+  "dl_mean": 2.848,
+  "dc_mean": 7.217,
+  "falsecolor_mean": 7.22,
+  "falsecolor_p99": 82.094
+ },
+ "noisebars": {
+  "de_mean": 4.022,
+  "de_p95": 13.808,
+  "de_max": 85.509,
+  "dl_mean": 1.443,
+  "dc_mean": 4.15,
+  "falsecolor_mean": 4.146,
+  "falsecolor_p99": 25.554
+ },
+ "bars": {
+  "de_mean": 0.0,
+  "de_p95": 0.0,
+  "de_max": 0.0,
+  "dl_mean": 0.0,
+  "dc_mean": 0.0,
+  "falsecolor_mean": 0.006,
+  "falsecolor_p99": 0.008
+ },
+ "slantededge": {
+  "de_mean": 0.0,
+  "de_p95": 0.0,
+  "de_max": 3.528,
+  "dl_mean": 0.0,
+  "dc_mean": 0.0,
+  "falsecolor_mean": 0.007,
+  "falsecolor_p99": 0.008
+ }
+}

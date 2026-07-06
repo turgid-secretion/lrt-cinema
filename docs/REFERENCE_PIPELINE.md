@@ -351,17 +351,20 @@ owner's, post-lock.
 **Diagonal-gap measurements 2026-06-11 [EMP]:** slot-6 suppression
 closes diagbars 34.2 → 23.6 (3 passes+blur) with ΔL nearly unmoved —
 the remainder is interpolation-direction error, not chroma. libraw
-alternatives through our balanced chain: AHD falsecolor 23.8 but bars
-ΔL regresses 10× (0.39 → 3.89, disqualifying); DCB worse everywhere
-(`diagbars_libraw_algos_2026-06-11.json`). RCD's tunables are
-refine-pass (suppression-family) knobs — they cannot fix H/V-only
-directional choice on diagonals. **AMaZE-class clean-room port SCOPED,
-not started** (per the handoff): RT `amaze.cc` ≈1.4 k dense lines
-(Hamilton-Adams base + diagonal gradients + Nyquist texture logic);
-estimate 1–2 focused sessions incl. numba twin + battery validation;
-anchored payoff diagbars ≈17 (libraw-AHD floor) — the LR-product 13.6
-likely needs ACR's co-designed demosaic+suppression and is not
-guaranteed by any port.
+alternatives disqualified (AHD: bars ΔL ×10 regression; DCB worse
+everywhere — `diagbars_libraw_algos_2026-06-11.json`).
+**PORTED 2026-06-12 [EMP+SRC]: clean-room AMaZE**
+(`lrt_cinema/_amaze_demosaic.py`, from dt's scalar source,
+read-to-learn) — diagbars 34.2 → 15.6 raw → **7.22 with fc-suppress 3,
+beating the LR-product anchor (13.6) and canonical dt-AMaZE inside dt
+(9.73)**; clipbars 0.01; bars/slantededge ≈0; noisebars 4.15 with fc3
+(LR 4.25); zoneplate unchanged (structural — phase 0 proved no
+demosaic method touches it; ACR's mechanism remains out of scope).
+Gym sanity: amaze 0.433 vs menon 0.509 against dng_validate (closer to
+Adobe on the real frame). `--demosaic amaze` = display/clip-path only
+(single uniform clip point assumed; headroom master keeps menon).
+Owner-gated next: numba twin (~0.66 s/MP numpy today), then the
+amaze-default decision.
 
 **Slot 5 — highlight handling.** Two distinct sub-questions:
 - **5a, the fallback (no reconstruction): clip-to-common-white at the

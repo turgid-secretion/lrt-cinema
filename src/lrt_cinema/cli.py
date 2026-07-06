@@ -291,7 +291,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     render.add_argument(
         "--demosaic", dest="demosaic", default="menon",
-        choices=("linear", "menon", "rcd", "mlri", "dcb", "ahd", "dht", "vng", "ppg", "aahd"),
+        choices=("linear", "menon", "amaze", "rcd", "mlri", "dcb", "ahd", "dht", "vng", "ppg", "aahd"),
         help=(
             "Demosaic algorithm (default: menon — owner-approved flip 2026-06-12, "
             "native-res eyeball verdict 'menon looks much better than bilinear'; "
