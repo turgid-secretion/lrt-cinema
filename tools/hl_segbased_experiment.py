@@ -108,6 +108,8 @@ def main() -> int:
         read_dng_baseline_exposure,
     )
 
+    flips_only = "--flips-only" in sys.argv
+
     manifest = json.loads((ART / "manifest.json").read_text())
     art_asn = np.asarray(manifest["asn"], np.float32)
     profile_art = parse_dcp(DCP)
@@ -128,7 +130,7 @@ def main() -> int:
     }
 
     # ---- article arms -------------------------------------------------------
-    for name in ARTICLES:
+    for name in ARTICLES if not flips_only else ():
         dng = ART / f"{name}.dng"
         meta = manifest["articles"][name]
         dng_be = read_dng_baseline_exposure(dng)
@@ -178,22 +180,24 @@ def main() -> int:
         asn = 1.0 / wb
         asn = asn / asn[1]
     wb_mul = _wb_mul_from_asn(asn)
-    truth_b = (cfa_norm / SYN_WHITE) * wb_mul[chan]
-    clamped_b = (np.minimum(cfa_norm / SYN_WHITE, 1.0)
-                 * wb_mul[chan]).astype(np.float32)
-    band = (cfa_norm >= SYN_WHITE) & (cfa_norm < 0.99)
-    for nm, arr in (
-        ("clamp", clamped_b),
-        ("segb", reconstruct_mosaic_segbased(clamped_b, chan, wb_mul)),
-        ("segb_adapt", reconstruct_mosaic_segbased(
-            clamped_b, chan, wb_mul, recovery="adapt", strength=0.6)),
-    ):
-        err = (arr - truth_b) / np.maximum(truth_b, 1e-6)
-        results["truth_harness"][nm] = {
-            "rel_mae": float(np.abs(err[band]).mean()),
-            "bias": float(err[band].mean()),
-        }
-        print(f"truth {nm:10s} rel_mae={results['truth_harness'][nm]['rel_mae']:.4f}")
+    if not flips_only:
+        truth_b = (cfa_norm / SYN_WHITE) * wb_mul[chan]
+        clamped_b = (np.minimum(cfa_norm / SYN_WHITE, 1.0)
+                     * wb_mul[chan]).astype(np.float32)
+        band = (cfa_norm >= SYN_WHITE) & (cfa_norm < 0.99)
+        for nm, arr in (
+            ("clamp", clamped_b),
+            ("segb", reconstruct_mosaic_segbased(clamped_b, chan, wb_mul)),
+            ("segb_adapt", reconstruct_mosaic_segbased(
+                clamped_b, chan, wb_mul, recovery="adapt", strength=0.6)),
+        ):
+            err = (arr - truth_b) / np.maximum(truth_b, 1e-6)
+            results["truth_harness"][nm] = {
+                "rel_mae": float(np.abs(err[band]).mean()),
+                "bias": float(err[band].mean()),
+            }
+            print(f"truth {nm:10s} "
+                  f"rel_mae={results['truth_harness'][nm]['rel_mae']:.4f}")
 
     # ---- owner flips (real frame; production intent AND a -1 EV pull) -------
     from PIL import Image
@@ -215,23 +219,33 @@ def main() -> int:
     dng_be = read_dng_baseline_exposure(GYM_DNG)
     tags = {"clip": "A-clip-shipped", "segb": "B-segb-candidates",
             "segb_adapt": "C-segb-rebuild"}
+    from lrt_cinema._fc_suppress import suppress_false_colour
     for arm in ARMS:
         with rawpy.imread(str(GYM_DNG)) as raw:
             cam = _decode_arm(raw, arm, render_wb)
-        for pull, ptag in ((0.0, "intent"), (-1.0, "pull1ev")):
-            total_ev = ops.scene_exposure_ev + ops.exposure_ev + pull
-            cam_g = cam * np.float32(2.0 ** total_ev) if total_ev != 0.0 else cam
-            pp = apply_adobe_pipeline(
-                camera_rgb=cam_g, profile=profile, as_shot_neutral=render_asn,
-                scene_kelvin=scene_kelvin, dng_baseline_exposure=dng_be,
-                default_black_render=dbr, stop_after_stage=9)
-            pp = apply_develop_ops(pp, ops, RenderIntent.FAITHFUL,
-                                   master_look="bake", capture_sharpen="off")
-            srgb8 = (np.clip(_prophoto_to_display(pp, "srgb"), 0, 1)
-                     * 255 + 0.5).astype(np.uint8)[8:-8, 8:-8]
-            Image.fromarray(srgb8).save(
-                FLIPDIR / f"DSC_4053_{ptag}_{tags[arm]}.png")
-            print(f"flip: wrote {ptag}/{tags[arm]}")
+        # production display path applies fc-suppress 3 after the decode —
+        # the fc3 set is the production-accurate comparison (the plain set
+        # isolates the raw reconstruction behaviour)
+        for fc_tag, cam_v in (("", cam),
+                              ("_fc3", suppress_false_colour(
+                                  cam, passes=3, blur=True))):
+            for pull, ptag in ((0.0, "intent"), (-1.0, "pull1ev")):
+                total_ev = ops.scene_exposure_ev + ops.exposure_ev + pull
+                cam_g = (cam_v * np.float32(2.0 ** total_ev)
+                         if total_ev != 0.0 else cam_v)
+                pp = apply_adobe_pipeline(
+                    camera_rgb=cam_g, profile=profile,
+                    as_shot_neutral=render_asn,
+                    scene_kelvin=scene_kelvin, dng_baseline_exposure=dng_be,
+                    default_black_render=dbr, stop_after_stage=9)
+                pp = apply_develop_ops(pp, ops, RenderIntent.FAITHFUL,
+                                       master_look="bake",
+                                       capture_sharpen="off")
+                srgb8 = (np.clip(_prophoto_to_display(pp, "srgb"), 0, 1)
+                         * 255 + 0.5).astype(np.uint8)[8:-8, 8:-8]
+                Image.fromarray(srgb8).save(
+                    FLIPDIR / f"DSC_4053_{ptag}{fc_tag}_{tags[arm]}.png")
+                print(f"flip: wrote {ptag}{fc_tag}/{tags[arm]}")
 
     (FLIPDIR / "README.txt").write_text(
         "Segmentation-based reconstruction — owner flip (survey #2)\n"
@@ -248,9 +262,15 @@ def main() -> int:
         "JUDGE: at intent, A/B/C should be near-identical (recovery\n"
         "lives above display white). At -1 EV: do B/C recover credible\n"
         "window structure/rolloff that A renders as flat grey? Any\n"
-        "colour artifacts in B/C (the class that killed opposed)?\n")
-    EVIDENCE.write_text(json.dumps(results, indent=1))
-    print(f"\nevidence -> {EVIDENCE}")
+        "colour artifacts in B/C (the class that killed opposed)?\n\n"
+        "*_fc3_* set: the same arms WITH the production fc-suppress 3\n"
+        "(3-pass chroma-median + blur) applied — the production-accurate\n"
+        "comparison. The owner-observed clip-edge saturation boost in\n"
+        "B/C should be judged on THIS set; the plain set isolates the\n"
+        "raw reconstruction behaviour.\n")
+    if not flips_only:
+        EVIDENCE.write_text(json.dumps(results, indent=1))
+        print(f"\nevidence -> {EVIDENCE}")
     return 0
 
 

@@ -25,14 +25,16 @@ pytestmark = pytest.mark.skipif(
     not accel.mlx_available(), reason="mlx not installed (non-Apple-Silicon)",
 )
 
-_NPZ = Path("tests/fixtures/dcp_data/Nikon D750 Camera Standard.npz")
+_DCP = Path("/Library/Application Support/Adobe/CameraRaw/CameraProfiles/"
+            "Camera/Nikon D750/Nikon D750 Camera Standard.dcp")
 
 
 def _profile():
-    if not _NPZ.is_file():
-        pytest.skip("D750 profile fixture absent")
-    from lrt_cinema.dcp import load_profile
-    return load_profile(_NPZ)
+    if not _DCP.is_file():
+        pytest.skip("system D750 DCP absent (Adobe npz fixture purged "
+                    "2026-07-06)")
+    from lrt_cinema.dcp import parse_dcp
+    return parse_dcp(_DCP)
 
 
 def _synthetic_camera_rgb(h=96, w=128, seed=0):

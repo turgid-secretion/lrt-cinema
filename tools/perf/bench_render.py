@@ -19,7 +19,7 @@ the proxy path is preview-only and ΔE-exempt (it renders fewer pixels by design
 Usage:
     python3 tools/perf/bench_render.py bench \\
         --dng /tmp/dng_out/DSC_4053_dnglab.dng \\
-        --dcp "tests/fixtures/dcp_data/Nikon D750 Camera Standard.npz" \\
+        --dcp "<system CameraRaw D750 DCP>" \\
         --backend numpy --scales 1,2,4,8 --repeat 2
     python3 tools/perf/bench_render.py verify \\
         --dng /tmp/dng_out/DSC_4053_dnglab.dng --dcp <profile.npz> --backend numba
@@ -39,7 +39,9 @@ from pathlib import Path
 import numpy as np
 
 _DEFAULT_DNG = Path("/tmp/dng_out/DSC_4053_dnglab.dng")
-_DEFAULT_DCP = Path("tests/fixtures/dcp_data/Nikon D750 Camera Standard.npz")
+_DEFAULT_DCP = Path("/Library/Application Support/Adobe/CameraRaw/"
+                    "CameraProfiles/Camera/Nikon D750/"
+                    "Nikon D750 Camera Standard.dcp")
 
 
 def _load_profile(dcp: Path):

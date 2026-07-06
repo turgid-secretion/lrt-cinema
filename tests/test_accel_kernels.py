@@ -176,10 +176,11 @@ def test_hsv_cube_matches_on_real_looktable():
     """Equivalence on the real D750 LookTable (90×16×16, srgb_gamma) if the
     committed profile fixture is present — exercises the production cube dims."""
     from pathlib import Path
-    npz = Path("tests/fixtures/dcp_data/Nikon D750 Camera Standard.npz")
+    npz = Path("/Library/Application Support/Adobe/CameraRaw/CameraProfiles/"
+               "Camera/Nikon D750/Nikon D750 Camera Standard.dcp")
     if not npz.is_file():
-        pytest.skip("D750 profile fixture absent")
-    from lrt_cinema.dcp import load_profile
+        pytest.skip("system D750 DCP absent (Adobe npz fixture purged 2026-07-06)")
+    from lrt_cinema.dcp import parse_dcp as load_profile
     lt = load_profile(npz).look_table
     if lt is None:
         pytest.skip("profile has no LookTable")

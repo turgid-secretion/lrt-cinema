@@ -731,15 +731,36 @@ def test_find_extracted_profile_returns_none_on_miss(tmp_path):
     ) is None
 
 
-def test_bundled_d750_fixture_loads():
-    # The repo ships one camera's extracted profile under tests/fixtures/
-    # so the test suite can exercise the end-to-end auto-detect path
-    # without requiring Adobe DNG Converter installed on the test machine.
-    assert _BUNDLED_D750.is_file(), (
-        f"Bundled D750 fixture not present at {_BUNDLED_D750}; "
-        f"re-generate via `python3 tools/extract_dcp.py ...`"
-    )
-    profile = load_profile(_BUNDLED_D750)
+def _synthetic_d750_npz(dirpath: Path) -> Path:
+    """A SYNTHETIC extracted-profile fixture with the production D750 cube
+    dims (90x16x16 LookTable). Replaces the formerly-committed Adobe npz
+    (purged 2026-07-06 — redistributing extracted Adobe profile data was a
+    live legal exposure; CLAIMS 'Repo redistributes extracted Adobe
+    profile data')."""
+    from lrt_cinema.dcp import HsvCube, save_profile
+
+    rng = np.random.default_rng(750)
+    profile = _build_minimal_profile()
+    # data_1 shape is (val, hue, sat, 3): hueShift_deg, satScale, valScale
+    data = np.zeros((16, 90, 16, 3), np.float64)
+    data[..., 0] = rng.uniform(-8.0, 8.0, (16, 90, 16))
+    data[..., 1] = rng.uniform(0.8, 1.2, (16, 90, 16))
+    data[..., 2] = rng.uniform(0.9, 1.1, (16, 90, 16))
+    look = HsvCube(hue_divisions=90, sat_divisions=16, val_divisions=16,
+                   srgb_gamma=True, data_1=data)
+    profile = type(profile)(**{**profile.__dict__,
+                               "profile_name": "Camera Standard",
+                               "look_table": look})
+    out = dirpath / "Nikon D750 Camera Standard.npz"
+    save_profile(profile, out)
+    return out
+
+
+def test_synthetic_d750_fixture_loads(tmp_path):
+    """End-to-end npz load with the production cube dims — synthetic data
+    (the Adobe-extracted fixture was purged; nothing here is Adobe's)."""
+    npz = _synthetic_d750_npz(tmp_path)
+    profile = load_profile(npz)
     assert profile.profile_name == "Camera Standard"
     assert profile.color_matrix_1 is not None
     assert profile.look_table is not None
@@ -748,22 +769,19 @@ def test_bundled_d750_fixture_loads():
     assert profile.look_table.val_divisions == 16
 
 
-def test_auto_detect_profile_loads_bundled_npz(tmp_path):
+def test_auto_detect_profile_loads_npz(tmp_path):
     """Auto-detect resolves a camera to its extracted `.npz` profile (the sole,
-    Adobe-free lookup path).
-
-    Setup: synthesize a TIFF-shaped NEF that reports the user's actual
-    D750 Make/Model, then point auto-detect at our bundled fixture via
-    extra_extracted_roots. The bundled .npz is what comes back.
+    Adobe-free lookup path) — synthetic fixture, real machinery.
     """
+    npz = _synthetic_d750_npz(tmp_path)
     nef = tmp_path / "fake.NEF"
     nef.write_bytes(_build_synthetic_nef("NIKON CORPORATION", "NIKON D750"))
     result = auto_detect_profile(
-        nef, extra_extracted_roots=[_BUNDLED_FIXTURE_DIR],
+        nef, extra_extracted_roots=[tmp_path],
     )
     assert result is not None
     profile, source = result
-    assert source == _BUNDLED_D750
+    assert source == npz
     assert profile.profile_name == "Camera Standard"
 
 

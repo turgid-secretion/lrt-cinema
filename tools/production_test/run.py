@@ -174,7 +174,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--out", type=Path, default=Path("/tmp/lrt_prodtest"))
     ap.add_argument("--dcp", type=Path,
-                    default=Path("tests/fixtures/dcp_data/Nikon D750 Camera Standard.npz"))
+                    default=Path("/Library/Application Support/Adobe/CameraRaw/CameraProfiles/"
+                                 "Camera/Nikon D750/Nikon D750 Camera Standard.dcp"))
     a = ap.parse_args(argv)
     if not a.base_dng.is_file():
         print(f"error: base DNG not found: {a.base_dng}", file=sys.stderr)
