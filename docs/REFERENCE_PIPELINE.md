@@ -439,6 +439,14 @@ amaze-default decision.
   reconstruction methods + implementation feasibility against this
   project's constraints (clean-room, licence, 24 MP × 250-frame
   runtime, TEMPORAL STABILITY for timelapse, numpy/numba stack).**
+  **Survey #1 candidate EXECUTED same day (`reconstruct_mosaic_neutral`,
+  clamp-then-lift): zero display-path change by construction (recovered
+  luminance sits above the common white; the display transfer clamps
+  there — the real-frame flip is byte-identical), while the linear
+  domain measurably recovers (truth rel_mae 0.186→0.111). Matches
+  ACR's own coupling of recovery to negative-exposure pulls. The 5a
+  clip default is OPTIMAL for the current production; neutral recovery
+  activates with EXR masters or exposure-pulled sequences.**
   Follow-up shipped same day (owner request): the held-out-truth
   harness (`tools/hl_truth_harness.py`) makes any future reconstruction
   parameter deterministically judgeable — band-clipped real mosaic +

@@ -125,6 +125,64 @@ def reconstruct_mosaic_opposed(
     return np.maximum(out, 0.0).astype(np.float32, copy=False)
 
 
+def reconstruct_mosaic_neutral(
+    cfa: np.ndarray, chan: np.ndarray, wb_mul: np.ndarray,
+    clipped: np.ndarray | None = None,
+) -> np.ndarray:
+    """LUMINANCE-LED NEUTRAL recovery — the survey shortlist #1 (2026-06-12).
+
+    Adobe's own documentation describes ACR's recovery as returning
+    surviving-channel data as LUMINANCE, not colour (docs/HL_RECON_SURVEY.md
+    [PRIMARY]); the owner's rank-1 verdicts select for exactly that (clean
+    neutral windows, no invented colour). This variant keeps the opposed
+    machinery's PROVEN luminance estimate (truth harness: −49…−64 %
+    recovery error) but makes the reconstruction target CHANNEL-CONSISTENT:
+
+      per LOCATION, target T = cube( mean of cube-rooted 3×3 means of the
+      locally UNCLIPPED channels );   every clipped channel ← max(value, T)
+
+    One T per location ⇒ reconstructed values carry no channel disparity ⇒
+    the demosaic sees locally neutral structure with recovered brightness.
+    Compared to `reconstruct_mosaic_opposed`: the per-channel global
+    chrominance offset (the tint-preserving term the owner's eyes rejected)
+    is REMOVED, and the estimate uses unclipped channels only. Fully-blown
+    interiors (no unclipped channel in the window) stay at the plateau —
+    uniform, hence neutral, by construction; the partial-clip skirt carries
+    the recovered luminance rolloff.
+
+    CALL CONVENTION (the v1→v2 lesson, hl_neutral evidence): pass the
+    COMMON-WHITE-CLAMPED mosaic as `cfa` and the pre-clamp per-channel clip
+    mask as `clipped` — clamp first, THEN lift. v1 ran on the unclamped
+    mosaic and the untouched channel-disparate headroom sites reproduced
+    the clipbars falsecolor explosion (17.2) that the 5a clamp exists to
+    prevent. Clamp-then-lift keeps every 5a guarantee and adds only
+    channel-consistent luminance above the plateau. `clipped=None` falls
+    back to value-threshold detection on `cfa` (headroom inputs only).
+    """
+    clips = (_CLIP_MAGIC * np.asarray(wb_mul, np.float32)).astype(np.float32)
+    if clipped is None:
+        clipped = cfa >= clips[chan]
+    if not clipped.any():
+        return cfa
+
+    # Per-channel 3×3 means over UNCLIPPED sites of that channel only.
+    croot_sum = np.zeros(cfa.shape, dtype=np.float32)
+    croot_cnt = np.zeros(cfa.shape, dtype=np.float32)
+    for c in range(3):
+        mean_c, ok = _box_mean_masked(cfa, (chan == c) & ~clipped, size=3)
+        croot_sum += np.where(ok, np.cbrt(np.maximum(mean_c, 0.0)), 0.0)
+        croot_cnt += ok.astype(np.float32)
+    have = croot_cnt > 0
+    target = np.zeros(cfa.shape, dtype=np.float32)
+    np.divide(croot_sum, croot_cnt, out=target, where=have)
+    target = target ** 3
+
+    out = cfa.copy()
+    rec = np.where(have, np.maximum(cfa, target), cfa)
+    out[clipped] = rec[clipped]
+    return np.maximum(out, 0.0).astype(np.float32, copy=False)
+
+
 def reconstruct_rgb_opposed(
     rgb: np.ndarray, clip_mask: np.ndarray, wb_mul: np.ndarray,
 ) -> np.ndarray:

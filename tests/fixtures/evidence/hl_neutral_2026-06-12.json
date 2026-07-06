@@ -1,0 +1,128 @@
+{
+ "design": "luminance-led neutral recovery vs clip baseline (menon)",
+ "predictions": "N1 clipramp clip-zone -> toward 1.07; N2 clipbars falsecolor <= 2; N3 truth rel_mae between clamp and opposed; N4 owner flips",
+ "articles": {
+  "clipramp": {
+   "clip": {
+    "de_mean": 0.09466263506295608,
+    "de_p95": 0.5099764472917679,
+    "de_max": 1.492686142768629,
+    "dl_mean": 0.015452913006566114,
+    "dc_mean": 0.09500956130917981,
+    "clipzone_dc_mean": 0.21483723880500305,
+    "clipzone_de_mean": 0.223489725499336,
+    "falsecolor_mean": 15.711593460044696,
+    "falsecolor_p99": 32.562564162336066,
+    "clipzone_chroma_mean": 3.0262260303263844,
+    "clipzone_chroma_p99": 7.141944670357767
+   },
+   "neutral": {
+    "de_mean": 0.09466263506295608,
+    "de_p95": 0.5099764472917679,
+    "de_max": 1.492686142768629,
+    "dl_mean": 0.015452913006566114,
+    "dc_mean": 0.09500956130917981,
+    "clipzone_dc_mean": 0.21483723880500305,
+    "clipzone_de_mean": 0.223489725499336,
+    "falsecolor_mean": 15.711593460044696,
+    "falsecolor_p99": 32.562564162336066,
+    "clipzone_chroma_mean": 3.0262260303263844,
+    "clipzone_chroma_p99": 7.141944670357767
+   }
+  },
+  "clipramp_deep": {
+   "clip": {
+    "de_mean": 0.4240772641716878,
+    "de_p95": 1.27391913636661,
+    "de_max": 1.27391913636661,
+    "dl_mean": 0.14397477440342088,
+    "dc_mean": 0.33060776026839067,
+    "clipzone_dc_mean": 0.36743616157787207,
+    "clipzone_de_mean": 0.4531667440535565,
+    "falsecolor_mean": 11.955443681450193,
+    "falsecolor_p99": 40.453884022309204,
+    "clipzone_chroma_mean": 1.980560385613331,
+    "clipzone_chroma_p99": 9.198977483442082
+   },
+   "neutral": {
+    "de_mean": 0.4240772641716878,
+    "de_p95": 1.27391913636661,
+    "de_max": 1.27391913636661,
+    "dl_mean": 0.14397477440342088,
+    "dc_mean": 0.33060776026839067,
+    "clipzone_dc_mean": 0.36743616157787207,
+    "clipzone_de_mean": 0.4531667440535565,
+    "falsecolor_mean": 11.955443681450193,
+    "falsecolor_p99": 40.453884022309204,
+    "clipzone_chroma_mean": 1.980560385613331,
+    "clipzone_chroma_p99": 9.198977483442082
+   }
+  },
+  "clipfield": {
+   "clip": {
+    "de_mean": 0.19461350810971864,
+    "de_p95": 1.27391913636661,
+    "de_max": 1.5633695900671418,
+    "dl_mean": 0.07421982554469782,
+    "dc_mean": 0.1350108469905628,
+    "clipzone_dc_mean": 0.692901416450632,
+    "clipzone_de_mean": 1.012062208458754,
+    "falsecolor_mean": 0.03114490884902242,
+    "falsecolor_p99": 0.7422050137513719,
+    "clipzone_chroma_mean": 0.008498487609448557,
+    "clipzone_chroma_p99": 0.008498487609448548
+   },
+   "neutral": {
+    "de_mean": 0.19461350810971864,
+    "de_p95": 1.27391913636661,
+    "de_max": 1.5633695900671418,
+    "dl_mean": 0.07421982554469782,
+    "dc_mean": 0.1350108469905628,
+    "clipzone_dc_mean": 0.692901416450632,
+    "clipzone_de_mean": 1.012062208458754,
+    "falsecolor_mean": 0.03114490884902242,
+    "falsecolor_p99": 0.7422050137513719,
+    "clipzone_chroma_mean": 0.008498487609448557,
+    "clipzone_chroma_p99": 0.008498487609448548
+   }
+  },
+  "clipbars": {
+   "clip": {
+    "de_mean": 1.1633889711482248,
+    "de_p95": 1.27391913636661,
+    "de_max": 63.78950180287023,
+    "dl_mean": 0.6360141252005077,
+    "dc_mean": 1.5438576716652197,
+    "clipzone_dc_mean": 1.7724558009827989,
+    "clipzone_de_mean": 1.7301855792837986,
+    "falsecolor_mean": 1.1186262837670244,
+    "falsecolor_p99": 31.359042387999516,
+    "clipzone_chroma_mean": 0.9225178972705961,
+    "clipzone_chroma_p99": 24.372569325504085
+   },
+   "neutral": {
+    "de_mean": 1.1633889711482248,
+    "de_p95": 1.27391913636661,
+    "de_max": 63.78950180287023,
+    "dl_mean": 0.6360141252005077,
+    "dc_mean": 1.5438576716652197,
+    "clipzone_dc_mean": 1.7724558009827989,
+    "clipzone_de_mean": 1.7301855792837986,
+    "falsecolor_mean": 1.1186262837670244,
+    "falsecolor_p99": 31.359042387999516,
+    "clipzone_chroma_mean": 0.9225178972705961,
+    "clipzone_chroma_p99": 24.372569325504085
+   }
+  }
+ },
+ "truth_harness": {
+  "clamp": {
+   "rel_mae": 0.1860014945268631,
+   "bias": -0.1860014945268631
+  },
+  "neutral": {
+   "rel_mae": 0.11121142655611038,
+   "bias": -0.08266621083021164
+  }
+ }
+}
