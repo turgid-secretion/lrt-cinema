@@ -290,8 +290,8 @@ flatpatches 0.15–0.18 ≈ Adobe-ref [EMP]. Nothing open.
 
 **Slot 2 — raw CA correction (mosaic domain).** VERDICT: IMPLEMENTED,
 OPT-IN. References: RT `CA_correct_RT` and dt `cacorrect@5.0`
-(highlights@4 → cacorrect@5 → demosaic@8; dt's file IS RT's vendored —
-one shared Martinec algorithm) both pre-demosaic [SRC]; dcraw none; LR
+(highlights@4 → cacorrect@5 → demosaic@8; dt's file IS RT's
+vendored) both pre-demosaic [SRC]; dcraw none; LR
 off in production (census [EMP]). 2026-06-10 forensics refuted lens CA
 for the clusters measured then; the 2026-07-06 owner round re-opened the
 slot: boundary-trusting reconstruction ingests clip-edge CA fringe
