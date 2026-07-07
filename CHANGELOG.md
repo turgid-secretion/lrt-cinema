@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] — v0.8 prep
 
 ### Added
+- **H/S translation v3: halo/pool artifact suite + optimization campaign**
+  (owner round-2 directive). New `tools/hlsh_artifact_suite.py` measures
+  the owner-reported artifact classes as numbers (edge-band halos, blob
+  pool rings + interior fidelity — the literature's "compartmentalization
+  effect", γ-banding, flatness guard, real-crop glow vs the LR anchor);
+  25+ operator arms measured. Winner: absolute-response residual scale
+  64→16 px (one constant) — blob interior 2.0→0.6 st, real wall glow
+  +0.32→+0.10 (S+100) and +6.5→+1.9 L* (H−100), flatness held 0.97–1.00,
+  crop1 wall glow visually gone. Guided-map, polarity-guard, and
+  multi-scale arms measured and rejected (kept in `_fast_llf` with
+  evidence). Research payload (32/53 claims verify-confirmed):
+  `llf_halo_research_2026-07-08.json`.
 - **H/S translation v2: fast Local-Laplacian tone core** (`_fast_llf.py`,
   clean-room MIT-derived; darktable's local-laplacian mode read-to-learn).
   Owner round-1 verdicts fixed and measured: local-contrast retention in

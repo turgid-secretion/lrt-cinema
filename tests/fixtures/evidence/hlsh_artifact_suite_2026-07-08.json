@@ -1,0 +1,3430 @@
+{
+ "pre_registered": "P1-P5 (module docstring)",
+ "arms": {
+  "v2-gauss": {
+   "config": {
+    "_LLF_ABS_MODE": "gauss"
+   },
+   "S100": {
+    "halo_over_dark": 0.0,
+    "halo_under_dark": -1.2541606426239014,
+    "halo_over_bright": 0.3887445628643036,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.99996018409729,
+    "flatness_bright": 0.9999337196350098,
+    "far_delta": 3.140359401702881,
+    "pool_r16": 0.14379644393920898,
+    "interior_err_r16": 2.0076496601104736,
+    "pool_r48": 0.8258519172668457,
+    "interior_err_r48": 0.6844865083694458,
+    "pool_r128": 0.36593127250671387,
+    "interior_err_r128": 0.018388178199529648,
+    "banding": 0.010929634794592857,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.0,
+    "halo_under_dark": -0.6940114498138428,
+    "halo_over_bright": 0.18611279129981995,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9999706745147705,
+    "flatness_bright": 0.9999417066574097,
+    "far_delta": 1.5467472076416016,
+    "pool_r16": 0.07617497444152832,
+    "interior_err_r16": 0.8732783198356628,
+    "pool_r48": 0.21792984008789062,
+    "interior_err_r48": 0.3301548659801483,
+    "pool_r128": 0.22330784797668457,
+    "interior_err_r128": 0.0014693103730678558,
+    "banding": 0.0031278859823942184,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.021735191345214844,
+    "halo_under_dark": -0.3083934783935547,
+    "halo_over_bright": 0.7399380207061768,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.999985933303833,
+    "flatness_bright": 0.9998822808265686,
+    "far_delta": -2.5917985439300537,
+    "pool_r16": 0.15062522888183594,
+    "interior_err_r16": 1.6796854734420776,
+    "pool_r48": 0.20586633682250977,
+    "interior_err_r48": 0.9247053861618042,
+    "pool_r128": 0.20166802406311035,
+    "interior_err_r128": 0.07167132198810577,
+    "banding": 0.004906498361378908,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.018643856048583984,
+    "halo_under_dark": -0.1299428939819336,
+    "halo_over_bright": 0.39471328258514404,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9999906420707703,
+    "flatness_bright": 0.9999266862869263,
+    "far_delta": -1.2875574827194214,
+    "pool_r16": 0.10126054286956787,
+    "interior_err_r16": 0.8017085790634155,
+    "pool_r48": 0.10325038433074951,
+    "interior_err_r48": 0.4547208547592163,
+    "pool_r128": 0.10673010349273682,
+    "interior_err_r128": 0.034483976662158966,
+    "banding": 0.002619218546897173,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 2.2340908906194485,
+     "dL_mean": 1.4854732589180581,
+     "zone_glow_Lstar": 0.32266078710836116,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 2.9065765860641464,
+     "dL_mean": 2.639570947179745,
+     "zone_glow_Lstar": 6.544240316429342,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "gauss-L4": {
+   "config": {
+    "_LLF_ABS_MODE": "gauss",
+    "_LLF_LAST_LEVEL": 4
+   },
+   "S100": {
+    "halo_over_dark": 0.3502364158630371,
+    "halo_under_dark": -0.902184009552002,
+    "halo_over_bright": 0.12272536754608154,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.968184232711792,
+    "flatness_bright": 0.9892704486846924,
+    "far_delta": 3.145493984222412,
+    "pool_r16": 0.7513256072998047,
+    "interior_err_r16": 0.5001322627067566,
+    "pool_r48": 0.3685572147369385,
+    "interior_err_r48": 0.009707292541861534,
+    "pool_r128": 0.02357006072998047,
+    "interior_err_r128": 0.0027262899093329906,
+    "banding": 0.048561468720436096,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.17563080787658691,
+    "halo_under_dark": -0.4692575931549072,
+    "halo_over_bright": 0.10258650779724121,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9878690838813782,
+    "flatness_bright": 0.9906535744667053,
+    "far_delta": 1.5543880462646484,
+    "pool_r16": 0.36598777770996094,
+    "interior_err_r16": 0.07921811193227768,
+    "pool_r48": 0.1449129581451416,
+    "interior_err_r48": 0.006188478320837021,
+    "pool_r128": 0.03686666488647461,
+    "interior_err_r128": 0.002345021814107895,
+    "banding": 0.005461528897285461,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.0409393310546875,
+    "halo_under_dark": -0.08895397186279297,
+    "halo_over_bright": 0.8768727779388428,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9985499382019043,
+    "flatness_bright": 0.984980046749115,
+    "far_delta": -2.5733559131622314,
+    "pool_r16": 0.2933022975921631,
+    "interior_err_r16": 0.6705377697944641,
+    "pool_r48": 0.1395261287689209,
+    "interior_err_r48": 0.0033262670040130615,
+    "pool_r128": 0.09780669212341309,
+    "interior_err_r128": 0.00020010769367218018,
+    "banding": 0.010326813906431198,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.023328781127929688,
+    "halo_under_dark": -0.025775432586669922,
+    "halo_over_bright": 0.4789336919784546,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9992807507514954,
+    "flatness_bright": 0.9948914647102356,
+    "far_delta": -1.2740150690078735,
+    "pool_r16": 0.14134609699249268,
+    "interior_err_r16": 0.3255027234554291,
+    "pool_r48": 0.10200273990631104,
+    "interior_err_r48": 0.0015758201479911804,
+    "pool_r128": 0.0718609094619751,
+    "interior_err_r128": 2.3908913135528564e-05,
+    "banding": 0.005390572361648083,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 2.2743913804822364,
+     "dL_mean": 1.5321153395521943,
+     "zone_glow_Lstar": 0.13443526264430508,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 2.4293000856102323,
+     "dL_mean": 2.0132745758541537,
+     "zone_glow_Lstar": -0.2188295023576673,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "global-tau1": {
+   "config": {
+    "_LLF_ABS_MODE": "none",
+    "_LLF_GLOBAL_BLEND": 1.0
+   },
+   "S100": {
+    "halo_over_dark": 1.0477983951568604,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.034075379371643066,
+    "halo_under_bright": -0.06252038478851318,
+    "flatness_dark": 0.5210621953010559,
+    "flatness_bright": 0.7595472931861877,
+    "far_delta": 3.145350456237793,
+    "pool_r16": 0.1264815330505371,
+    "interior_err_r16": 0.7577288150787354,
+    "pool_r48": 0.2916595935821533,
+    "interior_err_r48": 0.38938286900520325,
+    "pool_r128": 0.19864225387573242,
+    "interior_err_r128": 0.08927890658378601,
+    "banding": 0.06269154697656631,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.482266902923584,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.03650939464569092,
+    "halo_under_bright": -0.031644582748413086,
+    "flatness_dark": 0.7151934504508972,
+    "flatness_bright": 0.7910633683204651,
+    "far_delta": 1.5541152954101562,
+    "pool_r16": 0.03545999526977539,
+    "interior_err_r16": 0.5391237139701843,
+    "pool_r48": 0.23824620246887207,
+    "interior_err_r48": 0.2793748676776886,
+    "pool_r128": 0.1250004768371582,
+    "interior_err_r128": 0.0735277533531189,
+    "banding": 0.00640057772397995,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.11640262603759766,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.009100914001464844,
+    "halo_under_bright": -0.8289752006530762,
+    "flatness_dark": 0.9657162427902222,
+    "flatness_bright": 0.6218879818916321,
+    "far_delta": -2.5742034912109375,
+    "pool_r16": 0.28740501403808594,
+    "interior_err_r16": 0.4413997530937195,
+    "pool_r48": 0.6269845962524414,
+    "interior_err_r48": 0.15555205941200256,
+    "pool_r128": 0.31537342071533203,
+    "interior_err_r128": 0.01639096438884735,
+    "banding": 0.012676977552473545,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.07467222213745117,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.0752706527709961,
+    "halo_under_bright": -0.3426920175552368,
+    "flatness_dark": 0.9823513627052307,
+    "flatness_bright": 0.843662440776825,
+    "far_delta": -1.2746273279190063,
+    "pool_r16": 0.14906108379364014,
+    "interior_err_r16": 0.22321191430091858,
+    "pool_r48": 0.3610426187515259,
+    "interior_err_r48": 0.07369960099458694,
+    "pool_r128": 0.17671716213226318,
+    "interior_err_r128": 0.009208612143993378,
+    "banding": 0.006534523330628872,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 2.7908268911038565,
+     "dL_mean": 2.3399212656162707,
+     "zone_glow_Lstar": 0.02837053123559983,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 2.9900292219202744,
+     "dL_mean": 2.8276814039803884,
+     "zone_glow_Lstar": -5.743936060140117,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "pure-global": {
+   "config": {
+    "_LLF_ABS_MODE": "none",
+    "_LLF_GLOBAL_BLEND": 1.0,
+    "_LLF_SIGMA_R": 50.0
+   },
+   "S100": {
+    "halo_over_dark": 0.27696967124938965,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.11919248104095459,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.5210264921188354,
+    "flatness_bright": 0.7595550417900085,
+    "far_delta": 3.145296096801758,
+    "pool_r16": 0.0061893463134765625,
+    "interior_err_r16": 0.0006242766976356506,
+    "pool_r48": 0.10757184028625488,
+    "interior_err_r48": 0.0009731445461511612,
+    "pool_r128": 0.020963668823242188,
+    "interior_err_r128": 0.0017942455597221851,
+    "banding": 0.06268521398305893,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.15810751914978027,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.09696406126022339,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.7152021527290344,
+    "flatness_bright": 0.791068971157074,
+    "far_delta": 1.5540800094604492,
+    "pool_r16": 0.00964808464050293,
+    "interior_err_r16": 0.0005143079906702042,
+    "pool_r48": 0.07347273826599121,
+    "interior_err_r48": 0.0008538104593753815,
+    "pool_r128": 0.032677650451660156,
+    "interior_err_r128": 0.001666966825723648,
+    "banding": 0.006395512260496616,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.03772735595703125,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.5642988681793213,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9657272100448608,
+    "flatness_bright": 0.6219482421875,
+    "far_delta": -2.57414174079895,
+    "pool_r16": 0.0243990421295166,
+    "interior_err_r16": 0.00017435848712921143,
+    "pool_r48": 0.16153979301452637,
+    "interior_err_r48": 0.00013813376426696777,
+    "pool_r128": 0.08263850212097168,
+    "interior_err_r128": 0.0007926672697067261,
+    "banding": 0.012654613703489304,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.021063804626464844,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.37783968448638916,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9823588132858276,
+    "flatness_bright": 0.8436908721923828,
+    "far_delta": -1.2745935916900635,
+    "pool_r16": 0.017963409423828125,
+    "interior_err_r16": 8.711591362953186e-05,
+    "pool_r48": 0.11775970458984375,
+    "interior_err_r48": 7.092207670211792e-05,
+    "pool_r128": 0.06084287166595459,
+    "interior_err_r128": 0.0006341263651847839,
+    "banding": 0.0065237414091825485,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 2.5138224212524065,
+     "dL_mean": 1.9216235723771926,
+     "zone_glow_Lstar": 0.07259358423558769,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 2.7656807372235184,
+     "dL_mean": 2.5097380698399014,
+     "zone_glow_Lstar": -4.288471934207704,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "none": {
+   "config": {
+    "_LLF_ABS_MODE": "none"
+   },
+   "S100": {
+    "halo_over_dark": 0.7738251686096191,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.0,
+    "halo_under_bright": -0.17877525091171265,
+    "flatness_dark": 0.9999904632568359,
+    "flatness_bright": 0.9999918937683105,
+    "far_delta": 0.0,
+    "pool_r16": 0.11394548416137695,
+    "interior_err_r16": 0.8167799711227417,
+    "pool_r48": 0.4011387825012207,
+    "interior_err_r48": 0.36289432644844055,
+    "pool_r128": 0.23118257522583008,
+    "interior_err_r128": 0.09182962775230408,
+    "banding": 7.592163456138223e-05,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.3232440948486328,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.0,
+    "halo_under_bright": -0.12934082746505737,
+    "flatness_dark": 0.9999878406524658,
+    "flatness_bright": 0.9999943375587463,
+    "far_delta": 0.0,
+    "pool_r16": 0.02527141571044922,
+    "interior_err_r16": 0.5688114762306213,
+    "pool_r48": 0.31432390213012695,
+    "interior_err_r48": 0.2321893274784088,
+    "pool_r128": 0.13553714752197266,
+    "interior_err_r128": 0.054003652185201645,
+    "banding": 4.991328387404792e-05,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.08029556274414062,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.0,
+    "halo_under_bright": -1.3615331649780273,
+    "flatness_dark": 0.9999889731407166,
+    "flatness_bright": 0.9999459385871887,
+    "far_delta": 0.0,
+    "pool_r16": 0.3093072175979614,
+    "interior_err_r16": 0.534747302532196,
+    "pool_r48": 0.4519166350364685,
+    "interior_err_r48": 0.2641116678714752,
+    "pool_r128": 0.2686110734939575,
+    "interior_err_r128": 0.1212417334318161,
+    "banding": 7.137983629945666e-05,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.054042816162109375,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.0,
+    "halo_under_bright": -0.7022328972816467,
+    "flatness_dark": 0.9999925494194031,
+    "flatness_bright": 0.999973714351654,
+    "far_delta": 0.0,
+    "pool_r16": 0.16327929496765137,
+    "interior_err_r16": 0.26677098870277405,
+    "pool_r48": 0.23575985431671143,
+    "interior_err_r48": 0.12623178958892822,
+    "pool_r128": 0.1390666365623474,
+    "interior_err_r128": 0.059354715049266815,
+    "banding": 3.5646902688313276e-05,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 3.1122141111660424,
+     "dL_mean": 2.8288681570168857,
+     "zone_glow_Lstar": -2.0963117518169594,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 21.117762795692613,
+     "dL_mean": 24.712026251591183,
+     "zone_glow_Lstar": 40.60767190836027,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "guided-e2-r12": {
+   "config": {
+    "_LLF_ABS_MODE": "guided",
+    "_LLF_GUIDED_EPS": 2.0,
+    "_LLF_GUIDED_RADIUS": 12
+   },
+   "S100": {
+    "halo_over_dark": 0.7876691818237305,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.16163134574890137,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9810863733291626,
+    "flatness_bright": 0.9939570426940918,
+    "far_delta": 3.142284393310547,
+    "pool_r16": 0.08550739288330078,
+    "interior_err_r16": 1.5919300317764282,
+    "pool_r48": 0.13023042678833008,
+    "interior_err_r48": 0.18000848591327667,
+    "pool_r128": 0.04581451416015625,
+    "interior_err_r128": 0.08328154683113098,
+    "banding": 0.007144880946725607,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.33952808380126953,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.07953545451164246,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9924328327178955,
+    "flatness_bright": 0.9947324991226196,
+    "far_delta": 1.5494861602783203,
+    "pool_r16": 0.013421058654785156,
+    "interior_err_r16": 0.4983236491680145,
+    "pool_r48": 0.18195819854736328,
+    "interior_err_r48": 0.03827198967337608,
+    "pool_r128": 0.04259920120239258,
+    "interior_err_r128": 0.04093724861741066,
+    "banding": 0.002165150595828891,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.012402057647705078,
+    "halo_under_dark": -0.08240222930908203,
+    "halo_over_bright": 0.0932166576385498,
+    "halo_under_bright": -0.728496789932251,
+    "flatness_dark": 0.9987424612045288,
+    "flatness_bright": 0.9829027056694031,
+    "far_delta": -2.580352783203125,
+    "pool_r16": 0.24794220924377441,
+    "interior_err_r16": 1.4392822980880737,
+    "pool_r48": 0.3920102119445801,
+    "interior_err_r48": 0.24924549460411072,
+    "pool_r128": 0.08371472358703613,
+    "interior_err_r128": 0.08723433315753937,
+    "banding": 0.0023716490250080824,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.020849227905273438,
+    "halo_under_dark": -0.02362823486328125,
+    "halo_over_bright": 0.07079386711120605,
+    "halo_under_bright": -0.3425419330596924,
+    "flatness_dark": 0.9992460608482361,
+    "flatness_bright": 0.9879932403564453,
+    "far_delta": -1.2791532278060913,
+    "pool_r16": 0.12408697605133057,
+    "interior_err_r16": 0.6954091787338257,
+    "pool_r48": 0.20712435245513916,
+    "interior_err_r48": 0.12225662916898727,
+    "pool_r128": 0.0562739372253418,
+    "interior_err_r128": 0.041734762489795685,
+    "banding": 0.001190655049867928,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 2.170243397892793,
+     "dL_mean": 1.4066926339743124,
+     "zone_glow_Lstar": 0.45910070400091707,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 2.9084206901640073,
+     "dL_mean": 2.676225127854197,
+     "zone_glow_Lstar": 4.520084993224378,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "guided-e2-r24": {
+   "config": {
+    "_LLF_ABS_MODE": "guided",
+    "_LLF_GUIDED_EPS": 2.0,
+    "_LLF_GUIDED_RADIUS": 24
+   },
+   "S100": {
+    "halo_over_dark": 0.7175335884094238,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.2150641679763794,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9490826725959778,
+    "flatness_bright": 0.9670431613922119,
+    "far_delta": 3.1410207748413086,
+    "pool_r16": 0.10239267349243164,
+    "interior_err_r16": 2.1534981727600098,
+    "pool_r48": 0.26762914657592773,
+    "interior_err_r48": 1.0036818981170654,
+    "pool_r128": 0.13314294815063477,
+    "interior_err_r128": 0.2636657655239105,
+    "banding": 0.004119603428989649,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.3110659122467041,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.0862082839012146,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9755393862724304,
+    "flatness_bright": 0.9801392555236816,
+    "far_delta": 1.5489745140075684,
+    "pool_r16": 0.011767387390136719,
+    "interior_err_r16": 0.9019812941551208,
+    "pool_r48": 0.2332298755645752,
+    "interior_err_r48": 0.4264053404331207,
+    "pool_r128": 0.06657695770263672,
+    "interior_err_r128": 0.1256301999092102,
+    "banding": 0.0013450835831463337,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.03418254852294922,
+    "halo_under_dark": -0.06391000747680664,
+    "halo_over_bright": 0.0,
+    "halo_under_bright": -0.9174652099609375,
+    "flatness_dark": 0.9816035628318787,
+    "flatness_bright": 0.9434256553649902,
+    "far_delta": -2.5558736324310303,
+    "pool_r16": 0.3123500347137451,
+    "interior_err_r16": 1.873198390007019,
+    "pool_r48": 0.4149200916290283,
+    "interior_err_r48": 1.1561344861984253,
+    "pool_r128": 0.15383076667785645,
+    "interior_err_r128": 0.2320154458284378,
+    "banding": 0.0013310452923178673,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.03092670440673828,
+    "halo_under_dark": -0.015372276306152344,
+    "halo_over_bright": 0.0,
+    "halo_under_bright": -0.47180652618408203,
+    "flatness_dark": 0.9905117750167847,
+    "flatness_bright": 0.9656239748001099,
+    "far_delta": -1.2612448930740356,
+    "pool_r16": 0.16666972637176514,
+    "interior_err_r16": 0.9126113653182983,
+    "pool_r48": 0.2130953073501587,
+    "interior_err_r48": 0.5714410543441772,
+    "pool_r128": 0.09406077861785889,
+    "interior_err_r128": 0.10909277945756912,
+    "banding": 0.0006505241617560387,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 2.362077907652077,
+     "dL_mean": 1.6780773429364615,
+     "zone_glow_Lstar": 0.9008301487157522,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 3.6715118207203647,
+     "dL_mean": 3.7561036648867794,
+     "zone_glow_Lstar": 6.289131526282721,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "guided-e2-r48": {
+   "config": {
+    "_LLF_ABS_MODE": "guided",
+    "_LLF_GUIDED_EPS": 2.0,
+    "_LLF_GUIDED_RADIUS": 48
+   },
+   "S100": {
+    "halo_over_dark": 0.7566654682159424,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.24610841274261475,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.7212861776351929,
+    "flatness_bright": 0.7363993525505066,
+    "far_delta": 3.1287240982055664,
+    "pool_r16": 0.10046124458312988,
+    "interior_err_r16": 2.199690580368042,
+    "pool_r48": 0.33794450759887695,
+    "interior_err_r48": 1.9718629121780396,
+    "pool_r128": 0.09475922584533691,
+    "interior_err_r128": 0.8523913025856018,
+    "banding": 0.0017545187147334218,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.3310699462890625,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.0953173041343689,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.8616660833358765,
+    "flatness_bright": 0.8677287697792053,
+    "far_delta": 1.5377559661865234,
+    "pool_r16": 0.01266932487487793,
+    "interior_err_r16": 0.8923141360282898,
+    "pool_r48": 0.28342676162719727,
+    "interior_err_r48": 0.8860120177268982,
+    "pool_r128": 0.0676429271697998,
+    "interior_err_r128": 0.40821123123168945,
+    "banding": 0.0007928985287435353,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.14711761474609375,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.0,
+    "halo_under_bright": -1.073772668838501,
+    "flatness_dark": 0.8187580108642578,
+    "flatness_bright": 0.7879934906959534,
+    "far_delta": -2.5120506286621094,
+    "pool_r16": 0.3137328624725342,
+    "interior_err_r16": 1.884529948234558,
+    "pool_r48": 0.41947245597839355,
+    "interior_err_r48": 1.8412903547286987,
+    "pool_r128": 0.16956377029418945,
+    "interior_err_r128": 0.7114389538764954,
+    "banding": 0.0008763098740018904,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.08547735214233398,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.0,
+    "halo_under_bright": -0.5773570537567139,
+    "flatness_dark": 0.9109833836555481,
+    "flatness_bright": 0.8947286605834961,
+    "far_delta": -1.229547142982483,
+    "pool_r16": 0.16749799251556396,
+    "interior_err_r16": 0.909298300743103,
+    "pool_r48": 0.21298325061798096,
+    "interior_err_r48": 0.8909925222396851,
+    "pool_r128": 0.08230841159820557,
+    "interior_err_r128": 0.3384905457496643,
+    "banding": 0.00043736721272580326,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 2.3889491533836424,
+     "dL_mean": 1.7798813615001083,
+     "zone_glow_Lstar": 1.0254217614357082,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 4.299097425145346,
+     "dL_mean": 4.626430815758993,
+     "zone_glow_Lstar": 7.490520578943797,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "guided-e8-r12": {
+   "config": {
+    "_LLF_ABS_MODE": "guided",
+    "_LLF_GUIDED_EPS": 8.0,
+    "_LLF_GUIDED_RADIUS": 12
+   },
+   "S100": {
+    "halo_over_dark": 0.2092280387878418,
+    "halo_under_dark": -0.09624171257019043,
+    "halo_over_bright": 0.4066147804260254,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9955762028694153,
+    "flatness_bright": 0.9984561800956726,
+    "far_delta": 3.1415767669677734,
+    "pool_r16": 0.08740520477294922,
+    "interior_err_r16": 2.1759393215179443,
+    "pool_r48": 0.2709231376647949,
+    "interior_err_r48": 0.7825774550437927,
+    "pool_r128": 0.3954355716705322,
+    "interior_err_r128": 0.1981917917728424,
+    "banding": 0.0071577527560293674,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.06304669380187988,
+    "halo_under_dark": -0.05547833442687988,
+    "halo_over_bright": 0.19149792194366455,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9982762932777405,
+    "flatness_bright": 0.9986646771430969,
+    "far_delta": 1.5487380027770996,
+    "pool_r16": 0.00882577896118164,
+    "interior_err_r16": 0.9161756634712219,
+    "pool_r48": 0.09216547012329102,
+    "interior_err_r48": 0.36214134097099304,
+    "pool_r128": 0.10467267036437988,
+    "interior_err_r128": 0.1055406928062439,
+    "banding": 0.002153008012101054,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.0,
+    "halo_under_dark": -0.2597465515136719,
+    "halo_over_bright": 0.37604475021362305,
+    "halo_under_bright": -0.30241918563842773,
+    "flatness_dark": 0.9997188448905945,
+    "flatness_bright": 0.9951352477073669,
+    "far_delta": -2.5788521766662598,
+    "pool_r16": 0.2421576976776123,
+    "interior_err_r16": 1.8685578107833862,
+    "pool_r48": 0.2002873420715332,
+    "interior_err_r48": 1.2270344495773315,
+    "pool_r128": 0.21971368789672852,
+    "interior_err_r128": 0.1700008660554886,
+    "banding": 0.0023510518949478865,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.0,
+    "halo_under_dark": -0.11168241500854492,
+    "halo_over_bright": 0.20985674858093262,
+    "halo_under_bright": -0.1394890546798706,
+    "flatness_dark": 0.9998287558555603,
+    "flatness_bright": 0.9966573715209961,
+    "far_delta": -1.2780497074127197,
+    "pool_r16": 0.11828160285949707,
+    "interior_err_r16": 0.9110034704208374,
+    "pool_r48": 0.08768415451049805,
+    "interior_err_r48": 0.6034244298934937,
+    "pool_r128": 0.13197219371795654,
+    "interior_err_r128": 0.0794573500752449,
+    "banding": 0.0011799628846347332,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 1.9794960538767234,
+     "dL_mean": 1.1862639996143796,
+     "zone_glow_Lstar": 0.3191406351097316,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 3.6965514599856104,
+     "dL_mean": 3.7311889029993264,
+     "zone_glow_Lstar": 9.506922916883362,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "guided-e8-r24": {
+   "config": {
+    "_LLF_ABS_MODE": "guided",
+    "_LLF_GUIDED_EPS": 8.0,
+    "_LLF_GUIDED_RADIUS": 24
+   },
+   "S100": {
+    "halo_over_dark": 0.0,
+    "halo_under_dark": -0.44444942474365234,
+    "halo_over_bright": 0.3676794767379761,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9898648262023926,
+    "flatness_bright": 0.9908920526504517,
+    "far_delta": 3.1400184631347656,
+    "pool_r16": 0.0993797779083252,
+    "interior_err_r16": 2.296598196029663,
+    "pool_r48": 0.3122842311859131,
+    "interior_err_r48": 2.4649767875671387,
+    "pool_r128": 0.41414928436279297,
+    "interior_err_r128": 0.7027082443237305,
+    "banding": 0.004137823358178139,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.008846759796142578,
+    "halo_under_dark": -0.1781177520751953,
+    "halo_over_bright": 0.17168015241622925,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9942190051078796,
+    "flatness_bright": 0.9942024946212769,
+    "far_delta": 1.5464982986450195,
+    "pool_r16": 0.00985574722290039,
+    "interior_err_r16": 0.9550929069519043,
+    "pool_r48": 0.23679232597351074,
+    "interior_err_r48": 1.0426969528198242,
+    "pool_r128": 0.175384521484375,
+    "interior_err_r128": 0.3506433367729187,
+    "banding": 0.001290375948883593,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.0,
+    "halo_under_dark": -0.27025461196899414,
+    "halo_over_bright": 0.29136061668395996,
+    "halo_under_bright": -0.5403175354003906,
+    "flatness_dark": 0.9936085939407349,
+    "flatness_bright": 0.9809626936912537,
+    "far_delta": -2.5480904579162598,
+    "pool_r16": 0.3112645149230957,
+    "interior_err_r16": 1.996834635734558,
+    "pool_r48": 0.353271484375,
+    "interior_err_r48": 1.9735230207443237,
+    "pool_r128": 0.3766293525695801,
+    "interior_err_r128": 0.6630895733833313,
+    "banding": 0.0012549508828669786,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.0,
+    "halo_under_dark": -0.11758089065551758,
+    "halo_over_bright": 0.13485050201416016,
+    "halo_under_bright": -0.2935361862182617,
+    "flatness_dark": 0.9968012571334839,
+    "flatness_bright": 0.9897788166999817,
+    "far_delta": -1.2554177045822144,
+    "pool_r16": 0.16451191902160645,
+    "interior_err_r16": 0.9774945974349976,
+    "pool_r48": 0.17252838611602783,
+    "interior_err_r48": 0.9675391912460327,
+    "pool_r128": 0.22142887115478516,
+    "interior_err_r128": 0.3141956925392151,
+    "banding": 0.0006110022077336907,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 2.010085366762806,
+     "dL_mean": 1.333673639031556,
+     "zone_glow_Lstar": 0.4990399048664395,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 5.066259648619284,
+     "dL_mean": 5.546198748173503,
+     "zone_glow_Lstar": 14.217905832515699,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "guided-e8-r48": {
+   "config": {
+    "_LLF_ABS_MODE": "guided",
+    "_LLF_GUIDED_EPS": 8.0,
+    "_LLF_GUIDED_RADIUS": 48
+   },
+   "S100": {
+    "halo_over_dark": 0.37094593048095703,
+    "halo_under_dark": -0.13507890701293945,
+    "halo_over_bright": 0.31614458560943604,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.8681164383888245,
+    "flatness_bright": 0.8950425386428833,
+    "far_delta": 3.119765281677246,
+    "pool_r16": 0.0721433162689209,
+    "interior_err_r16": 2.2389705181121826,
+    "pool_r48": 0.3649473190307617,
+    "interior_err_r48": 2.5872695446014404,
+    "pool_r128": 0.25809621810913086,
+    "interior_err_r128": 1.7994948625564575,
+    "banding": 0.001680589746683836,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.16934919357299805,
+    "halo_under_dark": -0.0463566780090332,
+    "halo_over_bright": 0.15338915586471558,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9292968511581421,
+    "flatness_bright": 0.9381901621818542,
+    "far_delta": 1.532425880432129,
+    "pool_r16": 0.013271331787109375,
+    "interior_err_r16": 0.9294788837432861,
+    "pool_r48": 0.290895938873291,
+    "interior_err_r48": 1.2246968746185303,
+    "pool_r128": 0.11942100524902344,
+    "interior_err_r128": 0.8511254191398621,
+    "banding": 0.00062006083317101,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.0,
+    "halo_under_dark": -0.11350870132446289,
+    "halo_over_bright": 0.037447452545166016,
+    "halo_under_bright": -0.8844807147979736,
+    "flatness_dark": 0.914081871509552,
+    "flatness_bright": 0.8912272453308105,
+    "far_delta": -2.4921326637268066,
+    "pool_r16": 0.2864208221435547,
+    "interior_err_r16": 1.9216536283493042,
+    "pool_r48": 0.3866395950317383,
+    "interior_err_r48": 2.1018483638763428,
+    "pool_r128": 0.17867040634155273,
+    "interior_err_r128": 1.749313235282898,
+    "banding": 0.0005919428076595068,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.0005984306335449219,
+    "halo_under_dark": -0.03920173645019531,
+    "halo_over_bright": 0.00025665760040283203,
+    "halo_under_bright": -0.4799586534500122,
+    "flatness_dark": 0.9574599266052246,
+    "flatness_bright": 0.9478757381439209,
+    "far_delta": -1.215898036956787,
+    "pool_r16": 0.1485607624053955,
+    "interior_err_r16": 0.9272321462631226,
+    "pool_r48": 0.19234728813171387,
+    "interior_err_r48": 1.0172160863876343,
+    "pool_r128": 0.107261061668396,
+    "interior_err_r128": 0.8381434082984924,
+    "banding": 0.0002900372783187777,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 2.0317522276708346,
+     "dL_mean": 1.4089414905821498,
+     "zone_glow_Lstar": 0.4494035815171137,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 6.202793045596226,
+     "dL_mean": 6.989301756606967,
+     "zone_glow_Lstar": 18.048817446812123,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "guided-e32-r12": {
+   "config": {
+    "_LLF_ABS_MODE": "guided",
+    "_LLF_GUIDED_EPS": 32.0,
+    "_LLF_GUIDED_RADIUS": 12
+   },
+   "S100": {
+    "halo_over_dark": 0.0,
+    "halo_under_dark": -0.703963041305542,
+    "halo_over_bright": 0.5858696699142456,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9991375803947449,
+    "flatness_bright": 0.9995920658111572,
+    "far_delta": 3.140850067138672,
+    "pool_r16": 0.09885215759277344,
+    "interior_err_r16": 2.2992653846740723,
+    "pool_r48": 0.3232238292694092,
+    "interior_err_r48": 1.8743860721588135,
+    "pool_r128": 0.7975921630859375,
+    "interior_err_r128": 0.28819021582603455,
+    "banding": 0.007166085299104452,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.0,
+    "halo_under_dark": -0.3671751022338867,
+    "halo_over_bright": 0.29440924525260925,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.999660313129425,
+    "flatness_bright": 0.9996527433395386,
+    "far_delta": 1.5483102798461914,
+    "pool_r16": 0.006287813186645508,
+    "interior_err_r16": 0.9567460417747498,
+    "pool_r48": 0.11541366577148438,
+    "interior_err_r48": 0.8103603720664978,
+    "pool_r128": 0.2851707935333252,
+    "interior_err_r128": 0.14156657457351685,
+    "banding": 0.002150691347196698,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.0,
+    "halo_under_dark": -0.4264950752258301,
+    "halo_over_bright": 0.6802279949188232,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9999341368675232,
+    "flatness_bright": 0.9985418915748596,
+    "far_delta": -2.5777297019958496,
+    "pool_r16": 0.2475900650024414,
+    "interior_err_r16": 1.9672259092330933,
+    "pool_r48": 0.1267104148864746,
+    "interior_err_r48": 1.7566174268722534,
+    "pool_r128": 0.43424367904663086,
+    "interior_err_r128": 0.32964402437210083,
+    "banding": 0.002346170600503683,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.0,
+    "halo_under_dark": -0.1930088996887207,
+    "halo_over_bright": 0.36032330989837646,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9999585747718811,
+    "flatness_bright": 0.9990420937538147,
+    "far_delta": -1.2772266864776611,
+    "pool_r16": 0.11925816535949707,
+    "interior_err_r16": 0.9564985036849976,
+    "pool_r48": 0.08776354789733887,
+    "interior_err_r48": 0.8451370000839233,
+    "pool_r128": 0.23105251789093018,
+    "interior_err_r128": 0.16073042154312134,
+    "banding": 0.001177478116005659,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 1.967380443865871,
+     "dL_mean": 1.2092042353049928,
+     "zone_glow_Lstar": 0.28659986086643824,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 4.0625712365826985,
+     "dL_mean": 4.223508463485271,
+     "zone_glow_Lstar": 11.40827033063664,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "guided-e32-r24": {
+   "config": {
+    "_LLF_ABS_MODE": "guided",
+    "_LLF_GUIDED_EPS": 32.0,
+    "_LLF_GUIDED_RADIUS": 24
+   },
+   "S100": {
+    "halo_over_dark": 0.0,
+    "halo_under_dark": -1.0986106395721436,
+    "halo_over_bright": 0.46600985527038574,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 1.0016365051269531,
+    "flatness_bright": 0.9974594116210938,
+    "far_delta": 3.1394052505493164,
+    "pool_r16": 0.09220385551452637,
+    "interior_err_r16": 2.2973546981811523,
+    "pool_r48": 0.2883439064025879,
+    "interior_err_r48": 2.603907585144043,
+    "pool_r128": 0.714259147644043,
+    "interior_err_r128": 1.2900662422180176,
+    "banding": 0.004079646430909634,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.0,
+    "halo_under_dark": -0.5268557071685791,
+    "halo_over_bright": 0.21645361185073853,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 1.0000152587890625,
+    "flatness_bright": 0.9992688894271851,
+    "far_delta": 1.5455679893493652,
+    "pool_r16": 0.006876945495605469,
+    "interior_err_r16": 0.9569055438041687,
+    "pool_r48": 0.25048089027404785,
+    "interior_err_r48": 1.2306174039840698,
+    "pool_r128": 0.28690004348754883,
+    "interior_err_r128": 0.6212875843048096,
+    "banding": 0.0012763565173372626,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.0,
+    "halo_under_dark": -0.4586315155029297,
+    "halo_over_bright": 0.6719517707824707,
+    "halo_under_bright": -0.1054987907409668,
+    "flatness_dark": 0.9984986186027527,
+    "flatness_bright": 0.9949495792388916,
+    "far_delta": -2.545759916305542,
+    "pool_r16": 0.3036031723022461,
+    "interior_err_r16": 2.003478765487671,
+    "pool_r48": 0.33464908599853516,
+    "interior_err_r48": 2.134725332260132,
+    "pool_r128": 0.5088207721710205,
+    "interior_err_r128": 1.400283694267273,
+    "banding": 0.0012405775487422943,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.0,
+    "halo_under_dark": -0.20756912231445312,
+    "halo_over_bright": 0.32234883308410645,
+    "halo_under_bright": -0.08782947063446045,
+    "flatness_dark": 0.9992495775222778,
+    "flatness_bright": 0.9975135922431946,
+    "far_delta": -1.2536956071853638,
+    "pool_r16": 0.16030895709991455,
+    "interior_err_r16": 0.9821847677230835,
+    "pool_r48": 0.15615451335906982,
+    "interior_err_r48": 1.031023383140564,
+    "pool_r128": 0.2756075859069824,
+    "interior_err_r128": 0.6810503602027893,
+    "banding": 0.0006046088528819382,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 2.0291489817532193,
+     "dL_mean": 1.3974362170375674,
+     "zone_glow_Lstar": 0.3896359511375159,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 5.696946548138906,
+     "dL_mean": 6.34671257037093,
+     "zone_glow_Lstar": 17.708972150570858,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "guided-e32-r48": {
+   "config": {
+    "_LLF_ABS_MODE": "guided",
+    "_LLF_GUIDED_EPS": 32.0,
+    "_LLF_GUIDED_RADIUS": 48
+   },
+   "S100": {
+    "halo_over_dark": 0.0,
+    "halo_under_dark": -0.5040998458862305,
+    "halo_over_bright": 0.30508726835250854,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9596535563468933,
+    "flatness_bright": 0.9671497941017151,
+    "far_delta": 3.115644931793213,
+    "pool_r16": 0.0320887565612793,
+    "interior_err_r16": 2.2122678756713867,
+    "pool_r48": 0.35506272315979004,
+    "interior_err_r48": 2.7008285522460938,
+    "pool_r128": 0.35740137100219727,
+    "interior_err_r128": 2.404592514038086,
+    "banding": 0.0016373400576412678,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.0,
+    "halo_under_dark": -0.2737410068511963,
+    "halo_over_bright": 0.17279641330242157,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9792853593826294,
+    "flatness_bright": 0.9879665970802307,
+    "far_delta": 1.5287141799926758,
+    "pool_r16": 0.021610736846923828,
+    "interior_err_r16": 0.9226164221763611,
+    "pool_r48": 0.2929368019104004,
+    "interior_err_r48": 1.2726678848266602,
+    "pool_r128": 0.11105823516845703,
+    "interior_err_r128": 1.2816656827926636,
+    "banding": 0.0005086068413220346,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.0,
+    "halo_under_dark": -0.33534812927246094,
+    "halo_over_bright": 0.20032572746276855,
+    "halo_under_bright": -0.7157628536224365,
+    "flatness_dark": 0.9733009934425354,
+    "flatness_bright": 0.9630162119865417,
+    "far_delta": -2.4824280738830566,
+    "pool_r16": 0.2641606330871582,
+    "interior_err_r16": 1.9018782377243042,
+    "pool_r48": 0.3748643398284912,
+    "interior_err_r48": 2.1346442699432373,
+    "pool_r128": 0.2113027572631836,
+    "interior_err_r128": 2.0392558574676514,
+    "banding": 0.0004480794013943523,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.0,
+    "halo_under_dark": -0.15066051483154297,
+    "halo_over_bright": 0.07529479265213013,
+    "halo_under_bright": -0.40143102407455444,
+    "flatness_dark": 0.9869204759597778,
+    "flatness_bright": 0.9818231463432312,
+    "far_delta": -1.2086312770843506,
+    "pool_r16": 0.1346423625946045,
+    "interior_err_r16": 0.9131273031234741,
+    "pool_r48": 0.18490386009216309,
+    "interior_err_r48": 1.02704656124115,
+    "pool_r128": 0.12662184238433838,
+    "interior_err_r128": 0.9707689881324768,
+    "banding": 0.00022490069386549294,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 2.0403580518546263,
+     "dL_mean": 1.434109900757578,
+     "zone_glow_Lstar": 0.5617398435493297,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 6.872621868834848,
+     "dL_mean": 7.827113766046377,
+     "zone_glow_Lstar": 22.170610265265267,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "guided-e8-r24-tau0.25": {
+   "config": {
+    "_LLF_ABS_MODE": "guided",
+    "_LLF_GUIDED_EPS": 8.0,
+    "_LLF_GUIDED_RADIUS": 24,
+    "_LLF_GLOBAL_BLEND": 0.25
+   },
+   "S100": {
+    "halo_over_dark": 0.32876038551330566,
+    "halo_under_dark": -0.16371631622314453,
+    "halo_over_bright": 0.26389914751052856,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.7850945591926575,
+    "flatness_bright": 0.9325487613677979,
+    "far_delta": 3.1392765045166016,
+    "pool_r16": 0.1076500415802002,
+    "interior_err_r16": 1.5327709913253784,
+    "pool_r48": 0.3035111427307129,
+    "interior_err_r48": 1.7524292469024658,
+    "pool_r128": 0.3106350898742676,
+    "interior_err_r128": 0.5046878457069397,
+    "banding": 0.016325926408171654,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.14400553703308105,
+    "halo_under_dark": -0.06761455535888672,
+    "halo_over_bright": 0.12731117010116577,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9219834208488464,
+    "flatness_bright": 0.9430407881736755,
+    "far_delta": 1.5472221374511719,
+    "pool_r16": 0.017026901245117188,
+    "interior_err_r16": 0.5812076926231384,
+    "pool_r48": 0.23770570755004883,
+    "interior_err_r48": 0.712688148021698,
+    "pool_r128": 0.1281123161315918,
+    "interior_err_r128": 0.24482965469360352,
+    "banding": 0.0020949502941221,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.0,
+    "halo_under_dark": -0.18364238739013672,
+    "halo_over_bright": 0.18290090560913086,
+    "halo_under_bright": -0.6536834239959717,
+    "flatness_dark": 0.9865972399711609,
+    "flatness_bright": 0.886497437953949,
+    "far_delta": -2.55318284034729,
+    "pool_r16": 0.3055546283721924,
+    "interior_err_r16": 1.3876646757125854,
+    "pool_r48": 0.4228832721710205,
+    "interior_err_r48": 1.4411801099777222,
+    "pool_r128": 0.283658504486084,
+    "interior_err_r128": 0.493242084980011,
+    "banding": 0.0033723912201821804,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.0,
+    "halo_under_dark": -0.07450246810913086,
+    "halo_over_bright": 0.0968179702758789,
+    "halo_under_bright": -0.3322024345397949,
+    "flatness_dark": 0.9931746125221252,
+    "flatness_bright": 0.9494653344154358,
+    "far_delta": -1.2593905925750732,
+    "pool_r16": 0.1619354486465454,
+    "interior_err_r16": 0.6776012182235718,
+    "pool_r48": 0.22101211547851562,
+    "interior_err_r48": 0.707206130027771,
+    "pool_r128": 0.16893863677978516,
+    "interior_err_r128": 0.23336797952651978,
+    "banding": 0.0017206683987751603,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 1.9102339940761064,
+     "dL_mean": 1.1140943023148242,
+     "zone_glow_Lstar": 0.3919749648407232,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 4.102912595606314,
+     "dL_mean": 4.31300928200008,
+     "zone_glow_Lstar": 9.430207444888934,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "guided-e8-r24-tau0.5": {
+   "config": {
+    "_LLF_ABS_MODE": "guided",
+    "_LLF_GUIDED_EPS": 8.0,
+    "_LLF_GUIDED_RADIUS": 24,
+    "_LLF_GLOBAL_BLEND": 0.5
+   },
+   "S100": {
+    "halo_over_dark": 0.57387375831604,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.17045658826828003,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.6141385436058044,
+    "flatness_bright": 0.8744986653327942,
+    "far_delta": 3.141470432281494,
+    "pool_r16": 0.11365556716918945,
+    "interior_err_r16": 0.7691273093223572,
+    "pool_r48": 0.296109676361084,
+    "interior_err_r48": 1.0387217998504639,
+    "pool_r128": 0.20423269271850586,
+    "interior_err_r128": 0.3066101372241974,
+    "banding": 0.031652189791202545,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.25560855865478516,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.09340894222259521,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.8511282205581665,
+    "flatness_bright": 0.8921017050743103,
+    "far_delta": 1.5494790077209473,
+    "pool_r16": 0.02321934700012207,
+    "interior_err_r16": 0.20795126259326935,
+    "pool_r48": 0.2373948097229004,
+    "interior_err_r48": 0.38269463181495667,
+    "pool_r128": 0.07698297500610352,
+    "interior_err_r128": 0.13874369859695435,
+    "banding": 0.003441964741796255,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.0,
+    "halo_under_dark": -0.0976572036743164,
+    "halo_over_bright": 0.12036943435668945,
+    "halo_under_bright": -0.7181272506713867,
+    "flatness_dark": 0.9796109199523926,
+    "flatness_bright": 0.7944498062133789,
+    "far_delta": -2.5607337951660156,
+    "pool_r16": 0.2999699115753174,
+    "interior_err_r16": 0.7783439755439758,
+    "pool_r48": 0.49051713943481445,
+    "interior_err_r48": 0.9089306592941284,
+    "pool_r128": 0.1920909881591797,
+    "interior_err_r128": 0.3234174847602844,
+    "banding": 0.00641567911952734,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.004477977752685547,
+    "halo_under_dark": -0.03166484832763672,
+    "halo_over_bright": 0.08593010902404785,
+    "halo_under_bright": -0.3397865295410156,
+    "flatness_dark": 0.9895573854446411,
+    "flatness_bright": 0.9114691019058228,
+    "far_delta": -1.2648613452911377,
+    "pool_r16": 0.1574089527130127,
+    "interior_err_r16": 0.37762579321861267,
+    "pool_r48": 0.2684776782989502,
+    "interior_err_r48": 0.44688737392425537,
+    "pool_r128": 0.1168661117553711,
+    "interior_err_r128": 0.15249735116958618,
+    "banding": 0.003298120340332389,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 1.959660649591535,
+     "dL_mean": 1.1364760796829925,
+     "zone_glow_Lstar": 0.2755505922100232,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 3.2700601190668896,
+     "dL_mean": 3.2377712764737705,
+     "zone_glow_Lstar": 4.438764316282945,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "gauss-L2": {
+   "config": {
+    "_LLF_ABS_MODE": "gauss",
+    "_LLF_LAST_LEVEL": 2
+   },
+   "S100": {
+    "halo_over_dark": 0.2987828254699707,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.12181395292282104,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.5493026375770569,
+    "flatness_bright": 0.8259114027023315,
+    "far_delta": 3.1453733444213867,
+    "pool_r16": 0.02311229705810547,
+    "interior_err_r16": 0.00016174465417861938,
+    "pool_r48": 0.1068108081817627,
+    "interior_err_r48": 0.001124778762459755,
+    "pool_r128": 0.021345138549804688,
+    "interior_err_r128": 0.001131084281951189,
+    "banding": 0.06214015185832977,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.16271233558654785,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.10045111179351807,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.7951182723045349,
+    "flatness_bright": 0.8486242890357971,
+    "far_delta": 1.5542035102844238,
+    "pool_r16": 0.020307064056396484,
+    "interior_err_r16": 0.00039605237543582916,
+    "pool_r48": 0.07303762435913086,
+    "interior_err_r48": 0.0009885169565677643,
+    "pool_r128": 0.03333759307861328,
+    "interior_err_r128": 0.0010775960981845856,
+    "banding": 0.006334896199405193,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.03858184814453125,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.6082422733306885,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9753303527832031,
+    "flatness_bright": 0.7284168601036072,
+    "far_delta": -2.573824882507324,
+    "pool_r16": 0.08186674118041992,
+    "interior_err_r16": 5.9917569160461426e-05,
+    "pool_r48": 0.16092157363891602,
+    "interior_err_r48": 0.00016960501670837402,
+    "pool_r128": 0.08642864227294922,
+    "interior_err_r128": 0.0005599707365036011,
+    "banding": 0.012553091160953045,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.021642208099365234,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.3860563039779663,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.987354576587677,
+    "flatness_bright": 0.8882966041564941,
+    "far_delta": -1.274360179901123,
+    "pool_r16": 0.05336809158325195,
+    "interior_err_r16": 4.14624810218811e-06,
+    "pool_r48": 0.1173102855682373,
+    "interior_err_r48": 9.094923734664917e-05,
+    "pool_r128": 0.06356656551361084,
+    "interior_err_r128": 0.00046627968549728394,
+    "banding": 0.006471521221101284,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 2.410719374139445,
+     "dL_mean": 1.7444058257315915,
+     "zone_glow_Lstar": 0.07214545709351693,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 2.5826131187027137,
+     "dL_mean": 2.2212492385485425,
+     "zone_glow_Lstar": -3.187995781641823,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "gauss-L3": {
+   "config": {
+    "_LLF_ABS_MODE": "gauss",
+    "_LLF_LAST_LEVEL": 3
+   },
+   "S100": {
+    "halo_over_dark": 0.32602787017822266,
+    "halo_under_dark": -0.27176761627197266,
+    "halo_over_bright": 0.12517958879470825,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.7831151485443115,
+    "flatness_bright": 0.923658549785614,
+    "far_delta": 3.145864486694336,
+    "pool_r16": 0.2521219253540039,
+    "interior_err_r16": 0.024095319211483,
+    "pool_r48": 0.13723087310791016,
+    "interior_err_r48": 0.0006075296550989151,
+    "pool_r128": 0.02195453643798828,
+    "interior_err_r128": 0.0008479091920889914,
+    "banding": 0.05927913263440132,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.1695556640625,
+    "halo_under_dark": -0.14252424240112305,
+    "halo_over_bright": 0.1050972044467926,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9111440777778625,
+    "flatness_bright": 0.9334855675697327,
+    "far_delta": 1.5549674034118652,
+    "pool_r16": 0.18834447860717773,
+    "interior_err_r16": 0.011415878310799599,
+    "pool_r48": 0.08037900924682617,
+    "interior_err_r48": 0.0005292035639286041,
+    "pool_r128": 0.03435516357421875,
+    "interior_err_r128": 0.0006778798997402191,
+    "banding": 0.006109920796006918,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.04061174392700195,
+    "halo_under_dark": -0.013623237609863281,
+    "halo_over_bright": 0.7967555522918701,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9893057346343994,
+    "flatness_bright": 0.8847032785415649,
+    "far_delta": -2.5718774795532227,
+    "pool_r16": 0.21030712127685547,
+    "interior_err_r16": 0.059980228543281555,
+    "pool_r48": 0.15429162979125977,
+    "interior_err_r48": 0.00010094046592712402,
+    "pool_r128": 0.09133386611938477,
+    "interior_err_r128": 0.00015752017498016357,
+    "banding": 0.012072417885065079,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.02287578582763672,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.45419490337371826,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9946151971817017,
+    "flatness_bright": 0.9538847804069519,
+    "far_delta": -1.2729262113571167,
+    "pool_r16": 0.1213759183883667,
+    "interior_err_r16": 0.026789996773004532,
+    "pool_r48": 0.11250746250152588,
+    "interior_err_r48": 4.994124174118042e-05,
+    "pool_r128": 0.06705975532531738,
+    "interior_err_r128": 0.00019734352827072144,
+    "banding": 0.006231532897800207,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 2.341711274738351,
+     "dL_mean": 1.6410272681537872,
+     "zone_glow_Lstar": 0.08221591752843885,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 2.4911290109631827,
+     "dL_mean": 2.0949764724601363,
+     "zone_glow_Lstar": -2.132753603316084,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "gauss-L5": {
+   "config": {
+    "_LLF_ABS_MODE": "gauss",
+    "_LLF_LAST_LEVEL": 5
+   },
+   "S100": {
+    "halo_over_dark": 0.3521718978881836,
+    "halo_under_dark": -1.16322660446167,
+    "halo_over_bright": 0.266793429851532,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9986011981964111,
+    "flatness_bright": 0.9995502233505249,
+    "far_delta": 3.1449851989746094,
+    "pool_r16": 0.387664794921875,
+    "interior_err_r16": 1.6259822845458984,
+    "pool_r48": 0.8621189594268799,
+    "interior_err_r48": 0.03146461397409439,
+    "pool_r128": 0.0989842414855957,
+    "interior_err_r128": 0.0013553830794990063,
+    "banding": 0.025127526372671127,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.17517876625061035,
+    "halo_under_dark": -0.6219351291656494,
+    "halo_over_bright": 0.14330452680587769,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9995014071464539,
+    "flatness_bright": 0.9996051788330078,
+    "far_delta": 1.553596019744873,
+    "pool_r16": 0.2220909595489502,
+    "interior_err_r16": 0.593165934085846,
+    "pool_r48": 0.2492961883544922,
+    "interior_err_r48": 0.0435512401163578,
+    "pool_r128": 0.05948352813720703,
+    "interior_err_r128": 0.001153167337179184,
+    "banding": 0.003908071666955948,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.040778160095214844,
+    "halo_under_dark": -0.19204235076904297,
+    "halo_over_bright": 0.8224231004714966,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9999235272407532,
+    "flatness_bright": 0.9994099140167236,
+    "far_delta": -2.5753464698791504,
+    "pool_r16": 0.23868656158447266,
+    "interior_err_r16": 1.3617171049118042,
+    "pool_r48": 0.15128731727600098,
+    "interior_err_r48": 0.19301971793174744,
+    "pool_r128": 0.09891867637634277,
+    "interior_err_r128": 0.0006244927644729614,
+    "banding": 0.007105505559593439,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.02338552474975586,
+    "halo_under_dark": -0.07385778427124023,
+    "halo_over_bright": 0.45182716846466064,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9999585151672363,
+    "flatness_bright": 0.9997698664665222,
+    "far_delta": -1.2754806280136108,
+    "pool_r16": 0.14230167865753174,
+    "interior_err_r16": 0.6432813405990601,
+    "pool_r48": 0.08173179626464844,
+    "interior_err_r48": 0.0903695747256279,
+    "pool_r128": 0.07266783714294434,
+    "interior_err_r128": 0.00029475241899490356,
+    "banding": 0.003774356795474887,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 2.1851653341523183,
+     "dL_mean": 1.4167123981102376,
+     "zone_glow_Lstar": 0.13329301817758263,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 2.4930870486773533,
+     "dL_mean": 2.090215122366464,
+     "zone_glow_Lstar": 2.8118459403044582,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "guard-L4-t0.5": {
+   "config": {
+    "_LLF_ABS_MODE": "gauss_guard",
+    "_LLF_LAST_LEVEL": 4,
+    "_LLF_GUARD_TEMP": 0.5
+   },
+   "S100": {
+    "halo_over_dark": 0.6694083213806152,
+    "halo_under_dark": -0.5591311454772949,
+    "halo_over_bright": 0.1780126690864563,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.5145415663719177,
+    "flatness_bright": 0.8894370794296265,
+    "far_delta": 3.0552053451538086,
+    "pool_r16": 1.1494183540344238,
+    "interior_err_r16": 0.2378135621547699,
+    "pool_r48": 0.5411293506622314,
+    "interior_err_r48": 0.07071772962808609,
+    "pool_r128": 0.11432003974914551,
+    "interior_err_r128": 0.0670754611492157,
+    "banding": 0.06345909088850021,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.2610645294189453,
+    "halo_under_dark": -0.35697221755981445,
+    "halo_over_bright": 0.15616321563720703,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.8097557425498962,
+    "flatness_bright": 0.9040152430534363,
+    "far_delta": 1.4844555854797363,
+    "pool_r16": 0.2467665672302246,
+    "interior_err_r16": 0.17944781482219696,
+    "pool_r48": 0.11403775215148926,
+    "interior_err_r48": 0.06166556850075722,
+    "pool_r128": 0.03679609298706055,
+    "interior_err_r128": 0.05945759639143944,
+    "banding": 0.0065024374052882195,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.07932043075561523,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.6498022079467773,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9776349663734436,
+    "flatness_bright": 0.719866931438446,
+    "far_delta": -2.3910953998565674,
+    "pool_r16": 0.24135804176330566,
+    "interior_err_r16": 0.07504098117351532,
+    "pool_r48": 0.15601086616516113,
+    "interior_err_r48": 0.011860042810440063,
+    "pool_r128": 0.10835838317871094,
+    "interior_err_r128": 0.008515521883964539,
+    "banding": 0.01297642383724451,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.04935169219970703,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.36308449506759644,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9866647720336914,
+    "flatness_bright": 0.816675066947937,
+    "far_delta": -1.146078109741211,
+    "pool_r16": 0.0908517837524414,
+    "interior_err_r16": 0.04100671038031578,
+    "pool_r48": 0.10809969902038574,
+    "interior_err_r48": 0.007265694439411163,
+    "pool_r128": 0.06296920776367188,
+    "interior_err_r128": 0.0048970505595207214,
+    "banding": 0.0066511062905192375,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 2.028555103484014,
+     "dL_mean": 1.194888244176329,
+     "zone_glow_Lstar": -0.1973894360289381,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 2.8259813242340845,
+     "dL_mean": 2.579768484354692,
+     "zone_glow_Lstar": 0.5151922872628356,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "guard-L4-t1": {
+   "config": {
+    "_LLF_ABS_MODE": "gauss_guard",
+    "_LLF_LAST_LEVEL": 4,
+    "_LLF_GUARD_TEMP": 1.0
+   },
+   "S100": {
+    "halo_over_dark": 0.9262568950653076,
+    "halo_under_dark": -0.3302009105682373,
+    "halo_over_bright": 0.21883493661880493,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.3918980062007904,
+    "flatness_bright": 0.9249116778373718,
+    "far_delta": 2.727987289428711,
+    "pool_r16": 0.9169964790344238,
+    "interior_err_r16": 0.2461281716823578,
+    "pool_r48": 0.48670196533203125,
+    "interior_err_r48": 0.14372305572032928,
+    "pool_r128": 0.1739511489868164,
+    "interior_err_r128": 0.14293906092643738,
+    "banding": 0.06116722896695137,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.34565019607543945,
+    "halo_under_dark": -0.29539966583251953,
+    "halo_over_bright": 0.1918659806251526,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.7919885516166687,
+    "flatness_bright": 0.9347571134567261,
+    "far_delta": 1.4124212265014648,
+    "pool_r16": 0.22986841201782227,
+    "interior_err_r16": 0.1862878054380417,
+    "pool_r48": 0.14238190650939941,
+    "interior_err_r48": 0.12493148446083069,
+    "pool_r128": 0.03829383850097656,
+    "interior_err_r128": 0.1252397894859314,
+    "banding": 0.006588691845536232,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.07621383666992188,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.6515116691589355,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9794210195541382,
+    "flatness_bright": 0.6636955738067627,
+    "far_delta": -2.1879091262817383,
+    "pool_r16": 0.13163185119628906,
+    "interior_err_r16": 0.07660596072673798,
+    "pool_r48": 0.17596960067749023,
+    "interior_err_r48": 0.01928439736366272,
+    "pool_r128": 0.11406850814819336,
+    "interior_err_r128": 0.016191646456718445,
+    "banding": 0.01299278624355793,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.04791450500488281,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.29291415214538574,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9880385994911194,
+    "flatness_bright": 0.7767086029052734,
+    "far_delta": -1.028002381324768,
+    "pool_r16": 0.030919790267944336,
+    "interior_err_r16": 0.04182496294379234,
+    "pool_r48": 0.10214567184448242,
+    "interior_err_r48": 0.0112997367978096,
+    "pool_r128": 0.051889896392822266,
+    "interior_err_r128": 0.008902482688426971,
+    "banding": 0.006750188302248716,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 1.9438001872482176,
+     "dL_mean": 1.1112190761255378,
+     "zone_glow_Lstar": -0.4386816176898989,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 3.595069072626493,
+     "dL_mean": 3.6323772690064846,
+     "zone_glow_Lstar": 2.6870290318375405,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "guard-L4-t2": {
+   "config": {
+    "_LLF_ABS_MODE": "gauss_guard",
+    "_LLF_LAST_LEVEL": 4,
+    "_LLF_GUARD_TEMP": 2.0
+   },
+   "S100": {
+    "halo_over_dark": 1.3247151374816895,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.19800883531570435,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 1.2786085605621338,
+    "flatness_bright": 0.9825428128242493,
+    "far_delta": 2.123098373413086,
+    "pool_r16": 0.3085026741027832,
+    "interior_err_r16": 0.2769061028957367,
+    "pool_r48": 0.5649271011352539,
+    "interior_err_r48": 0.22559277713298798,
+    "pool_r128": 0.17150497436523438,
+    "interior_err_r128": 0.23801276087760925,
+    "banding": 0.056503381580114365,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.42759037017822266,
+    "halo_under_dark": -0.2694263458251953,
+    "halo_over_bright": 0.1864563226699829,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.7661067247390747,
+    "flatness_bright": 0.9848182201385498,
+    "far_delta": 1.2058115005493164,
+    "pool_r16": 0.19377684593200684,
+    "interior_err_r16": 0.21107785403728485,
+    "pool_r48": 0.1535477638244629,
+    "interior_err_r48": 0.19578519463539124,
+    "pool_r128": 0.058115482330322266,
+    "interior_err_r128": 0.20737236738204956,
+    "banding": 0.005989870056509972,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.07308578491210938,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.3658790588378906,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.97822105884552,
+    "flatness_bright": 0.6168438196182251,
+    "far_delta": -1.7760318517684937,
+    "pool_r16": 0.19343960285186768,
+    "interior_err_r16": 0.08264081180095673,
+    "pool_r48": 0.1889435052871704,
+    "interior_err_r48": 0.036813884973526,
+    "pool_r128": 0.03590500354766846,
+    "interior_err_r128": 0.03800599277019501,
+    "banding": 0.012930310331285,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.047449588775634766,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.1250881552696228,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9877908229827881,
+    "flatness_bright": 0.7983518838882446,
+    "far_delta": -0.883015513420105,
+    "pool_r16": 0.09629029035568237,
+    "interior_err_r16": 0.04498162493109703,
+    "pool_r48": 0.07955271005630493,
+    "interior_err_r48": 0.020469315350055695,
+    "pool_r128": 0.013796210289001465,
+    "interior_err_r128": 0.020729951560497284,
+    "banding": 0.006703598890453577,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 2.1593998299023904,
+     "dL_mean": 1.559214704648602,
+     "zone_glow_Lstar": -0.9541241509389032,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 5.785766136490952,
+     "dL_mean": 6.410632661126152,
+     "zone_glow_Lstar": 8.639723858983613,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "guard-L6-t0.5": {
+   "config": {
+    "_LLF_ABS_MODE": "gauss_guard",
+    "_LLF_LAST_LEVEL": 6,
+    "_LLF_GUARD_TEMP": 0.5
+   },
+   "S100": {
+    "halo_over_dark": 0.5651483535766602,
+    "halo_under_dark": -1.039867877960205,
+    "halo_over_bright": 0.10445976257324219,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.5108981728553772,
+    "flatness_bright": 0.8782429695129395,
+    "far_delta": 3.039428234100342,
+    "pool_r16": 0.12189626693725586,
+    "interior_err_r16": 0.7590810060501099,
+    "pool_r48": 1.3359644412994385,
+    "interior_err_r48": 0.39273419976234436,
+    "pool_r128": 0.6250724792480469,
+    "interior_err_r128": 0.10482308268547058,
+    "banding": 0.06378322839736938,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.15889716148376465,
+    "halo_under_dark": -0.8393990993499756,
+    "halo_over_bright": 0.09901082515716553,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.8014784455299377,
+    "flatness_bright": 0.8943383693695068,
+    "far_delta": 1.4809932708740234,
+    "pool_r16": 0.04192781448364258,
+    "interior_err_r16": 0.5402926802635193,
+    "pool_r48": 0.20865678787231445,
+    "interior_err_r48": 0.2823258936405182,
+    "pool_r128": 0.1353015899658203,
+    "interior_err_r128": 0.08747071027755737,
+    "banding": 0.0064900899305939674,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.10596466064453125,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.8206329345703125,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9799224138259888,
+    "flatness_bright": 0.7428018450737,
+    "far_delta": -2.3992528915405273,
+    "pool_r16": 0.0816965103149414,
+    "interior_err_r16": 0.44165533781051636,
+    "pool_r48": 0.18327903747558594,
+    "interior_err_r48": 0.15627017617225647,
+    "pool_r128": 0.23992013931274414,
+    "interior_err_r128": 0.019185230135917664,
+    "banding": 0.013252428732812405,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.06803321838378906,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.40035146474838257,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9879773855209351,
+    "flatness_bright": 0.8210081458091736,
+    "far_delta": -1.1508185863494873,
+    "pool_r16": 0.049958229064941406,
+    "interior_err_r16": 0.22334638237953186,
+    "pool_r48": 0.049974679946899414,
+    "interior_err_r48": 0.07414687424898148,
+    "pool_r128": 0.07964944839477539,
+    "interior_err_r128": 0.01088135689496994,
+    "banding": 0.006762360222637653,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 1.949673094434314,
+     "dL_mean": 1.1220737047998188,
+     "zone_glow_Lstar": -0.22698619867819336,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 3.4141641713795354,
+     "dL_mean": 3.3133078577279145,
+     "zone_glow_Lstar": 7.436691013658796,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "guard-L6-t1": {
+   "config": {
+    "_LLF_ABS_MODE": "gauss_guard",
+    "_LLF_LAST_LEVEL": 6,
+    "_LLF_GUARD_TEMP": 1.0
+   },
+   "S100": {
+    "halo_over_dark": 0.6233611106872559,
+    "halo_under_dark": -0.8604350090026855,
+    "halo_over_bright": 0.15579679608345032,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.3886367678642273,
+    "flatness_bright": 0.9198825359344482,
+    "far_delta": 2.712655544281006,
+    "pool_r16": 0.08660221099853516,
+    "interior_err_r16": 0.7631162405014038,
+    "pool_r48": 1.0987732410430908,
+    "interior_err_r48": 0.40275970101356506,
+    "pool_r128": 0.5166053771972656,
+    "interior_err_r128": 0.14789101481437683,
+    "banding": 0.06186520680785179,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.2159438133239746,
+    "halo_under_dark": -0.7482528686523438,
+    "halo_over_bright": 0.14330852031707764,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.790179967880249,
+    "flatness_bright": 0.9304634928703308,
+    "far_delta": 1.4090604782104492,
+    "pool_r16": 0.044458866119384766,
+    "interior_err_r16": 0.543780505657196,
+    "pool_r48": 0.19838833808898926,
+    "interior_err_r48": 0.29124680161476135,
+    "pool_r128": 0.14283251762390137,
+    "interior_err_r128": 0.12635785341262817,
+    "banding": 0.006528466008603573,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.10298490524291992,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.6809897422790527,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9817206859588623,
+    "flatness_bright": 0.6801354289054871,
+    "far_delta": -2.196472644805908,
+    "pool_r16": 0.08732891082763672,
+    "interior_err_r16": 0.44241732358932495,
+    "pool_r48": 0.08426332473754883,
+    "interior_err_r48": 0.15834251046180725,
+    "pool_r128": 0.11521053314208984,
+    "interior_err_r128": 0.024489566683769226,
+    "banding": 0.01307643111795187,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.0660243034362793,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.29224473237991333,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9895697832107544,
+    "flatness_bright": 0.7874897122383118,
+    "far_delta": -1.0329786539077759,
+    "pool_r16": 0.0750875473022461,
+    "interior_err_r16": 0.22375264763832092,
+    "pool_r48": 0.06890904903411865,
+    "interior_err_r48": 0.07547152787446976,
+    "pool_r128": 0.05454850196838379,
+    "interior_err_r128": 0.013851098716259003,
+    "banding": 0.006718791089951992,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 1.9548212704700167,
+     "dL_mean": 1.1552155089281828,
+     "zone_glow_Lstar": -0.4373425642238408,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 4.207174585195442,
+     "dL_mean": 4.395688944736093,
+     "zone_glow_Lstar": 9.133688648077216,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "guard-L6-t2": {
+   "config": {
+    "_LLF_ABS_MODE": "gauss_guard",
+    "_LLF_LAST_LEVEL": 6,
+    "_LLF_GUARD_TEMP": 2.0
+   },
+   "S100": {
+    "halo_over_dark": 0.9667654037475586,
+    "halo_under_dark": -0.45226335525512695,
+    "halo_over_bright": 0.1699628233909607,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 1.0945605039596558,
+    "flatness_bright": 0.9838014841079712,
+    "far_delta": 2.104471206665039,
+    "pool_r16": 0.12984204292297363,
+    "interior_err_r16": 0.7789648771286011,
+    "pool_r48": 0.688849687576294,
+    "interior_err_r48": 0.4424345791339874,
+    "pool_r128": 0.3186686038970947,
+    "interior_err_r128": 0.2680926024913788,
+    "banding": 0.057711970061063766,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.2640669345855713,
+    "halo_under_dark": -0.5628640651702881,
+    "halo_over_bright": 0.16844868659973145,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.7704169750213623,
+    "flatness_bright": 0.9859310984611511,
+    "far_delta": 1.200779914855957,
+    "pool_r16": 0.04868149757385254,
+    "interior_err_r16": 0.5574752688407898,
+    "pool_r48": 0.18600702285766602,
+    "interior_err_r48": 0.3263378441333771,
+    "pool_r128": 0.13500738143920898,
+    "interior_err_r128": 0.2311893105506897,
+    "banding": 0.006006941199302673,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.0984034538269043,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.3685396909713745,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9792488217353821,
+    "flatness_bright": 0.6346708536148071,
+    "far_delta": -1.7774642705917358,
+    "pool_r16": 0.27446281909942627,
+    "interior_err_r16": 0.4457551836967468,
+    "pool_r48": 0.301615834236145,
+    "interior_err_r48": 0.16436973214149475,
+    "pool_r128": 0.14810478687286377,
+    "interior_err_r128": 0.03836171329021454,
+    "banding": 0.012462911196053028,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.06312704086303711,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.11874091625213623,
+    "halo_under_bright": -0.025133967399597168,
+    "flatness_dark": 0.9883946776390076,
+    "flatness_bright": 0.8153566122055054,
+    "far_delta": -0.8838372230529785,
+    "pool_r16": 0.14394903182983398,
+    "interior_err_r16": 0.2254425585269928,
+    "pool_r48": 0.16642236709594727,
+    "interior_err_r48": 0.07912982255220413,
+    "pool_r128": 0.0755300521850586,
+    "interior_err_r128": 0.020996980369091034,
+    "banding": 0.006655741482973099,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 2.15517481432896,
+     "dL_mean": 1.5522765740385198,
+     "zone_glow_Lstar": -0.9232656454926462,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 6.49733256973854,
+     "dL_mean": 7.33207120483397,
+     "zone_glow_Lstar": 14.079267066183311,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "guard2-L4-f2-t0.5": {
+   "config": {
+    "_LLF_ABS_MODE": "gauss_guard",
+    "_LLF_LAST_LEVEL": 4,
+    "_LLF_GUARD_TEMP": 0.5,
+    "_LLF_GUARD_FINE_LEVEL": 2
+   },
+   "S100": {
+    "halo_over_dark": 0.6646666526794434,
+    "halo_under_dark": -0.569683313369751,
+    "halo_over_bright": 0.17782950401306152,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.6361618041992188,
+    "flatness_bright": 0.9177990555763245,
+    "far_delta": 3.0579652786254883,
+    "pool_r16": 1.1406619548797607,
+    "interior_err_r16": 0.2324565351009369,
+    "pool_r48": 0.5387396812438965,
+    "interior_err_r48": 0.07038692384958267,
+    "pool_r128": 0.11561751365661621,
+    "interior_err_r128": 0.06745001673698425,
+    "banding": 0.06376431882381439,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.2597479820251465,
+    "halo_under_dark": -0.3597102165222168,
+    "halo_over_bright": 0.15585017204284668,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.8635104298591614,
+    "flatness_bright": 0.9286193251609802,
+    "far_delta": 1.4850635528564453,
+    "pool_r16": 0.24912714958190918,
+    "interior_err_r16": 0.17411939799785614,
+    "pool_r48": 0.11414909362792969,
+    "interior_err_r48": 0.06166723743081093,
+    "pool_r128": 0.03727865219116211,
+    "interior_err_r128": 0.059789832681417465,
+    "banding": 0.00652820710092783,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.07241630554199219,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.6503413915634155,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9835136532783508,
+    "flatness_bright": 0.8015840649604797,
+    "far_delta": -2.391746997833252,
+    "pool_r16": 0.24415326118469238,
+    "interior_err_r16": 0.07388608157634735,
+    "pool_r48": 0.15580987930297852,
+    "interior_err_r48": 0.011740833520889282,
+    "pool_r128": 0.10959863662719727,
+    "interior_err_r128": 0.008416339755058289,
+    "banding": 0.013015324249863625,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.04551124572753906,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.36675286293029785,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9901078939437866,
+    "flatness_bright": 0.8699966669082642,
+    "far_delta": -1.1464565992355347,
+    "pool_r16": 0.09150886535644531,
+    "interior_err_r16": 0.040647175163030624,
+    "pool_r48": 0.10820651054382324,
+    "interior_err_r48": 0.007184632122516632,
+    "pool_r128": 0.06368982791900635,
+    "interior_err_r128": 0.0048436447978019714,
+    "banding": 0.006673912517726421,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 2.0214628294586756,
+     "dL_mean": 1.1805087232571774,
+     "zone_glow_Lstar": -0.1790606530895938,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 2.7764417171476126,
+     "dL_mean": 2.5007619388584637,
+     "zone_glow_Lstar": 0.696324778174394,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "guard2-L4-f2-t1": {
+   "config": {
+    "_LLF_ABS_MODE": "gauss_guard",
+    "_LLF_LAST_LEVEL": 4,
+    "_LLF_GUARD_TEMP": 1.0,
+    "_LLF_GUARD_FINE_LEVEL": 2
+   },
+   "S100": {
+    "halo_over_dark": 0.9285953044891357,
+    "halo_under_dark": -0.345703125,
+    "halo_over_bright": 0.2200627624988556,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.5479516386985779,
+    "flatness_bright": 0.9437240958213806,
+    "far_delta": 2.729743003845215,
+    "pool_r16": 0.9028489589691162,
+    "interior_err_r16": 0.24012741446495056,
+    "pool_r48": 0.48483705520629883,
+    "interior_err_r48": 0.14485876262187958,
+    "pool_r128": 0.1764817237854004,
+    "interior_err_r128": 0.14349421858787537,
+    "banding": 0.06139364466071129,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.34848761558532715,
+    "halo_under_dark": -0.29883790016174316,
+    "halo_over_bright": 0.1928599774837494,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.8505976796150208,
+    "flatness_bright": 0.9511181116104126,
+    "far_delta": 1.4128074645996094,
+    "pool_r16": 0.23399019241333008,
+    "interior_err_r16": 0.1809409111738205,
+    "pool_r48": 0.14173030853271484,
+    "interior_err_r48": 0.12600472569465637,
+    "pool_r128": 0.038851261138916016,
+    "interior_err_r128": 0.125718891620636,
+    "banding": 0.006598885636776686,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.07013750076293945,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.6555447578430176,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9850555062294006,
+    "flatness_bright": 0.7606565952301025,
+    "far_delta": -2.1879305839538574,
+    "pool_r16": 0.1330263614654541,
+    "interior_err_r16": 0.07537762820720673,
+    "pool_r48": 0.1763002872467041,
+    "interior_err_r48": 0.01915469765663147,
+    "pool_r128": 0.11565852165222168,
+    "interior_err_r128": 0.0160934180021286,
+    "banding": 0.013037512078881264,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.04359245300292969,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.2963707447052002,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9912843108177185,
+    "flatness_bright": 0.8398584723472595,
+    "far_delta": -1.0280145406723022,
+    "pool_r16": 0.027754545211791992,
+    "interior_err_r16": 0.04141583666205406,
+    "pool_r48": 0.10232627391815186,
+    "interior_err_r48": 0.011229164898395538,
+    "pool_r128": 0.052382826805114746,
+    "interior_err_r128": 0.00885193794965744,
+    "banding": 0.006774732377380133,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 1.9412677523107518,
+     "dL_mean": 1.1076581971348,
+     "zone_glow_Lstar": -0.42425228863834075,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 3.5627113469720575,
+     "dL_mean": 3.5852686466007615,
+     "zone_glow_Lstar": 3.0302871083858354,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "guard2-L4-f3-t0.5": {
+   "config": {
+    "_LLF_ABS_MODE": "gauss_guard",
+    "_LLF_LAST_LEVEL": 4,
+    "_LLF_GUARD_TEMP": 0.5,
+    "_LLF_GUARD_FINE_LEVEL": 3
+   },
+   "S100": {
+    "halo_over_dark": 0.6627702713012695,
+    "halo_under_dark": -0.596991777420044,
+    "halo_over_bright": 0.17669016122817993,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.8371565341949463,
+    "flatness_bright": 0.9614879488945007,
+    "far_delta": 3.060896873474121,
+    "pool_r16": 1.119950294494629,
+    "interior_err_r16": 0.18891581892967224,
+    "pool_r48": 0.5321311950683594,
+    "interior_err_r48": 0.07008997350931168,
+    "pool_r128": 0.11748671531677246,
+    "interior_err_r128": 0.067914217710495,
+    "banding": 0.06406962126493454,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.25919556617736816,
+    "halo_under_dark": -0.3749101161956787,
+    "halo_over_bright": 0.15481650829315186,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9379542469978333,
+    "flatness_bright": 0.9665153622627258,
+    "far_delta": 1.4857087135314941,
+    "pool_r16": 0.2718329429626465,
+    "interior_err_r16": 0.14942435920238495,
+    "pool_r48": 0.11288213729858398,
+    "interior_err_r48": 0.06130293384194374,
+    "pool_r128": 0.037914276123046875,
+    "interior_err_r128": 0.060201700776815414,
+    "banding": 0.006559163797646761,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.061873435974121094,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.6522080898284912,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.992173433303833,
+    "flatness_bright": 0.9128735065460205,
+    "far_delta": -2.3925275802612305,
+    "pool_r16": 0.26554441452026367,
+    "interior_err_r16": 0.047838374972343445,
+    "pool_r48": 0.15775489807128906,
+    "interior_err_r48": 0.011892467737197876,
+    "pool_r128": 0.11161327362060547,
+    "interior_err_r128": 0.00829903781414032,
+    "banding": 0.013058092445135117,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.03800201416015625,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.37019872665405273,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9952547550201416,
+    "flatness_bright": 0.9422167539596558,
+    "far_delta": -1.146910309791565,
+    "pool_r16": 0.0943833589553833,
+    "interior_err_r16": 0.02607884630560875,
+    "pool_r48": 0.10965335369110107,
+    "interior_err_r48": 0.00726664811372757,
+    "pool_r128": 0.06486070156097412,
+    "interior_err_r128": 0.004781655967235565,
+    "banding": 0.006701132282614708,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 2.0225009723776304,
+     "dL_mean": 1.1863590156677453,
+     "zone_glow_Lstar": -0.15611367956303734,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 2.753966712365841,
+     "dL_mean": 2.4697079255925054,
+     "zone_glow_Lstar": 0.9502834105137956,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "guard2-L4-f3-t1": {
+   "config": {
+    "_LLF_ABS_MODE": "gauss_guard",
+    "_LLF_LAST_LEVEL": 4,
+    "_LLF_GUARD_TEMP": 1.0,
+    "_LLF_GUARD_FINE_LEVEL": 3
+   },
+   "S100": {
+    "halo_over_dark": 0.9322104454040527,
+    "halo_under_dark": -0.4154677391052246,
+    "halo_over_bright": 0.22028076648712158,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.7980870008468628,
+    "flatness_bright": 0.973512589931488,
+    "far_delta": 2.731555461883545,
+    "pool_r16": 0.890129566192627,
+    "interior_err_r16": 0.190688818693161,
+    "pool_r48": 0.47554516792297363,
+    "interior_err_r48": 0.14383213222026825,
+    "pool_r128": 0.1797022819519043,
+    "interior_err_r128": 0.14425358176231384,
+    "banding": 0.06163530796766281,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.3506784439086914,
+    "halo_under_dark": -0.3491811752319336,
+    "halo_over_bright": 0.19329696893692017,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9319759011268616,
+    "flatness_bright": 0.9769827127456665,
+    "far_delta": 1.4132065773010254,
+    "pool_r16": 0.2893071174621582,
+    "interior_err_r16": 0.15020303428173065,
+    "pool_r48": 0.14032864570617676,
+    "interior_err_r48": 0.1251080334186554,
+    "pool_r128": 0.03955984115600586,
+    "interior_err_r128": 0.12637430429458618,
+    "banding": 0.006597457453608513,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.061359405517578125,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.6609737873077393,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9930334687232971,
+    "flatness_bright": 0.8939207792282104,
+    "far_delta": -2.188103199005127,
+    "pool_r16": 0.14084291458129883,
+    "interior_err_r16": 0.049163028597831726,
+    "pool_r48": 0.17908883094787598,
+    "interior_err_r48": 0.01921573281288147,
+    "pool_r128": 0.11789679527282715,
+    "interior_err_r128": 0.01597706973552704,
+    "banding": 0.013085673563182354,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.037766456604003906,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.3011762499809265,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9959147572517395,
+    "flatness_bright": 0.9281338453292847,
+    "far_delta": -1.028115153312683,
+    "pool_r16": 0.024564385414123535,
+    "interior_err_r16": 0.026680614799261093,
+    "pool_r48": 0.10391807556152344,
+    "interior_err_r48": 0.011253006756305695,
+    "pool_r128": 0.05311691761016846,
+    "interior_err_r128": 0.008793763816356659,
+    "banding": 0.006802304647862911,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 1.9485071492906787,
+     "dL_mean": 1.1215912741458014,
+     "zone_glow_Lstar": -0.4079428004896848,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 3.5699171265564917,
+     "dL_mean": 3.5927265501443104,
+     "zone_glow_Lstar": 3.4763038550527563,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "guard2-L6-f2-t1": {
+   "config": {
+    "_LLF_ABS_MODE": "gauss_guard",
+    "_LLF_LAST_LEVEL": 6,
+    "_LLF_GUARD_TEMP": 1.0,
+    "_LLF_GUARD_FINE_LEVEL": 2
+   },
+   "S100": {
+    "halo_over_dark": 0.629765510559082,
+    "halo_under_dark": -0.8736894130706787,
+    "halo_over_bright": 0.15562844276428223,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.5418635010719299,
+    "flatness_bright": 0.9405842423439026,
+    "far_delta": 2.7134389877319336,
+    "pool_r16": 0.16323351860046387,
+    "interior_err_r16": 0.7577875852584839,
+    "pool_r48": 1.0989162921905518,
+    "interior_err_r48": 0.4036851227283478,
+    "pool_r128": 0.5167458057403564,
+    "interior_err_r128": 0.14690539240837097,
+    "banding": 0.062082041054964066,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.21810245513916016,
+    "halo_under_dark": -0.7481513023376465,
+    "halo_over_bright": 0.14324966073036194,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.8508714437484741,
+    "flatness_bright": 0.9484482407569885,
+    "far_delta": 1.4092226028442383,
+    "pool_r16": 0.06913447380065918,
+    "interior_err_r16": 0.5390161871910095,
+    "pool_r48": 0.19803595542907715,
+    "interior_err_r48": 0.29127803444862366,
+    "pool_r128": 0.1424541473388672,
+    "interior_err_r128": 0.12575680017471313,
+    "banding": 0.006538206245750189,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.10387945175170898,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.6937777996063232,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9870323538780212,
+    "flatness_bright": 0.7738677263259888,
+    "far_delta": -2.197176933288574,
+    "pool_r16": 0.07524895668029785,
+    "interior_err_r16": 0.4416753649711609,
+    "pool_r48": 0.08497858047485352,
+    "interior_err_r48": 0.1581527292728424,
+    "pool_r128": 0.11651992797851562,
+    "interior_err_r128": 0.0244857519865036,
+    "banding": 0.013121995143592358,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.06644010543823242,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.29937314987182617,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9925971627235413,
+    "flatness_bright": 0.8489654064178467,
+    "far_delta": -1.0333853960037231,
+    "pool_r16": 0.059445738792419434,
+    "interior_err_r16": 0.22325006127357483,
+    "pool_r48": 0.06847202777862549,
+    "interior_err_r48": 0.0754629448056221,
+    "pool_r128": 0.055150747299194336,
+    "interior_err_r128": 0.013823442161083221,
+    "banding": 0.006744035519659519,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 1.9495582034619459,
+     "dL_mean": 1.1446098178314386,
+     "zone_glow_Lstar": -0.4245140970179695,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 4.180664963848043,
+     "dL_mean": 4.359089304233593,
+     "zone_glow_Lstar": 9.336372421218558,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "gauss-L4-sr3": {
+   "config": {
+    "_LLF_ABS_MODE": "gauss",
+    "_LLF_LAST_LEVEL": 4,
+    "_LLF_SIGMA_R": 3.0
+   },
+   "S100": {
+    "halo_over_dark": 0.3519706726074219,
+    "halo_under_dark": -0.8693535327911377,
+    "halo_over_bright": 0.13692042231559753,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9681897163391113,
+    "flatness_bright": 0.9892779588699341,
+    "far_delta": 3.145493984222412,
+    "pool_r16": 0.7276957035064697,
+    "interior_err_r16": 0.5457407236099243,
+    "pool_r48": 0.3595917224884033,
+    "interior_err_r48": 0.017945846542716026,
+    "pool_r128": 0.02357006072998047,
+    "interior_err_r128": 0.0027262899093329906,
+    "banding": 0.048561468720436096,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.1756744384765625,
+    "halo_under_dark": -0.5207092761993408,
+    "halo_over_bright": 0.10264629125595093,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.98787921667099,
+    "flatness_bright": 0.9906587600708008,
+    "far_delta": 1.5543880462646484,
+    "pool_r16": 0.4105250835418701,
+    "interior_err_r16": 0.1112418994307518,
+    "pool_r48": 0.15546965599060059,
+    "interior_err_r48": 0.015067186206579208,
+    "pool_r128": 0.03686666488647461,
+    "interior_err_r128": 0.002345021814107895,
+    "banding": 0.005461528897285461,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.0409393310546875,
+    "halo_under_dark": -0.10082483291625977,
+    "halo_over_bright": 1.1304550170898438,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9985601902008057,
+    "flatness_bright": 0.9850320816040039,
+    "far_delta": -2.5733559131622314,
+    "pool_r16": 0.3995401859283447,
+    "interior_err_r16": 0.6705606579780579,
+    "pool_r48": 0.13930296897888184,
+    "interior_err_r48": 0.0030468404293060303,
+    "pool_r128": 0.09780669212341309,
+    "interior_err_r128": 0.00020010769367218018,
+    "banding": 0.010326813906431198,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.02313089370727539,
+    "halo_under_dark": -0.03776216506958008,
+    "halo_over_bright": 0.6026276350021362,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9992875456809998,
+    "flatness_bright": 0.9949169158935547,
+    "far_delta": -1.2740150690078735,
+    "pool_r16": 0.2027747631072998,
+    "interior_err_r16": 0.32745012640953064,
+    "pool_r48": 0.10180914402008057,
+    "interior_err_r48": 0.0014928504824638367,
+    "pool_r128": 0.0718609094619751,
+    "interior_err_r128": 2.3908913135528564e-05,
+    "banding": 0.005390572361648083,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 2.2690502036327858,
+     "dL_mean": 1.5247247689225456,
+     "zone_glow_Lstar": 0.14452984649398445,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 2.4735413402091373,
+     "dL_mean": 2.0682779998303036,
+     "zone_glow_Lstar": -0.012256878229861962,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "gauss-L3-sr3": {
+   "config": {
+    "_LLF_ABS_MODE": "gauss",
+    "_LLF_LAST_LEVEL": 3,
+    "_LLF_SIGMA_R": 3.0
+   },
+   "S100": {
+    "halo_over_dark": 0.32603907585144043,
+    "halo_under_dark": -0.24990391731262207,
+    "halo_over_bright": 0.12517958879470825,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.7831125259399414,
+    "flatness_bright": 0.9236626625061035,
+    "far_delta": 3.145864486694336,
+    "pool_r16": 0.2397480010986328,
+    "interior_err_r16": 0.04315187782049179,
+    "pool_r48": 0.13634872436523438,
+    "interior_err_r48": 0.0005848798900842667,
+    "pool_r128": 0.02195453643798828,
+    "interior_err_r128": 0.0008479091920889914,
+    "banding": 0.05927913263440132,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.16958212852478027,
+    "halo_under_dark": -0.16141605377197266,
+    "halo_over_bright": 0.10509714484214783,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9111494421958923,
+    "flatness_bright": 0.9334884285926819,
+    "far_delta": 1.5549674034118652,
+    "pool_r16": 0.21286273002624512,
+    "interior_err_r16": 8.48378986120224e-05,
+    "pool_r48": 0.08097100257873535,
+    "interior_err_r48": 0.0005059577524662018,
+    "pool_r128": 0.03435516357421875,
+    "interior_err_r128": 0.0006778798997402191,
+    "banding": 0.006109920796006918,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.04061174392700195,
+    "halo_under_dark": -0.023811817169189453,
+    "halo_over_bright": 0.9333670139312744,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9893137216567993,
+    "flatness_bright": 0.8847330212593079,
+    "far_delta": -2.5718774795532227,
+    "pool_r16": 0.2681288719177246,
+    "interior_err_r16": 0.06364424526691437,
+    "pool_r48": 0.15339899063110352,
+    "interior_err_r48": 9.903311729431152e-05,
+    "pool_r128": 0.09133386611938477,
+    "interior_err_r128": 0.00015752017498016357,
+    "banding": 0.012072417885065079,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.02287578582763672,
+    "halo_under_dark": -0.0044918060302734375,
+    "halo_over_bright": 0.5185638070106506,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.994620680809021,
+    "flatness_bright": 0.9538995027542114,
+    "far_delta": -1.2729262113571167,
+    "pool_r16": 0.1554332971572876,
+    "interior_err_r16": 0.029816005378961563,
+    "pool_r48": 0.111885666847229,
+    "interior_err_r48": 4.994124174118042e-05,
+    "pool_r128": 0.06705975532531738,
+    "interior_err_r128": 0.00019734352827072144,
+    "banding": 0.006231532897800207,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 2.3329030282351644,
+     "dL_mean": 1.6270601220889884,
+     "zone_glow_Lstar": 0.08665118919266705,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 2.504666672926743,
+     "dL_mean": 2.1120924001406767,
+     "zone_glow_Lstar": -2.0599624543549977,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "multi-34": {
+   "config": {
+    "_LLF_ABS_MODE": "gauss_multi",
+    "_LLF_MULTI_LEVELS": [
+     3,
+     4
+    ],
+    "_LLF_LAST_LEVEL": 6
+   },
+   "S100": {
+    "halo_over_dark": 0.7838122844696045,
+    "halo_under_dark": -0.07546567916870117,
+    "halo_over_bright": 0.046634167432785034,
+    "halo_under_bright": -0.009285658597946167,
+    "flatness_dark": 0.8686822652816772,
+    "flatness_bright": 0.9552794694900513,
+    "far_delta": 3.145869255065918,
+    "pool_r16": 1.053858995437622,
+    "interior_err_r16": 0.7136564254760742,
+    "pool_r48": 0.13505864143371582,
+    "interior_err_r48": 0.36644247174263,
+    "pool_r128": 0.2013561725616455,
+    "interior_err_r128": 0.08567401766777039,
+    "banding": 0.0653185248374939,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.3479301929473877,
+    "halo_under_dark": -0.07462048530578613,
+    "halo_over_bright": 0.04700183868408203,
+    "halo_under_bright": -0.009417474269866943,
+    "flatness_dark": 0.9485315680503845,
+    "flatness_bright": 0.9610878825187683,
+    "far_delta": 1.554926872253418,
+    "pool_r16": 0.35912036895751953,
+    "interior_err_r16": 0.5060219168663025,
+    "pool_r48": 0.16848254203796387,
+    "interior_err_r48": 0.25806859135627747,
+    "pool_r128": 0.12512826919555664,
+    "interior_err_r128": 0.07006031274795532,
+    "banding": 0.006557132117450237,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.116119384765625,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.09001278877258301,
+    "halo_under_bright": -0.31577610969543457,
+    "flatness_dark": 0.9939471483230591,
+    "flatness_bright": 0.934151828289032,
+    "far_delta": -2.5721025466918945,
+    "pool_r16": 0.5007445812225342,
+    "interior_err_r16": 0.28993719816207886,
+    "pool_r48": 0.4869105815887451,
+    "interior_err_r48": 0.14990249276161194,
+    "pool_r128": 0.31520533561706543,
+    "interior_err_r128": 0.016634151339530945,
+    "banding": 0.01301968190819025,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.07145404815673828,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.09040522575378418,
+    "halo_under_bright": -0.07565426826477051,
+    "flatness_dark": 0.9970064759254456,
+    "flatness_bright": 0.975594162940979,
+    "far_delta": -1.2730787992477417,
+    "pool_r16": 0.23778343200683594,
+    "interior_err_r16": 0.15344777703285217,
+    "pool_r48": 0.26930558681488037,
+    "interior_err_r48": 0.07058203965425491,
+    "pool_r128": 0.1773468255996704,
+    "interior_err_r128": 0.009300164878368378,
+    "banding": 0.006707889027893543,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 2.4289925729471724,
+     "dL_mean": 1.7742381937814362,
+     "zone_glow_Lstar": 0.07190261638789078,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 2.496548431115392,
+     "dL_mean": 2.1098657516533748,
+     "zone_glow_Lstar": -2.7951278916857847,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "multi-345": {
+   "config": {
+    "_LLF_ABS_MODE": "gauss_multi",
+    "_LLF_MULTI_LEVELS": [
+     3,
+     4,
+     5
+    ],
+    "_LLF_LAST_LEVEL": 6
+   },
+   "S100": {
+    "halo_over_dark": 0.6787824630737305,
+    "halo_under_dark": -0.3023052215576172,
+    "halo_over_bright": 0.04734539985656738,
+    "halo_under_bright": -0.009692907333374023,
+    "flatness_dark": 0.9077818989753723,
+    "flatness_bright": 0.9698345065116882,
+    "far_delta": 3.145754814147949,
+    "pool_r16": 0.964205265045166,
+    "interior_err_r16": 0.2623370587825775,
+    "pool_r48": 0.3565847873687744,
+    "interior_err_r48": 0.3229481279850006,
+    "pool_r128": 0.1552295684814453,
+    "interior_err_r128": 0.08368489146232605,
+    "banding": 0.06551694869995117,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.29365086555480957,
+    "halo_under_dark": -0.3096024990081787,
+    "halo_over_bright": 0.04773855209350586,
+    "halo_under_bright": -0.009067893028259277,
+    "flatness_dark": 0.9651762247085571,
+    "flatness_bright": 0.9737740159034729,
+    "far_delta": 1.5547428131103516,
+    "pool_r16": 0.3363473415374756,
+    "interior_err_r16": 0.18446485698223114,
+    "pool_r48": 0.05624723434448242,
+    "interior_err_r48": 0.2291490137577057,
+    "pool_r128": 0.11659455299377441,
+    "interior_err_r128": 0.06828314065933228,
+    "banding": 0.0065836054272949696,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.10415935516357422,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.297318696975708,
+    "halo_under_bright": -0.14606714248657227,
+    "flatness_dark": 0.9959298968315125,
+    "flatness_bright": 0.9554214477539062,
+    "far_delta": -2.5725831985473633,
+    "pool_r16": 0.4889349937438965,
+    "interior_err_r16": 0.1806247979402542,
+    "pool_r48": 0.31841564178466797,
+    "interior_err_r48": 0.1478196680545807,
+    "pool_r128": 0.275418758392334,
+    "interior_err_r128": 0.01593129336833954,
+    "banding": 0.013100927695631981,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.0644383430480957,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.1670156717300415,
+    "halo_under_bright": -0.009994268417358398,
+    "flatness_dark": 0.9979840517044067,
+    "flatness_bright": 0.9834000468254089,
+    "far_delta": -1.2734429836273193,
+    "pool_r16": 0.23121309280395508,
+    "interior_err_r16": 0.08484682440757751,
+    "pool_r48": 0.1842365264892578,
+    "interior_err_r48": 0.07112658768892288,
+    "pool_r128": 0.15489864349365234,
+    "interior_err_r128": 0.008731774985790253,
+    "banding": 0.006763787940144539,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 2.244217309116368,
+     "dL_mean": 1.4951344135839832,
+     "zone_glow_Lstar": 0.09849659725881209,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 2.3603746690964953,
+     "dL_mean": 1.9220061384161669,
+     "zone_glow_Lstar": -1.2366911243871594,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "multi-234": {
+   "config": {
+    "_LLF_ABS_MODE": "gauss_multi",
+    "_LLF_MULTI_LEVELS": [
+     2,
+     3,
+     4
+    ],
+    "_LLF_LAST_LEVEL": 6
+   },
+   "S100": {
+    "halo_over_dark": 0.7717905044555664,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.043875157833099365,
+    "halo_under_bright": -0.018629610538482666,
+    "flatness_dark": 0.7347676157951355,
+    "flatness_bright": 0.9108965396881104,
+    "far_delta": 3.1458253860473633,
+    "pool_r16": 0.6680271625518799,
+    "interior_err_r16": 0.7257194519042969,
+    "pool_r48": 0.13602447509765625,
+    "interior_err_r48": 0.3743952810764313,
+    "pool_r128": 0.2007908821105957,
+    "interior_err_r128": 0.08594736456871033,
+    "banding": 0.064797043800354,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.34376955032348633,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.044778645038604736,
+    "halo_under_bright": -0.01386040449142456,
+    "flatness_dark": 0.8963492512702942,
+    "flatness_bright": 0.9225133657455444,
+    "far_delta": 1.5548648834228516,
+    "pool_r16": 0.23906612396240234,
+    "interior_err_r16": 0.5157900452613831,
+    "pool_r48": 0.19204211235046387,
+    "interior_err_r48": 0.26460888981819153,
+    "pool_r128": 0.12471961975097656,
+    "interior_err_r128": 0.06999951601028442,
+    "banding": 0.00652218796312809,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.11649942398071289,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.022696733474731445,
+    "halo_under_bright": -0.36191630363464355,
+    "flatness_dark": 0.987697184085846,
+    "flatness_bright": 0.8638594150543213,
+    "far_delta": -2.572216033935547,
+    "pool_r16": 0.26262474060058594,
+    "interior_err_r16": 0.34117716550827026,
+    "pool_r48": 0.5207619667053223,
+    "interior_err_r48": 0.15173545479774475,
+    "pool_r128": 0.31466197967529297,
+    "interior_err_r128": 0.016588374972343445,
+    "banding": 0.012948519550263882,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.07179641723632812,
+    "halo_under_dark": 0.0,
+    "halo_over_bright": 0.08162152767181396,
+    "halo_under_bright": -0.12776803970336914,
+    "flatness_dark": 0.99378502368927,
+    "flatness_bright": 0.9461299180984497,
+    "far_delta": -1.2731659412384033,
+    "pool_r16": 0.1315898895263672,
+    "interior_err_r16": 0.17648854851722717,
+    "pool_r48": 0.29130423069000244,
+    "interior_err_r48": 0.07150233536958694,
+    "pool_r128": 0.17773139476776123,
+    "interior_err_r128": 0.009310655295848846,
+    "banding": 0.006669899448752403,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 2.4748398577163733,
+     "dL_mean": 1.8420988961447091,
+     "zone_glow_Lstar": 0.06027111934299162,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 2.549458297568489,
+     "dL_mean": 2.1783762558894084,
+     "zone_glow_Lstar": -3.4485736507244793,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  },
+  "shipped": {
+   "config": {},
+   "S100": {
+    "halo_over_dark": 0.36070919036865234,
+    "halo_under_dark": -0.731175422668457,
+    "halo_over_bright": 0.22322756052017212,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9663382768630981,
+    "flatness_bright": 0.9913944005966187,
+    "far_delta": 3.1259002685546875,
+    "pool_r16": 0.6301662921905518,
+    "interior_err_r16": 0.5648226737976074,
+    "pool_r48": 0.3336007595062256,
+    "interior_err_r48": 0.007808731868863106,
+    "pool_r128": 0.028885841369628906,
+    "interior_err_r128": 0.0021944651380181313,
+    "banding": 0.02119995653629303,
+    "nonmonotone_frac": 0.0
+   },
+   "S50": {
+    "halo_over_dark": 0.17755866050720215,
+    "halo_under_dark": -0.43532347679138184,
+    "halo_over_bright": 0.10353559255599976,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9883897304534912,
+    "flatness_bright": 0.992637574672699,
+    "far_delta": 1.5507264137268066,
+    "pool_r16": 0.368211030960083,
+    "interior_err_r16": 0.11034104973077774,
+    "pool_r48": 0.1511061191558838,
+    "interior_err_r48": 0.004781562834978104,
+    "pool_r128": 0.03987836837768555,
+    "interior_err_r128": 0.0017972774803638458,
+    "banding": 0.006389489863067865,
+    "nonmonotone_frac": 0.0
+   },
+   "H100": {
+    "halo_over_dark": 0.04258012771606445,
+    "halo_under_dark": -0.06359720230102539,
+    "halo_over_bright": 0.9001501798629761,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9984025955200195,
+    "flatness_bright": 0.9845302104949951,
+    "far_delta": -2.4462649822235107,
+    "pool_r16": 0.23920512199401855,
+    "interior_err_r16": 0.6407245397567749,
+    "pool_r48": 0.16133999824523926,
+    "interior_err_r48": 0.002441592514514923,
+    "pool_r128": 0.11660885810852051,
+    "interior_err_r128": 0.00030288100242614746,
+    "banding": 0.009966211393475533,
+    "nonmonotone_frac": 0.0
+   },
+   "H50": {
+    "halo_over_dark": 0.024374961853027344,
+    "halo_under_dark": -0.038336753845214844,
+    "halo_over_bright": 0.43513649702072144,
+    "halo_under_bright": 0.0,
+    "flatness_dark": 0.9991223216056824,
+    "flatness_bright": 0.9954965710639954,
+    "far_delta": -1.2359721660614014,
+    "pool_r16": 0.14659368991851807,
+    "interior_err_r16": 0.30945655703544617,
+    "pool_r48": 0.08115887641906738,
+    "interior_err_r48": 0.001410558819770813,
+    "pool_r128": 0.05942416191101074,
+    "interior_err_r128": 9.665265679359436e-05,
+    "banding": 0.0046812305226922035,
+    "nonmonotone_frac": 0.0
+   },
+   "real": {
+    "wall_curtain_S100": {
+     "de_mean": 2.3887406244794325,
+     "dL_mean": 1.6958276153184693,
+     "zone_glow_Lstar": 0.0960453128570841,
+     "crop_center": [
+      2102,
+      705
+     ]
+    },
+    "window_edge_H100": {
+     "de_mean": 2.4563928528328685,
+     "dL_mean": 2.0371726610318937,
+     "zone_glow_Lstar": 1.924557704592789,
+     "crop_center": [
+      2102,
+      705
+     ]
+    }
+   }
+  }
+ }
+}

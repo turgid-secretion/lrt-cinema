@@ -34,7 +34,7 @@ import numpy as np
 FIX = Path.home() / "lrt-cinema-fixtures"
 ROUND2 = FIX / "production/calibration/round2"
 RENDERS = ROUND2 / ".cal-renders"
-OUT = FIX / "verify-2026-07-08/hlsh-flip-v2"
+OUT = FIX / "verify-2026-07-08/hlsh-flip-v3"
 EVIDENCE = Path(__file__).resolve().parent.parent / (
     "tests/fixtures/evidence/cal_hlsh_fit_v2_2026-07-08.json"
 )
@@ -46,7 +46,7 @@ PROBES = {
     "CALSH100": "Shadows2012 = +100",
 }
 
-README = """Highlights/Shadows translation v2 (LLF core) — owner flip stack (2026-07-08)
+README = """H/S translation v3 (LLF core + halo-campaign L4 residual) — owner flips (2026-07-08)
 ===============================================================
 All images 4016x6016 NATIVE pixels (ours carry an 8 px alignment CROP,
 never a resize). Select a probe's A/B pair and flip:
