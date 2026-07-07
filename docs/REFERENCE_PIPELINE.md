@@ -302,7 +302,7 @@ in the module docstring), wired at dt's slot on the CFA paths;
 `--ca-correct N` (default 0 = OFF, all outputs byte-identical). Evidence:
 `ca_correct_<date>.json` (`tools/ca_correct_experiment.py`); contracts
 `tests/test_ca_correct.py`; owner flips `verify-2026-07-07/ca-flip/`.
-Default flip = owner decision after the flips.
+Owner eyes 2026-07-07: "CA-on is better in all cases" (rank-1).
 
 **Slot 3 — white balance, applied ONCE, before demosaic.** VERDICT:
 JUSTIFIED; **MIGRATED 2026-06-11 — the wart is gone.** The divide-back
