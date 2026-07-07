@@ -307,15 +307,15 @@ global R/B cast; avoid-shift cancels it, keeps ~85 % of the fringe fix
 — `seq_spot_ca_2026-07-07.json`).
 
 **Slot 2.5 — hot-pixel suppression (mosaic domain).** VERDICT:
-IMPLEMENTED, OPT-IN. References: dt `hotpixels@6.0` (cacorrect@5 →
-hotpixels@6 → demosaic@8) [SRC 2026-07-07]; RT does bad pixels BEFORE
-its CA step — the canon splits on order; we follow dt. **PORTED
+IMPLEMENTED, OPT-IN. References: dt `hotpixels@6.0` (after cacorrect@5)
+[SRC 2026-07-07]; RT does bad pixels BEFORE its CA step — the canon
+splits on order; we follow RT, by MEASUREMENT: post-CA placement is
+neutered (CA's resampling smears single-site specs; `segbased_guard`
+evidence). **PORTED
 2026-07-07 [SRC+EMP]**: `_hotpixels.py`, `--hotpixels S`, default 0
-= OFF. Scope caveat: at
-dt defaults the bright-over-dark impulse detector fires ZERO times on
-the segb+CA gym mosaic (near clip everything is bright) — the owner's
-segb hot pixels are likely NOT this class; F flip decides
-(`ca_order_probe` + CLAIMS).
+= OFF. The owner's segb specs
+are INPUT-level pairs — permissive mode + pre-CA placement reach them
+(`segbased_guard` + CLAIMS).
 
 **Slot 3 — white balance, applied ONCE, before demosaic.** VERDICT:
 JUSTIFIED; **MIGRATED 2026-06-11 — the wart is gone.** The divide-back

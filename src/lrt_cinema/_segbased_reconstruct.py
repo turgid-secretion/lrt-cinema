@@ -63,6 +63,20 @@ cell is resolved by id order in both); exact Gaussian (sigma 1.2)
 instead of dt's fast approximation; scipy uniform_filter as the box
 mean; Poisson noise NOT implemented (default 0 in dt; a timelapse wants
 deterministic frames); Bayer only.
+
+ISOLATED-SITE GUARD (`site_guard`, NOT in the reference — owner-driven
+2026-07-07): the candidate write-back computes a PER-SITE `refavg`
+(3x3 opponent cube-root mean), so one photosite with a skewed local
+opponent mean lands far above its segment neighbours — the owner's
+"random hot pixels" in the segb arms (rank-1; the CA-ordering and
+dt-hotpixels remedies were both eliminated with evidence — CLAIMS
+2026-07-07). The guard replaces any CLIPPED site whose final value
+exceeds `site_guard` x the median of its 8 same-channel distance-2
+neighbours with that median — it can only touch reconstruction-written
+values (clipped sites carry no sensor data), never real pixels. Gym
+census grounding the default: ratio P50 = 1.000 over 95,664 clipped
+sites, artifact tail 647 sites > 2x (max 5.8x) → recommended
+`site_guard=2.0`; 0 disables (byte-stable with all pinned evidence).
 """
 
 from __future__ import annotations
@@ -317,10 +331,33 @@ def _segment_gradients(distance, gradient, seg, mode, recovery_close):
     gradient[y0:y1, x0:x1] = grad
 
 
+def _suppress_isolated_sites(out: np.ndarray, site_clipped: np.ndarray,
+                             limit: float) -> tuple[np.ndarray, int]:
+    """The isolated-site guard (module docstring): CLAMP clipped sites to
+    `limit` x the median of their 8 same-channel distance-2 neighbours (a
+    same-channel ring for EVERY Bayer site). A clamp, not a median
+    replacement — the first probe measured replacement CREATING dark
+    divots (interior luma impulses 48 → 129): dropping a lone site to 1x
+    its ring median inside a bright region is itself an impulse. The
+    clamp is monotone and can never fall below the local median. Returns
+    (guarded array, sites clamped)."""
+    h, w = out.shape
+    pads = np.pad(out, 2, mode="reflect")
+    taps = np.stack([pads[2 + dy: h + 2 + dy, 2 + dx: w + 2 + dx]
+                     for dy in (-2, 0, 2) for dx in (-2, 0, 2)
+                     if not (dy == 0 and dx == 0)])
+    med = np.median(taps, axis=0)
+    ceil = np.float32(limit) * med
+    hot = site_clipped & (med > np.float32(1e-6)) & (out > ceil)
+    guarded = np.where(hot, ceil, out).astype(np.float32)
+    return guarded, int(hot.sum())
+
+
 def reconstruct_mosaic_segbased(
     cfa: np.ndarray, chan: np.ndarray, wb_mul: np.ndarray, *,
     clip: float = 1.0, combine: float = 2.0, candidating: float = 0.4,
     recovery: str = "off", strength: float = 0.0,
+    site_guard: float = 0.0,
 ) -> np.ndarray:
     """Segmentation-based reconstruction ON the balanced headroom mosaic.
 
@@ -328,13 +365,17 @@ def reconstruct_mosaic_segbased(
     (no common-white clamp); `chan` (H, W) int CFA channel per site (G2
     folded to 1); `wb_mul` (3,) G-normalised multipliers. `recovery` one
     of RECOVERY_MODES (+ `strength` in [0,1]) enables the all-clipped
-    rebuild. Returns the mosaic with clipped sites reconstructed;
+    rebuild. `site_guard` > 1 enables the isolated-site guard (module
+    docstring; recommended 2.0, census-grounded; 0 = off, the byte-stable
+    default). Returns the mosaic with clipped sites reconstructed;
     unclipped sites byte-identical.
     """
     from scipy.ndimage import distance_transform_edt, gaussian_filter
 
     if recovery not in RECOVERY_MODES:
         raise ValueError(f"recovery must be one of {RECOVERY_MODES}")
+    if site_guard != 0.0 and site_guard <= 1.0:
+        raise ValueError("site_guard must be 0 (off) or > 1")
     h, w = cfa.shape
     clipval = max(0.1, float(_CLIP_MAGIC) * float(clip))
     clips = (clipval * np.asarray(wb_mul, np.float32)).astype(np.float32)
@@ -484,6 +525,9 @@ def reconstruct_mosaic_segbased(
             add = np.maximum(0.0, gradient[oy_full, ox_full] * eff)
             out[ys, xs] = out[ys, xs] + add.astype(np.float32)
 
+    if site_guard > 1.0:
+        out, _n_guarded = _suppress_isolated_sites(out, site_clipped,
+                                                   site_guard)
     return np.maximum(out, 0.0).astype(np.float32, copy=False)
 
 
