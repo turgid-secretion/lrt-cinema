@@ -748,10 +748,12 @@ def test_dr_compression_no_halo_overshoot_at_step_edge():
 
 
 def test_dr_compression_applies_under_perceptual_only():
-    """Highlights/Shadows/Whites drive a real change under PERCEPTUAL but are
-    DROPPED under FAITHFUL — the §5-amendment contract. So faithful output with
-    them set is byte-identical to faithful with them zeroed, while perceptual
-    diverges."""
+    """WHITES drives a real change under PERCEPTUAL (via DR-compression) but is
+    dropped under FAITHFUL. Highlights/Shadows are NOT consumed at this layer at
+    all any more — they moved to the scene-referred slot-7b translation in
+    `pipeline.render_frame` (`scene_tone.apply_scene_hlsh`, probe-calibrated),
+    so at the develop-ops layer they are inert under BOTH intents (setting them
+    here must change nothing — the double-application guard)."""
     x = _dr_textured_image(32, 32).astype(np.float32)
     ops_set = DevelopOps(highlights=50.0, shadows=40.0, whites=30.0)
     ops_zero = DevelopOps()
@@ -761,7 +763,14 @@ def test_dr_compression_applies_under_perceptual_only():
     np.testing.assert_array_equal(faithful_set, faithful_zero)  # dropped on faithful
 
     perceptual_set = apply_develop_ops(x, ops_set, RenderIntent.PERCEPTUAL)
-    assert np.max(np.abs(perceptual_set - faithful_set)) > 1e-3  # applied on perceptual
+    assert np.max(np.abs(perceptual_set - faithful_set)) > 1e-3  # whites applied
+
+    # H/S alone (whites 0) are inert at this layer under BOTH intents — they
+    # are applied scene-referred in render_frame, never in the Stage-12 grade.
+    ops_hs = DevelopOps(highlights=50.0, shadows=40.0)
+    np.testing.assert_array_equal(
+        apply_develop_ops(x, ops_hs, RenderIntent.PERCEPTUAL),
+        apply_develop_ops(x, ops_zero, RenderIntent.PERCEPTUAL))
 
 
 def test_dr_compression_perceptual_identity_still_byte_exact():

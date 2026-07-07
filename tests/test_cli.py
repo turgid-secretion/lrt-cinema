@@ -330,15 +330,19 @@ def test_dropped_basic_tone_warns_at_render(tmp_path, capsys):
 
 
 def test_dropped_basic_tone_not_warned_under_perceptual(tmp_path, capsys):
-    """Under PERCEPTUAL the DR-compression op APPLIES Highlights/Shadows/Whites, so
-    they are no longer dropped — the warning must be suppressed (DECISIONS §5
-    amendment; the intent-aware `_warn_dropped_ops`)."""
+    """Under PERCEPTUAL nothing in the basic-tone family is dropped (Whites via
+    DR-compression; Highlights/Shadows via the slot-7b scene translation on every
+    path) — so there must be NO drop WARNING. The H/S translation info line is
+    allowed (it fires on both intents: applied-but-calibrated, worth surfacing)."""
     src = _seq_input(tmp_path)
     rc = main(["render", "--input", str(src), "--output", str(tmp_path / "out"),
                "--render-intent", "perceptual", "--dry-run", "--quiet"])
     assert rc == 0
     err = capsys.readouterr().err
-    assert "2012 set on" not in err  # no dropped-op warning under perceptual
+    # no basic-tone drop warning under perceptual (the pre-existing Sharpness
+    # warning is a different family and out of scope here)
+    for tag in ("Highlights2012", "Shadows2012", "Whites2012"):
+        assert f"crs:{tag} set on" not in err
 
 
 def _texture_clarity_seq_input(tmp_path):
@@ -505,22 +509,31 @@ def test_dropped_ops_warned_under_faithful(capsys):
     ]
     _warn_dropped_ops(per_frame, RenderIntent.FAITHFUL)
     err = capsys.readouterr().err
-    # Every dropped knob is surfaced, by its crs:* tag, with the frame count …
-    for tag in ("Highlights2012", "Shadows2012", "Whites2012", "Texture", "Clarity2012"):
+    # Every still-dropped knob is surfaced, by its crs:* tag, with the count …
+    for tag in ("Whites2012", "Texture", "Clarity2012"):
         assert f"crs:{tag} set on 1/2 frame" in err, f"{tag} drop not warned"
-    # … and the warning names the perceptual path as where the math is honoured.
+    # … the warning names the perceptual path as where the math is honoured …
     assert "perceptual" in err.lower()
+    # … and Highlights/Shadows are NOT warned as dropped — they are APPLIED
+    # via the probe-calibrated scene translation (slot-7b) and surfaced as info.
+    assert "crs:Highlights2012 set" not in err
+    assert "crs:Shadows2012 set" not in err
+    assert "info: Highlights2012/Shadows2012 set on 1/2 frame" in err
 
 
 def test_dropped_ops_not_warned_under_perceptual(capsys):
-    """Under PERCEPTUAL the same knobs DRIVE the ops (DR-compression / Texture-
-    Clarity) — they are not dropped, so there must be NO drop warning (warning
-    there would be a false 'these won't apply' to the user)."""
+    """Under PERCEPTUAL the remaining knobs DRIVE the ops (DR-compression /
+    Texture-Clarity) — they are not dropped, so there must be NO drop WARNING
+    (warning there would be a false 'these won't apply' to the user). The
+    Highlights/Shadows translation info line is allowed (it applies on every
+    path and is a calibrated approximation, worth surfacing)."""
     from lrt_cinema.cli import _warn_dropped_ops
     from lrt_cinema.ir import DevelopOps, RenderIntent
     per_frame = [DevelopOps(highlights=40.0, texture=30.0)]
     _warn_dropped_ops(per_frame, RenderIntent.PERCEPTUAL)
-    assert capsys.readouterr().err == ""
+    err = capsys.readouterr().err
+    assert "warning:" not in err
+    assert "info: Highlights2012/Shadows2012 set on 1/1 frame" in err
 
 
 def test_unset_dropped_ops_produce_no_warning(capsys):

@@ -1184,6 +1184,20 @@ def render_frame(
     if total_scene_ev != 0.0:
         camera_rgb = camera_rgb * np.float32(2.0 ** total_scene_ev)
 
+    # Slot-7b: scene-referred LOCAL Highlights/Shadows translation
+    # (`scene_tone.apply_scene_hlsh`), immediately after the scene-exposure
+    # gain — the point the round-2 CAL probes fitted it at (scene domain
+    # beats display on ΔE/chroma; the operator is measurably local; evidence
+    # `cal_domain_round2_2026-07-07.json`). Intent-independent (the
+    # perceptual Stage-12 DR-compression no longer consumes H/S — Whites
+    # only). Byte-exact no-op at zero sliders (production XMPs carry
+    # H/S = 0), so the ΔE ship gate and all pinned baselines are untouched.
+    if develop_ops is not None and (
+            develop_ops.highlights != 0.0 or develop_ops.shadows != 0.0):
+        from lrt_cinema.scene_tone import apply_scene_hlsh
+        camera_rgb = apply_scene_hlsh(
+            camera_rgb, develop_ops.highlights, develop_ops.shadows)
+
     prophoto = apply_adobe_pipeline(
         camera_rgb=camera_rgb,
         profile=profile,

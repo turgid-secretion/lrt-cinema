@@ -174,9 +174,11 @@ lrt-cinema render --input ... --output ... --preview-scale 4   # ~1/4 res
 **In scope:**
 - Adobe DNG 1.7.1 reference pipeline within < 1 ΔE2000 of `dng_validate`.
 - LRT XMP develop ops: Exposure2012, Blacks2012, ToneCurvePV2012, Saturation,
-  Vibrance, Contrast2012, HSL (8 bands), Color Grading / Split Toning — plus,
-  on the perceptual intent, Highlights/Shadows/Whites (scene-referred
-  DR-compression approximation) and Texture/Clarity (edge-aware).
+  Vibrance, Contrast2012, HSL (8 bands), Color Grading / Split Toning, and
+  Highlights2012/Shadows2012 (both intents: a scene-referred LOCAL translation
+  probe-calibrated against LR Classic exports — `scene_tone.apply_scene_hlsh`)
+  — plus, on the perceptual intent, Whites (scene-referred DR-compression
+  approximation) and Texture/Clarity (edge-aware).
 - Capture sharpening (clean-room ACR-style USM, `--capture-sharpen {off,xmp,acr}`,
   default off; tuning constants not yet validated against Lightroom output).
 - Holy Grail kelvin override + LRT mask-correction per-frame deltas +
@@ -185,10 +187,11 @@ lrt-cinema render --input ... --output ... --preview-scale 4   # ~1/4 res
   (linear default; menon/rcd/mlri + libraw algorithms opt-in).
 
 **Out of scope (current):**
-- Exact Lightroom PV5 parametric tone math (Highlights/Shadows/Whites are
+- Exact Lightroom PV5 parametric tone math (the basic-tone ops are
   local-adaptive and closed source — bit-matching them is impossible by
-  construction; the faithful intent drops them with a warning, the perceptual
-  intent approximates them).
+  construction). Highlights/Shadows ship as a probe-CALIBRATED translation
+  with a measured residual (CLAIMS round-2 rows); Whites stays dropped on
+  faithful (warned) and approximated on perceptual.
 - Noise reduction (ColorNoiseReduction / LuminanceSmoothing — not parsed yet),
   lens corrections, local masks (geometry), Dehaze.
 - AgX display transform (`stills-finished` preset — deferred).

@@ -193,7 +193,9 @@ placement is mostly undocumented; what we have **measured** [EMP]:
   3. demosaic (libraw linear | rcd | mlri | menon)
   4. divide-back (returns UNBALANCED camera RGB — contract)
   5. highlight_recovery Tier-1 (optional, default off, camera space)
-  6. scene_exposure_ev: 2^(4·maskEV) linear gain           [fixed 2026-06-10]
+  6. scene_exposure_ev: 2^(4·maskEV + Exposure2012) gain   [fixed 2026-06-10]
+  6b. Highlights/Shadows scene-referred LOCAL translation  [added 2026-07-07]
+       (scene_tone.apply_scene_hlsh — slot-7b, probe-calibrated)
   7. Stage 2  WB multiply (AsShotNeutral⁻¹ / kelvin override + tint)
   8. Stage 3/4 ForwardMatrix → XYZ(D50) → linear ProPhoto
   9. Stage 5  HueSatMap (HSV)
@@ -208,25 +210,22 @@ placement is mostly undocumented; what we have **measured** [EMP]:
 ```
 
 Steps 2 and 6 are this campaign's fixes; both moved operations *up* the
-chain into the canonical domain. The ⚠ region is the open question below.
+chain into the canonical domain. ⚠ region: audited below.
 
-## The open architecture question: the develop-ops domain
+## Develop-ops domain audit (ANSWERED 2026-07-07)
 
-Everything below the line (steps 13–14) currently operates on
-**post-ProfileToneCurve, display-referred-ish ProPhoto** data. Lightroom
-defines the same sliders inside its raw pipeline, where at least the
-exposure class is provably scene-referred. The deflicker fix is the first
-measured instance of this mismatch class; the owner's working hypothesis —
-which the evidence so far supports — is that the same class affects other
-ops. The audit is per-op, because the correct placement differs per op:
+The owner's mismatch-class hypothesis (LR applies develop ops in domains
+ours didn't) is now measured per-op — exposure class + H/S scene-referred
+(fixed/shipped), the globals probed (round-2 CAL):
 
 | Op (ours, step) | LR's placement | Status / next probe |
 |---|---|---|
 | Mask/local exposure (6) | scene-referred ×4 | **FIXED + verified** [EMP] |
-| Global `Exposure2012` (13) | scene-referred (expected: same machinery class as local) | **SUSPECT — probe PREPARED 2026-06-10**: `production/calibration/CALEXP{100,200}_4053.{NEF,xmp}` (single-variable, Exposure2012 = 1.0/2.0, xmp-diff-verified). Owner exports 16-bit sRGB TIFFs (no resize, sharpening off) → same harness as the deflicker CAL |
-| `Blacks2012` (13) | unknown | [PEND] — same harness pattern |
-| `Contrast2012`, ToneCurve (14) | tone-domain by nature; LR's pivot/space unknown | [PEND] — these may be *correctly* post-curve; needs the probe before touching |
-| HSL / ColorGrade / Sat / Vib (14) | color-domain; LR space unknown | [PEND] — lower risk (zero or constant in production), audit after exposure class |
+| Global `Exposure2012` | scene-referred | **DONE 2026-06-11** — measured scene-referred, folded into the slot-7 gain (ledger slot 7) |
+| `Highlights2012`/`Shadows2012` (6b) | scene-referred LOCAL | **MEASURED + SHIPPED 2026-07-07** — probe-calibrated translation (ledger slot 7b; CLAIMS round-2 rows) |
+| `Blacks2012` (13) | global; scene-referred at +50 | **MEASURED 2026-07-07** — our shape wrong (CLAIMS) |
+| `Contrast2012`, ToneCurve (14) | global; weak display lean | **MEASURED 2026-07-07** — placement class OK, our LAW wrong (slot 9) |
+| HSL / ColorGrade / Sat / Vib (14) | color-domain | **MEASURED 2026-07-07** — HSL validated, ColorGrade refuted (slot 10); Sat/Vib unprobed |
 | Sharpness / NR | ACR detail stage | [PEND] — part of the ~0.6 base-look floor |
 | Highlight reconstruction (5) | canon SPLITS: darktable PRE-demosaic (mosaic), dcraw & RawTherapee POST-demosaic, Adobe reconstructs in-render | **BLOCKED on this lock** (owner). Our Tier-1 post-demosaic placement is RT/dcraw-consistent; but it is ~no-op on the residual clip-edge fringes (F vs G arms: 199 px > 2/255, max 4) — whatever fixes those is NOT the current Tier-1 |
 | Raw CA correction | LR: off in production (census [EMP]). RT `CA_correct_RT` + dt `cacorrect@5.0`: PRE-demosaic [SRC] | **IMPLEMENTED opt-in 2026-07-07** (owner-directed): clean-room Martinec `_ca_correct.py`, dt placement, `--ca-correct N`, default OFF. See TARGET slot 2 |
@@ -546,18 +545,27 @@ tone after colour) unanimous [SRC/LIT]. Evidence: gym 0.023; flat-patch
 exits before LookTable/curve — a deliberate, documented divergence
 (scene-linear product goal), gated by the Phase-1f Resolve test.
 
+**Slot 7b — scene-referred LOCAL Highlights/Shadows translation
+(`scene_tone.apply_scene_hlsh`), after the slot-7 gain.** VERDICT:
+MEASURED + CALIBRATED (round-2 CAL probes, 2026-07-07). Scene domain
+wins (chroma discriminator); Shadows strongly local, Highlights
+moderately; the op = guided base/detail + calibrated curve family +
+near-black chroma roll — a translation with a measured residual, not
+Adobe fidelity (their math is closed Local-Laplacian class). Both
+intents; byte-exact no-op at zero (production H/S = 0). Numbers +
+evidence: CLAIMS round-2 rows (`tools/cal_domain_round2.py`,
+`tools/cal_hlsh_fit.py`).
+
 **Slot 9 — tone-domain develop ops (Contrast2012, parametric ToneCurve).**
-VERDICT: UNKNOWN. The current post-ProfileToneCurve placement was
-validated on LR *TIFF round-trips* — display-referred ops applied to
-display-referred input — which says NOTHING about where LR applies them
-inside a raw render. References: none solid (LR internal undocumented;
-engines differ in tone architecture). Probe (CAL pattern): single-variable
-Contrast ±50 owner exports; arms post-curve vs pre-curve application.
-Until then these ops are zero in production — latent, not load-bearing.
+VERDICT (2026-07-07 probes): Contrast2012 GLOBAL, weak display-domain
+lean; luminance arms leave ΔC 1.3–1.4 → per-channel class placement
+stands, but our LAW is wrong (+50: ΔE 3.26; −50: 17.23) — recalibration
+against the CALCON exports is a queued lever. Zero in production.
 
 **Slot 10 — colour-domain develop ops (HSL, ColorGrade, Sat/Vib).**
-VERDICT: UNKNOWN, LOW-RISK (zero/constant in production). Same probe
-pattern as slot 9, after the exposure/tone classes settle.
+VERDICT (2026-07-07): split — `apply_hsl` VALIDATED at the base-look
+floor (CALHSLBLU 0.181); `apply_color_grade` REFUTED (CALCGSH 17.9,
+ΔC 37; queued lever). Sat/Vib unprobed. Zero/constant in production.
 
 **Slot 11 — NR + capture sharpening (detail stage).** VERDICT: placement
 plausible (ACR's detail stage is post-colour [LIT]; dt denoiseprofile
@@ -571,15 +579,12 @@ colour-space allowlist code-enforced; sRGB/Rec.709 delivery per LRT
 round-trip requirement. Evidence: oracle tests; owner-run LRT ingest
 round-trip [EMP].
 
-### What blocks the lock
+### Lock state
 
-The lock needs: (a) ~~slot-7 global-exposure verdict~~ DONE 2026-06-11
-(scene-referred, measured), (b) slot-5b deciding experiment design
-AGREED (not necessarily run — the 5a fallback is shipped and safe),
-(c) owner acceptance of the slot-3 migration plan (WB-once), (d) this
-ledger's justifications challenged and signed. Slots 9–11 are explicitly
-OK-to-lock as UNKNOWN-latent: they are zero in production, carry written
-probes, and do not gate other work.
+The TARGET v2 ledger was ACCEPTED by the owner 2026-06-11 (tentative,
+evidence-gated — CLAIMS "ARCHITECTURE LOCK" row); every one-time blocker
+(slot-7 verdict, 5b design, slot-3 plan) is DONE. Open slots proceed by
+their written deciding experiments.
 
 ## The iteration substrate: pressure-test articles
 
@@ -600,4 +605,5 @@ Items 1–6 of the 2026-06-11 queue are DONE (source pass, Exposure2012
 probe, archive audit, slot-3 migration, slot-5b experiment, slot-6
 suppression — evidence rows in CLAIMS.md). Owner-gated remainder (never
 autonomous): any default flip (reconstruction/CA default-on), the
-EXR/Resolve gate.
+EXR/Resolve gate. Open levers from the round-2 probes: faithful Contrast
+law, ColorGrade law, Blacks shape, Whites calibration (CLAIMS rows).

@@ -576,6 +576,12 @@ def apply_dr_compression(
     direction), but **+Whites *darkens*/compresses the extreme top — the inverse of
     Lightroom's brighten-whites.** This is the law's uniform `2**(−k·s/100)` mapping
     (`research/v10b…` §2.5), deliberate, and validated only as *defined* math.
+    The inversion is now MEASURED, not just self-described: the round-2 CALWH50
+    probe (owner LR export, 2026-07-07) shows +50 Whites BRIGHTENS the top bins
+    (+0.27 stops peak at 0.36 display lum) — see CLAIMS "Whites2012" row; this
+    op keeps its defined law pending a Whites calibration of its own. NOTE:
+    since 2026-07-07 this op receives ONLY the Whites knob — Highlights/Shadows
+    moved to the scene-referred slot-7b translation (`scene_tone`), both intents.
 
     **Applied LOCALLY (this is what retains dynamism).** Luminance is split into a
     smooth **base** + a **detail** layer with a guided self-filter (He–Sun–Tang
@@ -969,7 +975,13 @@ def apply_stage_12_perceptual(
         # only; the faithful path drops H/S/W + Texture/Clarity (warn-only,
         # cli._warn_dropped_ops). Each op is a byte-exact no-op at zero sliders,
         # so the ΔE ship gate (faithful stages 1-9) is untouched.
-        out = apply_dr_compression(out, ops.highlights, ops.shadows, ops.whites)
+        # Highlights/Shadows moved to the scene-referred slot-7b translation
+        # (`scene_tone.apply_scene_hlsh`, applied in `pipeline.render_frame`
+        # for BOTH intents — probe-calibrated, cal_domain_round2 evidence).
+        # DR-compression keeps only the Whites knob here (still perceptual-
+        # only; its docstring's inverted direction is now MEASURED against
+        # LR — CALWH50 probe — and queued for its own calibration).
+        out = apply_dr_compression(out, 0.0, 0.0, ops.whites)
         out = _apply_hsl_perceptual(out, ops.hsl)
         out = _apply_color_grade_perceptual(out, ops.color_grade)
         out = apply_texture_clarity(out, ops.texture, ops.clarity)

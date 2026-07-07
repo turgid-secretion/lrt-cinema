@@ -303,6 +303,14 @@ def mlx_render_frame_to_srgb(raw_path, profile, develop_ops=None,
     from lrt_cinema import pipeline as P
     from lrt_cinema.ir import DevelopOps
     ops = develop_ops if develop_ops is not None else DevelopOps()
+    # The scene-referred local Highlights/Shadows op (pipeline slot-7b,
+    # `scene_tone.apply_scene_hlsh`) is CPU-only — force the per-stage CPU
+    # path rather than silently dropping it (the recovery/fc-suppress
+    # precedent). Production H/S are zero, so the MLX fast path is kept
+    # exactly where it was measured.
+    if ops.highlights != 0.0 or ops.shadows != 0.0:
+        raise MlxUnsupported(
+            "Highlights/Shadows translation (scene_tone) is CPU-only")
     # Key the renderer cache on the DCP path (stable across a worker's frames,
     # unlike the per-call-re-parsed profile object) so a sequence reuses the
     # uploaded constants. None → falls back to id(profile) (single-frame use).

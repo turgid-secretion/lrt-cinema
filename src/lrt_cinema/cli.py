@@ -527,7 +527,11 @@ def _load_dcp_dispatch(path: Path) -> DCPProfile:
 # Two families, each with its own perceptual op + warn wording — the DR-compression
 # story (closed PV5 tone math) does NOT describe Texture/Clarity (edge-aware local
 # contrast), so they must not share the same message.
-_DROPPED_AT_EMIT_FIELDS = ("highlights", "shadows", "whites")  # → apply_dr_compression
+# Highlights/Shadows are NO LONGER dropped anywhere: the round-2 CAL probes
+# calibrated a scene-referred local translation (`scene_tone.apply_scene_hlsh`,
+# pipeline slot-7b, both intents) — they get an INFO line, not a drop warning.
+_HLSH_TRANSLATED_FIELDS = ("highlights", "shadows")            # → apply_scene_hlsh
+_DROPPED_AT_EMIT_FIELDS = ("whites",)                          # → apply_dr_compression
 _DROPPED_TEXTURE_CLARITY_FIELDS = ("texture", "clarity")       # → apply_texture_clarity
 _ALL_DROPPED_ON_FAITHFUL = _DROPPED_AT_EMIT_FIELDS + _DROPPED_TEXTURE_CLARITY_FIELDS
 
@@ -584,6 +588,21 @@ def _warn_dropped_ops(
             f"on the perceptual master — it defers detail/sharpening to the colorist's "
             f"grade (trunk/branch model). Render the faithful sRGB/TIFF path with "
             f"--capture-sharpen to bake capture sharpening.\n",
+        )
+
+    # Highlights/Shadows: APPLIED on every path via the probe-calibrated
+    # scene-referred translation (slot-7b) — surface that it is a calibrated
+    # approximation, not Adobe's closed local-adaptive math (info, both intents).
+    hlsh_count = sum(
+        1 for ops in per_frame
+        if any(getattr(ops, f) != 0.0 for f in _HLSH_TRANSLATED_FIELDS))
+    if hlsh_count:
+        sys.stderr.write(
+            f"info: Highlights2012/Shadows2012 set on {hlsh_count}/{n} frame(s) — "
+            f"applied via the scene-referred local translation calibrated against "
+            f"LR Classic probe exports (scene_tone.apply_scene_hlsh; Adobe's own "
+            f"local-adaptive math is closed-source, so this is probe-calibrated, "
+            f"not bit-faithful).\n",
         )
 
     if intent is not RenderIntent.FAITHFUL:
@@ -660,13 +679,15 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     if seq.keyframes:
         out.write(
             "\nFields DROPPED on the faithful path (closed-source Adobe math); "
-            "APPLIED on perceptual (DECISIONS §5/§7 — Highlights/Shadows/Whites via "
-            "DR-compression, Texture/Clarity via the local-contrast op):\n"
+            "APPLIED on perceptual (DECISIONS §5/§7 — Whites via DR-compression, "
+            "Texture/Clarity via the local-contrast op). Highlights/Shadows are "
+            "APPLIED on every path (probe-calibrated scene translation):\n"
         )
-        for name in _ALL_DROPPED_ON_FAITHFUL:
+        for name in _ALL_DROPPED_ON_FAITHFUL + _HLSH_TRANSLATED_FIELDS:
             count = sum(1 for kf in seq.keyframes if getattr(kf.ops, name) != 0.0)
             if count:
-                out.write(f"  - {name}: set on {count} of {kf_count} keyframes\n")
+                applied = " (applied, translated)" if name in _HLSH_TRANSLATED_FIELDS else ""
+                out.write(f"  - {name}: set on {count} of {kf_count} keyframes{applied}\n")
     return 0
 
 

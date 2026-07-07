@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] — v0.8 prep
 
 ### Added
+- **Highlights2012/Shadows2012 now APPLIED on every render path** — a
+  scene-referred LOCAL translation (`scene_tone.apply_scene_hlsh`, pipeline
+  slot-7b) calibrated against owner Lightroom Classic probe exports
+  (round-2 CAL protocol: single-variable XMPs at H −50/−100, S +50/+100).
+  Domain + locality measured (`tools/cal_domain_round2.py`): scene domain
+  wins on chroma; Shadows strongly local, Highlights moderately. The op:
+  guided base/detail split on log2 scene luminance + measured anchor tone
+  tables + near-black chroma roll; calibrated by
+  `tools/cal_hlsh_fit.py` (beats the best global fit arm at every anchor —
+  Shadows +100 ΔE 4.2 global → ~1.1 local). Byte-exact no-op at zero
+  sliders (production sequences unaffected; gym gate byte-stable). The
+  faithful path no longer warns H/S as dropped (info line instead);
+  perceptual DR-compression now consumes Whites only. MLX whole-frame path
+  falls back to CPU when H/S are set. Round-2 probes also pinned:
+  Contrast global (our law wrong — queued), Blacks scene-global (+50),
+  Whites +50 BRIGHTENS (perceptual inversion measured), faithful HSL
+  VALIDATED at the base-look floor (0.18), faithful ColorGrade REFUTED
+  (ΔC 37 — queued). Evidence: `cal_domain_round2_2026-07-07.json`,
+  `cal_hlsh_fit_2026-07-07.json`; owner flips `tools/hlsh_flips.py`.
 - **Apple-Silicon Metal GPU backend (`--backend mlx`, `perf/gpu-render`).** Runs
   the WHOLE faithful sRGB-TIFF render on the GPU in one upload / one download —
   stages 2-9, Stage-11, the full **Stage-12 faithful grade**
