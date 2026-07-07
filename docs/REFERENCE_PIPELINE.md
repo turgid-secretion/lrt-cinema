@@ -368,8 +368,11 @@ beating the LR-product anchor (13.6) and canonical dt-AMaZE inside dt
 (LR 4.25); zoneplate unchanged (structural — phase 0 proved no
 demosaic method touches it; ACR's mechanism remains out of scope).
 Gym sanity: amaze 0.433 vs menon 0.509 against dng_validate (closer to
-Adobe on the real frame). `--demosaic amaze` = display/clip-path only
-(single uniform clip point assumed; headroom master keeps menon).
+Adobe on the real frame). `--demosaic amaze`: headroom targets run through
+`amaze_demosaic_headroom` (2026-07-07 [SRC+EMP] — dt's RCD/LMMSE
+scaler convention; recovery carries losslessly, bit-exact degenerate
+on clip input; fc-suppress smears on unbounded headroom RGB → pair
+recovery with fc0. CLAIMS "Scaler-wrapped AMaZE SHIPPED").
 **CLOSED 2026-07-06 [EMP]: amaze = the CLI demosaic DEFAULT.** Numba
 twin landed BIT-EXACT vs the numpy spec (max|Δ|=0 full-frame incl.
 borders) at 0.33 s/24 MP — 52.6× the numpy twin, meeting the owner's
