@@ -106,6 +106,51 @@ def test_output_bounds_and_validation_errors():
         amaze_demosaic(np.zeros((4, 4, 3), np.float32), "RGGB")
 
 
+# ---- headroom scaler wrapper (dt RCD/LMMSE convention, 2026-07-07) ----------
+
+
+def test_headroom_wrapper_degenerates_to_direct_call_bit_exact():
+    """No content above clip_pt (clip-mode input) -> wrapper IS the direct
+    call, byte-identical — the production clip path cannot drift."""
+    from lrt_cinema._amaze_demosaic import amaze_demosaic_headroom
+
+    rng = np.random.default_rng(7)
+    cfa = np.minimum(rng.random((48, 48)).astype(np.float32), np.float32(0.9))
+    direct = amaze_demosaic(cfa, "RGGB", clip_pt=0.9)
+    wrapped = amaze_demosaic_headroom(cfa, "RGGB", clip_pt=0.9)
+    assert np.abs(wrapped - direct).max() == 0.0
+
+
+def test_headroom_wrapper_preserves_overrange():
+    """Reconstruction content above clip_pt survives the wrapped demosaic;
+    the direct call destroys it at the [0, 1] port clamp."""
+    from lrt_cinema._amaze_demosaic import amaze_demosaic_headroom
+
+    scene = np.full((48, 48, 3), 0.4, np.float32)
+    scene[16:32, 16:32] = 2.0          # "recovered" plateau above the clip
+    cfa = _rggb_mosaic(scene)
+    direct = amaze_demosaic(cfa, "RGGB", clip_pt=1.0)
+    wrapped = amaze_demosaic_headroom(cfa, "RGGB", clip_pt=1.0)
+    assert direct.max() <= 1.0
+    assert wrapped.max() > 1.9
+    core = wrapped[20:28, 20:28]       # plateau interior reproduced ~exactly
+    assert np.allclose(core, 2.0, atol=1e-3)
+    lo = wrapped[:8, :8]               # unclipped region unaffected in kind
+    assert np.allclose(lo, 0.4, atol=1e-3)
+
+
+def test_headroom_wrapper_scale_none_uses_mosaic_max():
+    from lrt_cinema._amaze_demosaic import amaze_demosaic_headroom
+
+    scene = np.full((32, 32, 3), 0.3, np.float32)
+    scene[8:16, 8:16] = 1.7
+    cfa = _rggb_mosaic(scene)
+    auto = amaze_demosaic_headroom(cfa, "RGGB", clip_pt=1.0)
+    explicit = amaze_demosaic_headroom(cfa, "RGGB", clip_pt=1.0,
+                                       scale=float(cfa.max()))
+    assert np.abs(auto - explicit).max() == 0.0
+
+
 # ---- numba twin: bit-exact parity with the numpy spec -----------------------
 # The fast twin's acceptance contract is max|delta| == 0 against
 # `_amaze_rggb` (the validated spec), all sites including borders, through

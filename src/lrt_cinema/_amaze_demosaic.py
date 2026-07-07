@@ -34,9 +34,19 @@ anti-drift rule 6; same discipline as the RCD port). Stages:
 INPUT CONTRACT: BALANCED Bayer mosaic in [0, 1] with sensor clip at
 `clip_pt` (default 1.0 — the clip-to-common-white decode, slot 5a). AMaZE
 assumes a single uniform clip point (darktable runs it after its
-highlights module for the same reason), so the pipeline routes only the
-"clip" highlight mode here; the "headroom" master path keeps menon.
-Output: (H, W, 3) float32 in [0, 1] (the algorithm's own convention).
+highlights module for the same reason). Output: (H, W, 3) float32 in
+[0, 1]. NOTE the [0, 1] output clamp is DARKTABLE'S port addition, which
+this port faithfully inherited — RawTherapee's original is floor-only
+and runs at `clip_pt = 1/initialGain < 1` with real per-channel headroom
+above clip_pt flowing through (CLAIMS "Cross-engine canon", 2026-07-07).
+
+`amaze_demosaic_headroom` is the recovery-path entry: dt's RCD/LMMSE
+normalize→demosaic→denormalize scaler convention applied to AMaZE, so
+mosaic content above `clip_pt` (highlight-reconstruction output, or raw
+per-channel headroom) SURVIVES the demosaic. The scaled call runs at
+clip_pt/scale < 1 — exactly RawTherapee's fielded amaze regime. The
+ported numerics are untouched; on input with no headroom it degenerates
+to the direct call bit-exactly.
 
 Validation: canonical anchor `dt_amaze_anchor_2026-06-12.json`
 (dt-AMaZE diagbars falsecolor 9.73 vs dt-RCD 20.6); pressure suite arms;
@@ -155,6 +165,30 @@ def amaze_demosaic(cfa: np.ndarray, pattern: str,
     if flip_r:
         rgb = rgb[::-1, :, :]
     return np.ascontiguousarray(rgb)
+
+
+def amaze_demosaic_headroom(cfa: np.ndarray, pattern: str,
+                            clip_pt: float = 1.0,
+                            scale: float | None = None) -> np.ndarray:
+    """AMaZE for mosaics carrying content ABOVE `clip_pt` (reconstruction
+    output or per-channel headroom): normalize by `scale` → demosaic at
+    `clip_pt/scale` → denormalize. dt's RCD/LMMSE scaler convention
+    (rcd.c `scaler`/`revscaler`); the scaled regime (clip_pt < 1, data
+    ≤ 1) is RT's amaze as-fielded (`clip_pt = 1/initialGain`), so the
+    [0, 1] port clamp lands above all data and never engages.
+
+    `scale=None` → max(cfa.max(), clip_pt). When scale ≤ clip_pt (no
+    content above the clip) this IS `amaze_demosaic`, bit-exactly.
+    Returns (H, W, 3) float32 in [0, scale]."""
+    cfa = np.asarray(cfa)
+    if scale is None:
+        scale = max(float(cfa.max()), float(clip_pt))
+    scale = float(scale)
+    if scale <= float(clip_pt):
+        return amaze_demosaic(cfa, pattern, clip_pt=float(clip_pt))
+    scaled = (cfa.astype(np.float32, copy=False) / np.float32(scale))
+    rgb = amaze_demosaic(scaled, pattern, clip_pt=float(clip_pt) / scale)
+    return rgb * np.float32(scale)
 
 
 def _amaze_rggb(cfa: np.ndarray, clip_pt: np.float32) -> np.ndarray:  # noqa: PLR0915

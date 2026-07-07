@@ -636,22 +636,19 @@ def _cfa_demosaic(raw, method: str, wb_mul: np.ndarray | None = None,
         rgb = np.maximum(out, np.float32(0.0))
     elif method == "amaze":
         # Clean-room AMaZE (slot-4 diagonal-detail port, 2026-06-12).
-        # AMaZE assumes a single uniform clip point (dt runs it after its
-        # highlights module for the same reason) and clamps its output to
-        # [0, 1] — it is the DISPLAY-path (clip-mode) demosaic. The
-        # headroom master path keeps menon.
-        if highlights != "clip" and wb_mul is not None:
-            import sys
-            sys.stderr.write(
-                "warning: demosaic 'amaze' requires clip-mode highlight "
-                "conditioning; using 'menon' for the headroom path.\n")
-            from colour_demosaicing import demosaicing_CFA_Bayer_Menon2007
-            rgb = np.maximum(np.asarray(
-                demosaicing_CFA_Bayer_Menon2007(cfa, pattern),
-                dtype=np.float32), np.float32(0.0))
+        # Clip mode: direct call — the [0, 1] output clamp coincides with
+        # the common white, byte-stable with every pinned amaze evidence.
+        # Headroom mode (scene-linear master / reconstruction): the
+        # scaler-wrapped entry — dt's RCD/LMMSE normalize→demosaic→
+        # denormalize convention, running amaze at clip_pt/scale < 1 =
+        # RT's fielded regime — so >clip content SURVIVES (CLAIMS
+        # "Cross-engine canon" 2026-07-07; previously fell back to menon).
+        clip_pt = float(wb_mul.min()) if wb_mul is not None else 1.0
+        if highlights != "clip":
+            from lrt_cinema._amaze_demosaic import amaze_demosaic_headroom
+            rgb = amaze_demosaic_headroom(cfa, pattern, clip_pt=clip_pt)
         else:
             from lrt_cinema._amaze_demosaic import amaze_demosaic
-            clip_pt = float(wb_mul.min()) if wb_mul is not None else 1.0
             rgb = amaze_demosaic(cfa, pattern, clip_pt=clip_pt)
     else:
         raise ValueError(f"unknown CFA demosaic method {method!r}")
