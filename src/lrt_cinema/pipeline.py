@@ -609,17 +609,24 @@ def _cfa_demosaic(raw, method: str, wb_mul: np.ndarray | None = None,
         # TARGET slot 2: raw lateral-CA correction on the BALANCED mosaic,
         # after the WB scale + highlight conditioning, before demosaic —
         # dt's exact placement (temperature@3 → highlights@4 → cacorrect@5
-        # → demosaic@8); RT likewise runs CA_correct pre-demosaic. Opt-in
-        # (`--ca-correct N`, owner-gated); `ca_correct` = Martinec
-        # iterations. The normalisation white is the conditioning ceiling:
-        # the common white in clip mode, the max multiplier in headroom.
+        # → demosaic@8); RT likewise runs CA_correct pre-demosaic.
+        # `ca_correct` = Martinec iterations. The normalisation white is
+        # the conditioning ceiling: the common white in clip mode, the max
+        # multiplier in headroom. avoid_shift is ALWAYS on here
+        # (owner-decided 2026-07-07): the D2 spot gate measured plain CA
+        # shifting global R/B gains ~±0.35 % (a real colour cast, ΔE vs
+        # the LRT product +0.095); avoid-shift cancels the cast exactly
+        # (gains back to baseline) while keeping ~85 % of the fringe-ring
+        # benefit — seq_spot_ca_2026-07-07 + CLAIMS. dt defaults the lever
+        # off / RT exposes it as a checkbox; our always-on divergence is
+        # justified by that measurement.
         from lrt_cinema._ca_correct import ca_correct_mosaic
         ca_scale = (
             float(wb_mul.min() if highlights == "clip" else wb_mul.max())
             if wb_mul is not None else None
         )
         cfa = ca_correct_mosaic(cfa, pattern, iterations=ca_correct,
-                                scale=ca_scale)
+                                avoid_shift=True, scale=ca_scale)
     if method == "rcd":
         from lrt_cinema import accel
         rgb = accel.rcd_demosaic(cfa, pattern)

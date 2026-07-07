@@ -305,15 +305,19 @@ def test_capture_sharpen_flag_dry_run(tmp_path, capsys):
 
 
 def test_ca_correct_flag_dry_run(tmp_path, capsys):
-    """--ca-correct: default 0 = OFF (owner-gated slot-2 opt-in; every
-    existing output byte-identical); N threads to the job."""
+    """--ca-correct: default AUTO (owner-approved 2026-07-07 'CA-on is
+    better in all cases') = 2 on display targets, 0 on the scene-linear
+    master; an explicit value (including 0) always wins."""
     src = _seq_input(tmp_path)
     out = tmp_path / "out"
     main(["render", "--input", str(src), "--output", str(out), "--dry-run", "--quiet"])
+    assert "ca_correct=2" in capsys.readouterr().err
+    main(["render", "--input", str(src), "--output", str(out),
+          "--target", "master", "--dry-run", "--quiet"])
     assert "ca_correct=0" in capsys.readouterr().err
     main(["render", "--input", str(src), "--output", str(out),
-          "--ca-correct", "2", "--dry-run", "--quiet"])
-    assert "ca_correct=2" in capsys.readouterr().err
+          "--ca-correct", "0", "--dry-run", "--quiet"])
+    assert "ca_correct=0" in capsys.readouterr().err
 
 
 def test_dropped_basic_tone_warns_at_render(tmp_path, capsys):

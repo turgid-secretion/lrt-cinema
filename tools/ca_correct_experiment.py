@@ -236,7 +236,8 @@ def _gym_decode(arm: str, ca_n: int, render_wb: np.ndarray) -> np.ndarray:
         scaled = cfa * render_wb[chan].astype(np.float32)
         recon = reconstruct_mosaic_segbased(scaled, chan, render_wb)
         if ca_n > 0:
-            recon = ca_correct_mosaic(recon, pattern, iterations=ca_n)
+            recon = ca_correct_mosaic(recon, pattern, iterations=ca_n,
+                                      avoid_shift=True)
         return np.maximum(np.asarray(
             demosaicing_CFA_Bayer_Menon2007(recon, pattern), np.float32), 0.0)
 
@@ -333,7 +334,10 @@ def gym_block(write_flips: bool, metrics: bool) -> dict:
             "the saturation boost the reconstruction paints into clip\n"
             "boundaries? A/B use amaze (production); C/D use menon (the\n"
             "reconstruction arms' comparability demosaic) — judge A-vs-B\n"
-            "and C-vs-D, not A-vs-C.\n")
+            "and C-vs-D, not A-vs-C.\n\n"
+            "CA-on arms include AVOID-SHIFT (owner-adjudicated 2026-07-07:\n"
+            "cancels the global R/B cast plain CA introduced; the shipped\n"
+            "default configuration).\n")
     return out
 
 

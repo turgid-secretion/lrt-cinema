@@ -132,6 +132,18 @@ def test_too_few_blocks_degrades_to_noop(capsys):
     np.testing.assert_array_equal(out, base)
 
 
+def test_resolve_ca_correct_default_on_display_off_master():
+    """Owner-approved 2026-07-07 default policy: AUTO = 2 iterations on
+    display presets, 0 on the scene-linear tap-7 master; explicit wins."""
+    from lrt_cinema.cli import STAGE_7_PRESETS, resolve_ca_correct
+
+    assert resolve_ca_correct(None, "lrtimelapse") == 2
+    for preset in STAGE_7_PRESETS:
+        assert resolve_ca_correct(None, preset) == 0
+    assert resolve_ca_correct(0, "lrtimelapse") == 0
+    assert resolve_ca_correct(3, next(iter(STAGE_7_PRESETS))) == 3
+
+
 class _FakeRaw:
     """Minimal rawpy stand-in for the pipeline CFA path (RGGB, zero black,
     16383 white)."""

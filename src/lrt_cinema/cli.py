@@ -274,7 +274,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     render.add_argument(
-        "--ca-correct", dest="ca_correct", type=int, default=0,
+        "--ca-correct", dest="ca_correct", type=int, default=None,
         choices=range(0, 6), metavar="N",
         help=(
             "Raw lateral chromatic-aberration correction iterations (TARGET "
@@ -283,11 +283,14 @@ def _build_parser() -> argparse.ArgumentParser:
             "conditioning and demosaic (dt's cacorrect@5 placement). "
             "Measures per-block R/B-vs-G shifts, fits a smooth polynomial "
             "shift field, and resamples R/B colour differences at their "
-            "optical locations. Default 0 = OFF (owner-gated; every "
-            "existing output byte-identical); 2 = the dt default iteration "
-            "count. Needs a CFA-domain demosaic (rcd/mlri/menon/amaze — the "
-            "production default qualifies) at full resolution; warned + "
-            "skipped elsewhere. Forces the CPU path off MLX."
+            "optical locations. Default AUTO (owner-approved 2026-07-07, "
+            "'CA-on is better in all cases'): 2 iterations (the dt default) "
+            "on display targets, OFF on the scene-linear "
+            "cinema-linear-master (the tap-7 EXR stays untouched). Pass an "
+            "explicit 0 to force off, 1-5 to force a count. Needs a "
+            "CFA-domain demosaic (rcd/mlri/menon/amaze — the production "
+            "default qualifies) at full resolution; warned + skipped "
+            "elsewhere. Forces the CPU path off MLX."
         ),
     )
     render.add_argument(
@@ -382,6 +385,20 @@ class _RenderJob:
     capture_sharpen: str = "off"  # "off"|"xmp"|"acr" (faithful capture sharpening; off=byte-exact)
     fc_suppress: int = 0          # slot-6 false-colour suppression passes (0 = off)
     ca_correct: int = 0           # slot-2 raw CA correction iterations (0 = off)
+
+
+def resolve_ca_correct(explicit: int | None, preset: str) -> int:
+    """Slot-2 raw-CA-correction default resolution (owner-approved
+    2026-07-07 on the rank-1 flip verdict "CA-on is better in all cases"):
+    AUTO = 2 iterations (the dt default) on DISPLAY presets, 0 (off) on
+    the scene-linear tap-7 master — same policy shape as fc-suppress: the
+    EXR carries untouched scene data. An explicit --ca-correct value
+    (including 0) always wins. The pipeline runs the correction WITH
+    avoid-shift (owner-adjudicated after the D2 spot gate caught plain
+    CA's global R/B cast — see pipeline._cfa_demosaic)."""
+    if explicit is not None:
+        return explicit
+    return 0 if preset in STAGE_7_PRESETS else 2
 
 
 def resolve_fc_suppress(explicit: int | None, preset: str) -> int:
@@ -813,6 +830,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
         else (preset in STAGE_7_PRESETS)
     )
     fc_suppress = resolve_fc_suppress(args.fc_suppress, preset)
+    ca_correct = resolve_ca_correct(args.ca_correct, preset)
     # Intent default is per-target (sRGB→faithful, EXR→perceptual); --render-intent
     # overrides. All creative values still come from the XMP — intent only picks
     # the grading math (DECISIONS.md §7).
@@ -879,7 +897,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
             demosaic=args.demosaic,
             capture_sharpen=capture_sharpen,
             fc_suppress=fc_suppress,
-            ca_correct=args.ca_correct,
+            ca_correct=ca_correct,
         ))
 
     if args.dry_run:
@@ -892,7 +910,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
             f"backend={backend}, preview_scale={args.preview_scale}, "
             f"highlight_recovery={highlight_recovery}, "
             f"fc_suppress={fc_suppress}, "
-            f"ca_correct={args.ca_correct}, "
+            f"ca_correct={ca_correct}, "
             f"workers={args.workers}).\n",
         )
         return 0
