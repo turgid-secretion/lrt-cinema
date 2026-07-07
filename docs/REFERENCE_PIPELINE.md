@@ -229,7 +229,7 @@ ops. The audit is per-op, because the correct placement differs per op:
 | HSL / ColorGrade / Sat / Vib (14) | color-domain; LR space unknown | [PEND] — lower risk (zero or constant in production), audit after exposure class |
 | Sharpness / NR | ACR detail stage | [PEND] — part of the ~0.6 base-look floor |
 | Highlight reconstruction (5) | canon SPLITS: darktable PRE-demosaic (mosaic), dcraw & RawTherapee POST-demosaic, Adobe reconstructs in-render | **BLOCKED on this lock** (owner). Our Tier-1 post-demosaic placement is RT/dcraw-consistent; but it is ~no-op on the residual clip-edge fringes (F vs G arms: 199 px > 2/255, max 4) — whatever fixes those is NOT the current Tier-1 |
-| Raw CA correction (absent) | LR: available but **ZERO/off in this production sequence** (census [EMP]). RT: `CA_correct_RT` PRE-demosaic [SRC-fetch] | **CLOSED for the observed fringes** — forensics refuted lens CA (bilinear arm kills the saturation; true CA would survive it). A real CA op stays optional future work, pre-demosaic per RT |
+| Raw CA correction | LR: off in production (census [EMP]). RT `CA_correct_RT` + dt `cacorrect@5.0`: PRE-demosaic [SRC] | **IMPLEMENTED opt-in 2026-07-07** (owner-directed): clean-room Martinec `_ca_correct.py`, dt placement, `--ca-correct N`, default OFF. See TARGET slot 2 |
 | Partial-clip hue handling (mechanism A) | Adobe reconstructs partial clips in-render [EMP: gym census + fringe cluster 0] | **CONFIRMED defect class [EMP]** — clip-neutralization driven by a 2-dilated MOSAIC clip mask reproduces LR's cleanliness (fringe-sat 0.408→0.179 ≈ D 0.167). Tier-1's post-demosaic 0.99 threshold structurally misses interpolation-smeared partial clips → the production fix needs the mask from the mosaic. Slot 5 of the TARGET draft; implement post-lock |
 | False-colour suppression at/after demosaic (mechanism B) | canon schemes now read [SRC 2026-06-11]: **dt** `color_smoothing` (demosaicing/basics.c:91): per pass, for R and B, 9-median of (chan−G) over 3×3 then chan = max(0, med+G), 1–5 passes; **dcraw/libraw** `median_filter` (postprocessing_aux.cpp:246): identical class — 3×3 9-median on R−G and B−G, `med_passes` iterations, post-demosaic pre-highlight-blend; **RT** `processFalseColorCorrection` (rawimagesource.cc:2982): per step, 9-median on YIQ I/Q + 3×3 box blur, Y untouched; **libraw FBDD** (dcb_demosaic.cpp:814): PRE-demosaic — green spline + impulse clamp + 2×LCh cross-pattern chroma outlier smoothing (ratio<0.85 test) | **CONFIRMED gap [EMP]; scheme canon CONVERGES** — three engines do post-demosaic 3×3 chroma-difference median (keep G/Y, median the chroma signal, N passes). Our insufficient probe medianed the wrong representation. TARGET slot 6; implement post-lock |
 
@@ -289,13 +289,21 @@ VERDICT: JUSTIFIED. References: unanimous canon (every engine; DNG 1.7.1
 spec; K&B stage 1) [SRC/LIT]. Evidence: gym 0.023 ΔE vs dng_validate;
 flatpatches 0.15–0.18 ≈ Adobe-ref [EMP]. Nothing open.
 
-**Slot 2 — raw CA correction (mosaic domain).** VERDICT: ABSENT,
-PROVISIONALLY JUSTIFIED. References: canon SPLITS — RT (`CA_correct_RT`)
-and darktable correct pre-demosaic; dcraw has none; LR offers it but the
-production XMPs have it OFF (census [EMP]). Evidence: fringe forensics
-REFUTED lens CA as the residual-artifact cause [EMP]. Plan: stays absent
-until a real-lens article (`ca_shifted`, taxonomy v3) demonstrates need;
-placement would be pre-demosaic per RT/dt.
+**Slot 2 — raw CA correction (mosaic domain).** VERDICT: IMPLEMENTED,
+OPT-IN. References: RT `CA_correct_RT` and dt `cacorrect@5.0`
+(highlights@4 → cacorrect@5 → demosaic@8; dt's file IS RT's vendored —
+one shared Martinec algorithm) both pre-demosaic [SRC]; dcraw none; LR
+off in production (census [EMP]). 2026-06-10 forensics refuted lens CA
+for the clusters measured then; the 2026-07-06 owner round re-opened the
+slot: boundary-trusting reconstruction ingests clip-edge CA fringe
+(CLAIMS rows; `hl_edge_chroma_research_2026-07-06.json`) and the canon
+carries a raw-CA stage we lacked. **PORTED 2026-07-07 [SRC+EMP]:
+clean-room Martinec** (`_ca_correct.py`; dt-vs-RT divergences adjudicated
+in the module docstring), wired at dt's slot on the CFA paths;
+`--ca-correct N` (default 0 = OFF, all outputs byte-identical). Evidence:
+`ca_correct_<date>.json` (`tools/ca_correct_experiment.py`); contracts
+`tests/test_ca_correct.py`; owner flips `verify-2026-07-07/ca-flip/`.
+Default flip = owner decision after the flips.
 
 **Slot 3 — white balance, applied ONCE, before demosaic.** VERDICT:
 JUSTIFIED; **MIGRATED 2026-06-11 — the wart is gone.** The divide-back
@@ -586,19 +594,10 @@ bilinear; libraw's own pipeline) compared on truth-anchored INVARIANTS
 `clipbars` article reproduces the production blinds failure in one number —
 front-end changes iterate against these before any owner eyeball.
 
-## Post-lock queue (state 2026-06-11, this session)
+## Post-lock queue (state 2026-07-07)
 
-1. ~~LOCAL RT + LibRaw + darktable source pass~~ **DONE 2026-06-11** —
-   RT multiplier nuance resolved; opposed/suppression algorithms
-   extracted; tags upgraded above.
-2. ~~Global-`Exposure2012` domain probe~~ **DONE 2026-06-11** (slot 7).
-3. ~~Stale-prose archive audit~~ **DONE 2026-06-11** — the four bannered
-   docs are in `docs/archive/`; live-docs budget ratcheted to 110 KB.
-4. Slot-3 WB-once migration (owner-accepted plan) — this session.
-5. Slot-5b deciding experiment, both placements — this session;
-   owner verdict batch on real blown windows.
-6. Slot-6 suppression implementation + slot-4 diagbars remainder —
-   this session; off-by-default until owner eyeball.
-7. Owner-gated (do NOT do autonomously): demosaic default flip
-   (menon verdict is in), reconstruction/suppression default-on,
-   EXR/Resolve gate, Adobe-npz purge.
+Items 1–6 of the 2026-06-11 queue are DONE (source pass, Exposure2012
+probe, archive audit, slot-3 migration, slot-5b experiment, slot-6
+suppression — evidence rows in CLAIMS.md). Owner-gated remainder (never
+autonomous): any default flip (reconstruction/CA default-on), the
+EXR/Resolve gate.

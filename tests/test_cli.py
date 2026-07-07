@@ -304,6 +304,18 @@ def test_capture_sharpen_flag_dry_run(tmp_path, capsys):
     assert "capture_sharpen=off" in capsys.readouterr().err
 
 
+def test_ca_correct_flag_dry_run(tmp_path, capsys):
+    """--ca-correct: default 0 = OFF (owner-gated slot-2 opt-in; every
+    existing output byte-identical); N threads to the job."""
+    src = _seq_input(tmp_path)
+    out = tmp_path / "out"
+    main(["render", "--input", str(src), "--output", str(out), "--dry-run", "--quiet"])
+    assert "ca_correct=0" in capsys.readouterr().err
+    main(["render", "--input", str(src), "--output", str(out),
+          "--ca-correct", "2", "--dry-run", "--quiet"])
+    assert "ca_correct=2" in capsys.readouterr().err
+
+
 def test_dropped_basic_tone_warns_at_render(tmp_path, capsys):
     """Highlights/Shadows/Whites set in the XMP but dropped on the FAITHFUL path
     surface a per-field, frame-counted warning — never a silent drop (the user's

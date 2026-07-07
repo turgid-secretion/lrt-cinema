@@ -274,6 +274,23 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     render.add_argument(
+        "--ca-correct", dest="ca_correct", type=int, default=0,
+        choices=range(0, 6), metavar="N",
+        help=(
+            "Raw lateral chromatic-aberration correction iterations (TARGET "
+            "slot 2): the clean-room Martinec CA_correct (the dt/RT shared "
+            "canon), run on the BALANCED Bayer mosaic between highlight "
+            "conditioning and demosaic (dt's cacorrect@5 placement). "
+            "Measures per-block R/B-vs-G shifts, fits a smooth polynomial "
+            "shift field, and resamples R/B colour differences at their "
+            "optical locations. Default 0 = OFF (owner-gated; every "
+            "existing output byte-identical); 2 = the dt default iteration "
+            "count. Needs a CFA-domain demosaic (rcd/mlri/menon/amaze — the "
+            "production default qualifies) at full resolution; warned + "
+            "skipped elsewhere. Forces the CPU path off MLX."
+        ),
+    )
+    render.add_argument(
         "--master-look", dest="master_look", default="defer",
         choices=("bake", "defer"),
         help=(
@@ -364,6 +381,7 @@ class _RenderJob:
     demosaic: str = "linear"      # libraw demosaic algorithm ("linear" = byte-exact)
     capture_sharpen: str = "off"  # "off"|"xmp"|"acr" (faithful capture sharpening; off=byte-exact)
     fc_suppress: int = 0          # slot-6 false-colour suppression passes (0 = off)
+    ca_correct: int = 0           # slot-2 raw CA correction iterations (0 = off)
 
 
 def resolve_fc_suppress(explicit: int | None, preset: str) -> int:
@@ -433,7 +451,8 @@ def _render_one_frame(job: _RenderJob) -> _RenderResult:
                 and job.demosaic == "linear"
                 and job.capture_sharpen == "off"  # USM is a CPU-only Stage-12 op
                 and not job.highlight_recovery
-                and job.fc_suppress == 0):  # slot-6 median is CPU-only
+                and job.fc_suppress == 0    # slot-6 median is CPU-only
+                and job.ca_correct == 0):   # slot-2 CA correct is CPU-only
             try:
                 from lrt_cinema.output import write_tiff_display
                 encoded = accel.mlx_render_frame_to_srgb(
@@ -476,6 +495,7 @@ def _render_one_frame(job: _RenderJob) -> _RenderResult:
             highlight_recovery=job.highlight_recovery, demosaic=job.demosaic,
             demosaic_highlights=("headroom" if stage7 else "clip"),
             fc_suppress=job.fc_suppress,
+            ca_correct=job.ca_correct,
         )
         with_dev_ops = apply_develop_ops(
             result.prophoto, job.ops, job.intent, master_look=job.master_look,
@@ -838,6 +858,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
             demosaic=args.demosaic,
             capture_sharpen=capture_sharpen,
             fc_suppress=fc_suppress,
+            ca_correct=args.ca_correct,
         ))
 
     if args.dry_run:
@@ -850,6 +871,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
             f"backend={backend}, preview_scale={args.preview_scale}, "
             f"highlight_recovery={highlight_recovery}, "
             f"fc_suppress={fc_suppress}, "
+            f"ca_correct={args.ca_correct}, "
             f"workers={args.workers}).\n",
         )
         return 0
