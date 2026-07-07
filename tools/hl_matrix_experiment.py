@@ -409,11 +409,10 @@ def main() -> int:
         "articles": {}, "truth_harness": {}, "gym_spot": {},
     }
 
-    if stage in (None, "articles"):
-        if not run_articles(results):
-            EVIDENCE.write_text(json.dumps(results, indent=1))
-            print(f"evidence (gate-fail partial) -> {EVIDENCE}")
-            return 1
+    if stage in (None, "articles") and not run_articles(results):
+        EVIDENCE.write_text(json.dumps(results, indent=1))
+        print(f"evidence (gate-fail partial) -> {EVIDENCE}")
+        return 1
     if stage in (None, "truth"):
         run_truth(results)
     if stage in (None, "gym", "flips"):
