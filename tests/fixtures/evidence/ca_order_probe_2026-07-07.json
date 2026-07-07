@@ -1,0 +1,18 @@
+{
+ "design": "segb+CA order probe: recon->CA (shipped D) vs CA->recon",
+ "predictions": "O1 ca_first cuts hot-pixel census; O2 ring chroma <=; O3 no CA-fit blowup on unclipped plateaus",
+ "arms": {
+  "ca_after": {
+   "ring_chroma_mean": 3.702951847744799,
+   "ring_chroma_p99": 23.38476882816567,
+   "hot_px_ring_gt8": 27,
+   "hot_px_ring_gt15": 1
+  },
+  "ca_first": {
+   "ring_chroma_mean": 3.8215494162293937,
+   "ring_chroma_p99": 23.24315557409279,
+   "hot_px_ring_gt8": 50,
+   "hot_px_ring_gt15": 0
+  }
+ }
+}
