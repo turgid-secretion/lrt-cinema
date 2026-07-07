@@ -34,7 +34,7 @@ import numpy as np
 FIX = Path.home() / "lrt-cinema-fixtures"
 ROUND2 = FIX / "production/calibration/round2"
 RENDERS = ROUND2 / ".cal-renders"
-OUT = FIX / "verify-2026-07-08/hlsh-flip-v3"
+OUT = FIX / "verify-2026-07-08/hlsh-flip-v4"
 EVIDENCE = Path(__file__).resolve().parent.parent / (
     "tests/fixtures/evidence/cal_hlsh_fit_v2_2026-07-08.json"
 )
@@ -46,7 +46,7 @@ PROBES = {
     "CALSH100": "Shadows2012 = +100",
 }
 
-README = """H/S translation v3 (LLF core + halo-campaign L4 residual) — owner flips (2026-07-08)
+README = """H/S translation v4 (LLF core + amplitude-gated two-scale tone map) — owner flips (2026-07-08)
 ===============================================================
 All images 4016x6016 NATIVE pixels (ours carry an 8 px alignment CROP,
 never a resize). Select a probe's A/B pair and flip:
@@ -62,6 +62,9 @@ Probes: CALHIM50/100 = Highlights -50/-100; CALSH50/100 = Shadows +50/+100.
 
 Verdict question: does B make the same GRADE DECISION as A (which tones
 moved, halo behaviour at window edges, shadow colour after big lifts)?
+Known v4 residual to check: a faint outline can appear along the very
+brightest fold ridges in lifted shadows (the two-scale gate crossing
+over) — flag it if it reads as an artifact at native res.
 Bit-identity is not claimed — Adobe's local-adaptive math is closed; the
 measured residual per anchor is in CLAIMS.md (round-2 rows) and
 tests/fixtures/evidence/cal_hlsh_fit_2026-07-07.json.

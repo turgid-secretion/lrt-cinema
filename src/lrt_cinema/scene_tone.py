@@ -35,15 +35,19 @@ scene-exposure gain — the same point the calibration arms were fitted at.
 closed-source Local-Laplacian-class). The anchor tables + local-scale
 constants are fitted so single-slider renders land near the LR Classic
 exports (`tools/cal_hlsh_fit.py` regenerates). Measured residual vs LR at
-the four anchors (mean ΔE2000, block-4 grid, v3): H −50 **0.394**, H −100
-**0.605**, S +50 **0.386**, S +100 **1.157** — every anchor beats the best
+the four anchors (mean ΔE2000, block-4 grid, v4): H −50 **0.370**, H −100
+**0.552**, S +50 **0.381**, S +100 **1.062** — every anchor beats the best
 GLOBAL fit arm (0.549/0.865/0.472/2.269), against a ~0.2 base-look floor.
 Owner-verdict axes across versions (`tools/hlsh_v2_diagnostics.py` +
-`tools/hlsh_artifact_suite.py`): v1 guided = flat (retention 0.77–0.91)
-+ toe patches; v2 LLF/L6 = flat fixed but POOLS/HALOS (blob interior
-2.0 st, real wall glow +0.32 S / +6.5 H L*); v3 = L4 residual (the
-halo-campaign winner): interior 0.57/0.64 st, glow +0.10 S / +1.9 H,
-flatness 0.97–1.00 — the crop1 wall glow visually gone.
+`tools/hlsh_artifact_suite.py`): v1 guided = flat + toe patches; v2
+LLF/L6 = flat fixed but POOLS/HALOS (wall glow +0.32 S / +6.5 H L*);
+v3 = L4 residual: pools fixed but mid-band (32–128 px) contrast fell to
+0.67–0.76 ("flattens and blurs", owner round-3); v4 = the
+AMPLITUDE-GATED TWO-SCALE map (mode `gate2`): tone follows the coarse
+map where fine(8 px)/coarse(64 px) agree within 0.4 st (folds keep
+contrast) and the fine map beyond 1.2 st (boundaries stay pool-free) —
+real stage-crop mid-bands 0.90–0.94 of LR's, wall glow +0.00 S /
+−0.06 H, flatness 1.00, all simultaneously.
 Measured signs: Highlights NEGATIVE (recovery), Shadows POSITIVE (lift) —
 the owner-exported anchors. The opposite signs use the mirrored tables and
 are flagged extrapolated (no anchor exports yet).
@@ -75,7 +79,8 @@ from lrt_cinema.develop_ops import _smoothstep
 
 # LLF intensity-zone half-width, log2 stops: |i − context| <= sigma_r is
 # DETAIL (preserved verbatim); beyond is EDGE (remapped at the curve's
-# local slope). The archived proto's pin log2(2.5) ~= 1.32 stops.
+# local slope). In the full-depth architecture (round-3) the slopes CARRY
+# the tone response, so sigma_r is small (dt's mid-tone-range analogue).
 _LLF_SIGMA_R = 2.0
 
 # Fixed gamma discretization (NEVER per-frame statistics — a per-frame grid
@@ -86,17 +91,22 @@ _LLF_GAMMA_LO = -13.5
 _LLF_GAMMA_HI = 0.5
 _LLF_N_GAMMA = 11
 
-# Pyramid depth: the residual carries the ABSOLUTE calibrated tone at a
-# 2**last_level px regional scale. L=4 (16 px) is the halo-campaign
-# winner (owner round-2 verdicts → tools/hlsh_artifact_suite.py): vs the
-# L=6 v2 baseline it halves-to-quarters every pool/halo metric (blob
-# interior 2.0→0.50 st, pool 0.83→0.37, S-glow +0.32→+0.13, H-glow
-# +6.5→−0.22 L* on the real crop1-class articles) at flatness 0.97.
-_LLF_LAST_LEVEL = 4
+# Pyramid depth. Round-3 (owner: v3's adjusted regions "flattened and
+# lack contrast… flattens and blurs" — worst on the gym stage/curtain):
+# ANY single-scale absolute map trades pools (large L, round-2) against
+# mid-band flattening/blur (small L, round-3) — the per-band suite
+# metrics showed shipped-L4 at 0.67–0.76 of input contrast in the
+# 32–128 px bands while FULL depth reads 0.97–0.99 synthetic and
+# 0.95–1.07 of LR's own band contrast on the stage crop. 99 = full
+# pyramid (residual ≈ global mean; Δ(residual) ≈ a constant — no
+# intermediate absolute map exists to pool, blur, or flatten): the
+# canonical dt/LLF architecture, where the per-γ edge-arm slopes carry
+# the tone at every level (Aubry 2014: halos vanish at full depth).
+_LLF_LAST_LEVEL = 6
 
 # Absolute-response mode + knobs (`_fast_llf.llf_apply_tone` docstring;
 # the round-2 halo campaign's arm axis — tools/hlsh_artifact_suite.py).
-_LLF_ABS_MODE = "gauss"
+_LLF_ABS_MODE = "gate2"
 _LLF_GUIDED_DOWN = 8
 _LLF_GUIDED_RADIUS = 24
 _LLF_GUIDED_EPS = 8.0
@@ -104,6 +114,9 @@ _LLF_GLOBAL_BLEND = 0.0
 _LLF_GUARD_TEMP = 1.0
 _LLF_GUARD_FINE_LEVEL = 0  # 0 = per-pixel; N = protect features >= 2^N px
 _LLF_MULTI_LEVELS = (3, 4, 5)
+_LLF_GATE_FINE = 3         # gate2: fine-map level (2^N px)
+_LLF_GATE_LO = 0.4         # gate2: below this fine/coarse deviation (st),
+_LLF_GATE_HI = 1.2         #        tone follows the coarse map; above, fine
 
 # Log-toe floor (scene-linear luminance). The log2 channel is computed on
 # max(lum, floor): bounds the toe against near-zero noise blowups (the
@@ -143,14 +156,15 @@ _CHROMA_ROLL_LUM = 6e-4
 _KNOT_X = np.array([-12.144, -11.7712, -11.3985, -11.0258, -10.653, -10.2802, -9.9075, -9.5347, -9.162, -8.7892, -8.4165, -8.0438, -7.671, -7.2982, -6.9255, -6.5527, -6.18, -5.8072, -5.4345, -5.0618, -4.689, -4.3162, -3.9435, -3.5708, -3.198, -2.8252, -2.4525, -2.0797, -1.707, -1.3342, -0.9615, -0.5887, -0.216])
 
 # pinned by `python3 tools/cal_hlsh_fit.py --sweep-radius --emit-tables`
-# (v3 = v2 LLF core at the halo-campaign L4 residual, 2026-07-08):
-# armS LUT deltas refined through this op vs the owner LR exports;
-# final validation dE 0.394/0.605/0.386/1.157 at the four anchors
-# (evidence cal_hlsh_fit_v2_2026-07-08.json).
-_H_D50 = np.array([0.0945, 0.0964, 0.0676, 0.02, -0.0089, -0.0121, -0.023, -0.0355, -0.0427, -0.0491, -0.0618, -0.0666, -0.0699, -0.075, -0.0788, -0.0799, -0.11, -0.1571, -0.1932, -0.4261, -0.5421, -0.5511, -0.5928, -0.6885, -0.7918, -0.8526, -0.8928, -0.9924, -1.1496, -1.3067, -1.3859, -1.3883, -1.3879])
-_H_D100 = np.array([0.0828, 0.085, 0.0575, 0.0082, -0.0282, -0.0418, -0.0566, -0.0781, -0.0917, -0.1035, -0.1229, -0.1344, -0.1429, -0.1504, -0.1543, -0.1612, -0.2036, -0.2655, -0.2922, -0.721, -1.0954, -1.1026, -1.2809, -1.444, -1.6131, -1.7528, -1.7973, -2.0004, -2.2766, -2.5852, -2.7529, -2.8658, -2.9101])
-_S_D50 = np.array([1.2318, 1.2619, 1.3816, 1.4791, 1.5571, 1.6198, 1.5709, 1.6114, 1.5984, 1.4873, 1.3704, 1.2245, 1.0752, 0.9108, 0.7408, 0.3597, 0.1673, 0.1469, 0.1117, 0.09, 0.0832, 0.0818, 0.0739, 0.0673, 0.0606, 0.055, 0.0513, 0.0484, 0.0301, -0.0076, -0.0706, -0.152, -0.185])
-_S_D100 = np.array([2.514, 2.537, 2.7907, 3.0242, 3.101, 3.1818, 3.1482, 3.1709, 3.1604, 3.08, 2.595, 2.1076, 1.9565, 2.3356, 1.8827, 1.3392, 0.9665, 0.5937, 0.0597, 0.2387, 0.1941, 0.1684, 0.1503, 0.1369, 0.1234, 0.1109, 0.101, 0.0919, 0.0658, 0.0192, -0.0516, -0.1479, -0.187])
+# (v4 = gate2 amplitude-gated two-scale map, 2026-07-08): armS LUT
+# deltas refined through this op vs the owner LR exports; final
+# validation dE 0.370/0.552/0.381/1.062 at the four anchors — the
+# best anchor set of any version (evidence
+# cal_hlsh_fit_v2_2026-07-08.json).
+_H_D50 = np.array([0.1076, 0.1094, 0.0795, 0.0251, -0.0087, -0.0124, -0.0257, -0.0367, -0.0428, -0.0497, -0.0618, -0.0683, -0.0728, -0.079, -0.0894, -0.0766, -0.1015, -0.1546, -0.1904, -0.4247, -0.5398, -0.549, -0.6032, -0.6968, -0.7975, -0.8559, -0.8886, -0.9939, -1.1595, -1.3224, -1.3971, -1.3535, -1.3327])
+_H_D100 = np.array([0.0952, 0.0974, 0.0705, 0.0143, -0.0277, -0.0425, -0.0608, -0.0801, -0.092, -0.1046, -0.1232, -0.1363, -0.1476, -0.1592, -0.1724, -0.1536, -0.1876, -0.2655, -0.3085, -0.732, -1.0883, -1.0798, -1.2852, -1.4367, -1.601, -1.7483, -1.8078, -2.098, -2.367, -2.6095, -2.7727, -2.8493, -2.8775])
+_S_D50 = np.array([1.1505, 1.1841, 1.3417, 1.4648, 1.5571, 1.6233, 1.5673, 1.6078, 1.5965, 1.4885, 1.3835, 1.2262, 1.0452, 0.8557, 0.7801, 0.4144, 0.1955, 0.1337, 0.1069, 0.0911, 0.0859, 0.0826, 0.073, 0.0668, 0.0606, 0.0548, 0.05, 0.0496, 0.0315, -0.0108, -0.0865, -0.1638, -0.1945])
+_S_D100 = np.array([2.4274, 2.4542, 2.7489, 3.0116, 3.1023, 3.1817, 3.1467, 3.1703, 3.1656, 3.095, 2.6105, 2.1736, 1.782, 1.9314, 1.6838, 1.3392, 0.9665, 0.4239, 0.1077, 0.212, 0.2016, 0.1654, 0.1465, 0.1348, 0.1226, 0.1105, 0.0991, 0.0883, 0.0635, 0.0158, -0.0709, -0.1603, -0.1956])
 
 
 def _anchor_delta(base_log2: np.ndarray, slider_abs: float,
@@ -213,7 +227,9 @@ def apply_scene_hlsh(camera_rgb: np.ndarray, highlights: float,
         global_blend=_LLF_GLOBAL_BLEND, delta_split=(delta_h, delta_s),
         guard_temp=_LLF_GUARD_TEMP,
         guard_fine_level=_LLF_GUARD_FINE_LEVEL or None,
-        multi_levels=tuple(_LLF_MULTI_LEVELS))
+        multi_levels=tuple(_LLF_MULTI_LEVELS),
+        gate_fine=_LLF_GATE_FINE, gate_lo=_LLF_GATE_LO,
+        gate_hi=_LLF_GATE_HI)
 
     # Ratio from the FLOORED channel (bounded at the toe by construction);
     # true luminance scales by it, so the toe stays pinned near black and

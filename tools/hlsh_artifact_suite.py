@@ -83,7 +83,8 @@ DARK, BRIGHT = -9.0, -1.5
 # region (shadows case) + a window/interior boundary (highlights case,
 # picked from the base render's bright-next-to-dark map).
 REAL_CROPS = {"wall_curtain_S100": ((0.0, 100.0), None),
-              "window_edge_H100": ((-100.0, 0.0), None)}
+              "window_edge_H100": ((-100.0, 0.0), None),
+              "stage_bottom_S100": ((0.0, 100.0), None)}
 CROP = 1024
 
 
@@ -207,6 +208,39 @@ def metric_flatness(rgb_in, rgb_out) -> dict:
     return out
 
 
+_BAND_EDGES = (4, 8, 16, 32, 64, 128, 256)
+
+
+def _band_stds(log_lum: np.ndarray, sl) -> list[float]:
+    """Per-band structure amplitude: std of (box_s - box_2s) bandpass of
+    log2 luminance, bands 4..256 px — the owner round-3 axis ("flattened
+    and lacks contrast", "flattens and blurs"): a single-scale absolute
+    map preserves fine texture but erases/blurs structure ABOVE the map
+    scale; the round-2 flatness guard (33 px highpass) was blind to it."""
+    from scipy.ndimage import uniform_filter
+    stds = []
+    for s in _BAND_EDGES[:-1]:
+        band = (uniform_filter(log_lum, s) - uniform_filter(log_lum, 2 * s))
+        stds.append(float(band[sl].std()))
+    return stds
+
+
+def metric_multiscale(rgb_in, rgb_out) -> dict:
+    """Per-band contrast retention on the step article's DARK plateau (the
+    lifted region under S+100 — the owner's curtain/stage complaint zone).
+    ~1.0 per band = structure carried; << 1 at mid bands = the round-3
+    'flattened + blurred' signature. NB an ideal LOCAL tone op DOES
+    compress bands somewhat (the curve's slope) — judge vs the LR anchor
+    per-band ratios on the real crops, not vs 1.0 alone."""
+    li = np.log2(np.maximum(rgb_in.mean(-1), 1e-6))
+    lo = np.log2(np.maximum(rgb_out.mean(-1), 1e-6))
+    sl = np.s_[128:-128, 128: SIZE // 2 - 160]
+    s_in = _band_stds(li, sl)
+    s_out = _band_stds(lo, sl)
+    return {f"band{b}px": float(o / max(i, 1e-9))
+            for b, i, o in zip(_BAND_EDGES[:-1], s_in, s_out, strict=True)}
+
+
 # --------------------------------------------------------------------------
 # arms
 # --------------------------------------------------------------------------
@@ -269,6 +303,32 @@ def arm_configs() -> dict[str, dict]:
     arms["multi-234"] = {**base, "_LLF_ABS_MODE": "gauss_multi",
                          "_LLF_MULTI_LEVELS": (2, 3, 4),
                          "_LLF_LAST_LEVEL": 6}
+    # round-5 arms (owner round-3 "flattens AND blurs"): FULL-depth pyramid
+    # — the canonical dt/LLF architecture. The residual collapses to a
+    # near-global constant (no intermediate absolute map exists to pool,
+    # blur, or flatten); the tone response is carried by the per-gamma
+    # edge-arm slopes at EVERY level. Small sigma_r is the regime where
+    # slopes carry tone (dt uses a small mid-tone window for exactly this).
+    # Pre-registered (2026-07-08): F1 full-depth kills the mid-band
+    # (16-128 px) contrast loss AND keeps pools/interior at the floor;
+    # F2 the aggregate response WEAKENS as sigma_r grows (identity window
+    # swallows deviations) — the refit re-steepens tables; F3 fine bands
+    # (4-8 px) stay ~1.0 at sigma_r >= 0.5.
+    for sr in (0.33, 0.66, 1.0, 2.0):
+        arms[f"full-sr{sr:g}"] = {**base, "_LLF_ABS_MODE": "gauss",
+                                  "_LLF_LAST_LEVEL": 99, "_LLF_SIGMA_R": sr}
+    # round-6 arms: amplitude-gated two-scale map (tone follows the coarse
+    # map where fine/coarse agree — folds keep contrast; follows the fine
+    # map at strong divergences — no pools across boundaries).
+    for fine in (3, 4):
+        for lo, hi in ((0.4, 1.2), (0.6, 1.6), (1.0, 2.4)):
+            arms[f"gate2-f{fine}-{lo:g}-{hi:g}"] = {
+                **base, "_LLF_ABS_MODE": "gate2", "_LLF_LAST_LEVEL": 6,
+                "_LLF_GATE_FINE": fine, "_LLF_GATE_LO": lo,
+                "_LLF_GATE_HI": hi}
+    arms["gate2-f4-L7"] = {
+        **base, "_LLF_ABS_MODE": "gate2", "_LLF_LAST_LEVEL": 7,
+        "_LLF_GATE_FINE": 4, "_LLF_GATE_LO": 0.6, "_LLF_GATE_HI": 1.6}
     return arms
 
 
@@ -328,6 +388,16 @@ def _find_real_crops(cam_ev: np.ndarray) -> dict[str, tuple[int, int]]:
     j, i = np.unravel_index(np.argmax(s), s.shape)
     picks["wall_curtain_S100"] = (int(j), int(i))
     picks["window_edge_H100"] = (int(j), int(i))  # same geometry, H slider
+    # owner round-3: worst shadow artifacts at the BOTTOM of the gym frame
+    # (curtain + stage) — pick the strongest dark-dominant neighbourhood in
+    # the bottom third.
+    s2 = uniform_filter(dark, 257).copy()
+    s2[: 2 * s2.shape[0] // 3, :] = -1
+    s2[-(CROP // 2 + 8):, :] = -1
+    s2[:, :CROP // 2 + 8] = -1
+    s2[:, -(CROP // 2 + 8):] = -1
+    j2, i2 = np.unravel_index(np.argmax(s2), s2.shape)
+    picks["stage_bottom_S100"] = (int(j2), int(i2))
     return picks
 
 
@@ -383,9 +453,18 @@ def eval_real(arm_over: dict, setup, crops, lr_cache) -> dict:
         lab_o, lab_l = cdr._lab(ours_lin), cdr._lab(lr_lin)
         glow = float((lab_o[..., 0] - lab_l[..., 0])[base_zone].mean()) \
             if base_zone.sum() > 500 else float("nan")
+        # per-band contrast retention vs the LR anchor (the round-3 axis):
+        # ratio of band std ours/LR on display log2 luminance, full crop
+        lo_o = np.log2(np.maximum(ours_lin @ cdr._LUM_W, 1e-6))
+        lo_l = np.log2(np.maximum(lr_lin @ cdr._LUM_W, 1e-6))
+        sl = np.s_[32:-32, 32:-32]
+        bands = {f"band{b}px_vs_lr": float(o / max(li_, 1e-9))
+                 for b, o, li_ in zip(_BAND_EDGES[:-1],
+                                      _band_stds(lo_o, sl),
+                                      _band_stds(lo_l, sl), strict=True)}
         out[name] = {"de_mean": m["de_mean"], "dL_mean": m["dL_mean"],
                      "zone_glow_Lstar": glow,
-                     "crop_center": [int(j), int(i)]}
+                     "crop_center": [int(j), int(i)], **bands}
         del bl
     return out
 
@@ -422,7 +501,8 @@ def main() -> int:
     defaults = {k: getattr(st, k) for k in (
         "_LLF_ABS_MODE", "_LLF_LAST_LEVEL", "_LLF_GUIDED_EPS",
         "_LLF_GUIDED_RADIUS", "_LLF_GLOBAL_BLEND", "_LLF_SIGMA_R",
-        "_LLF_GUARD_TEMP", "_LLF_GUARD_FINE_LEVEL", "_LLF_MULTI_LEVELS")}
+        "_LLF_GUARD_TEMP", "_LLF_GUARD_FINE_LEVEL", "_LLF_MULTI_LEVELS",
+        "_LLF_GATE_FINE", "_LLF_GATE_LO", "_LLF_GATE_HI")}
 
     for arm_name, over in arms.items():
         for k, v in defaults.items():
@@ -435,6 +515,7 @@ def main() -> int:
             o = st.apply_scene_hlsh(arts["step"], h, s)
             sm.update(metric_step(arts["step"], o))
             sm.update(metric_flatness(arts["step"], o))
+            sm.update(metric_multiscale(arts["step"], o))
             blob_art = "blob_bright" if s else "blob_dark"
             o = st.apply_scene_hlsh(arts[blob_art], h, s)
             sm.update(metric_blob(arts[blob_art], o,

@@ -173,6 +173,9 @@ def llf_apply_tone(
     guard_temp: float = 1.0,
     guard_fine_level: int | None = None,
     multi_levels: tuple[int, ...] = (3, 4, 5),
+    gate_fine: int = 4,
+    gate_lo: float = 0.6,
+    gate_hi: float = 1.6,
 ) -> np.ndarray:
     """Apply the additive log2 tone delta `delta_fn` to `channel`
     (log2-luminance, 2-D float) with detail preservation.
@@ -261,6 +264,32 @@ def llf_apply_tone(
         out = out_lap[lev] + _upsample(out, out_lap[lev].shape)
 
     absolute = None
+    if absolute_mode == "gate2":
+        # AMPLITUDE-GATED TWO-SCALE MAP (round-3 synthesis). A Gaussian
+        # tone map at ANY single scale either follows structure (and
+        # flattens/blurs it — the small-L round-3 verdict) or ignores it
+        # (and pools across region boundaries — the large-L round-2
+        # verdict). Compose two scales BY AMPLITUDE instead: where the
+        # fine map (2^gate_fine px) and coarse map (2^(nlev-1) px,
+        # the residual chain) agree within ~gate_lo stops — intra-region
+        # structure like folds — the tone follows the COARSE map, so the
+        # structure keeps its contrast; where they diverge beyond
+        # gate_hi — region boundaries — the tone follows the FINE map,
+        # so no bleed across the boundary. Full-resolution construction:
+        # no downsampled-map small-feature failure (the guided arm's).
+        fl = min(gate_fine, nlev - 1)
+        m_fine = gauss[fl]
+        for lv in range(fl - 1, -1, -1):
+            m_fine = _upsample(m_fine, gauss[lv].shape)
+        m_coarse = res
+        for lv in range(nlev - 2, -1, -1):
+            m_coarse = _upsample(m_coarse, gauss[lv].shape)
+        dev = np.abs(m_fine - m_coarse)
+        g = np.clip((dev - np.float32(gate_lo))
+                    / np.float32(max(gate_hi - gate_lo, 1e-6)), 0.0, 1.0)
+        g = g * g * (3.0 - 2.0 * g)          # smoothstep
+        w_map = m_coarse + (m_fine - m_coarse) * g
+        absolute = delta_fn(w_map).astype(np.float32)
     if absolute_mode == "gauss_multi":
         # residual untouched; the absolute response is the MEAN of the
         # calibrated delta evaluated at several Gaussian scales — each

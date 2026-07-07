@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] — v0.8 prep
 
 ### Added
+- **H/S translation v4: amplitude-gated two-scale tone map** (owner
+  round-3: v3's adjusted regions read flattened/blurred at mid scales,
+  worst on the gym stage/curtain). New per-band (4–256 px) contrast
+  metrics quantified it (v3: 0.67–0.76 of input in the 32–128 px bands —
+  the old flatness guard was scale-blind). Full-depth canonical arms
+  measured and rejected (calibration refit diverges — slope-mediated
+  response). v4 (`_fast_llf` mode `gate2`): tone follows the coarse map
+  where fine/coarse maps agree (folds keep contrast), the fine map at
+  strong divergences (no pools). All owner axes green at once: stage
+  mid-bands 0.90–0.94 of LR, wall/window glow +0.00/−0.06 L*, flatness
+  1.00, anchors 0.370/0.552/0.381/1.062 (best of any version).
 - **H/S translation v3: halo/pool artifact suite + optimization campaign**
   (owner round-2 directive). New `tools/hlsh_artifact_suite.py` measures
   the owner-reported artifact classes as numbers (edge-band halos, blob
