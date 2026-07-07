@@ -91,7 +91,7 @@ The active repair plan lives at
 
 - `python3 -m pytest -q` — full suite (render/ΔE tests skip cleanly without
   fixtures). `python3 -m ruff check .` — must pass.
-- `main` is the consolidated head; current work on `feat/trunk-branch-overhaul`.
+- `main` is the ONLY long-lived branch (the consolidated head; `feat/trunk-branch-overhaul` merged + deleted 2026-07-08). Branch from `main`, merge back to `main`; keep it green.
   Conventional commits. Keep `main` green.
 - CLI: `lrt-cinema` (see `cli.py`); key flags: `--render-intent`, `--demosaic`,
   `--capture-sharpen`, `--master-look`, `--deflicker-scale`, `--highlight-recovery`.
