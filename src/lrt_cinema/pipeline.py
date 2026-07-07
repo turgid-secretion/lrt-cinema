@@ -565,7 +565,8 @@ def _mosaic_clip_mask(raw, threshold: float = 0.99, dilate: int = 2) -> np.ndarr
 
 
 def _cfa_demosaic(raw, method: str, wb_mul: np.ndarray | None = None,
-                  highlights: str = "clip", ca_correct: int = 0) -> np.ndarray:
+                  highlights: str = "clip", ca_correct: int = 0,
+                  hotpixels: float = 0.0) -> np.ndarray:
     """Demosaic an open rawpy `raw` on the extracted CFA with a CFA-domain `method`
     ('rcd'|'mlri'|'menon'), headroom-preserving. Returns float32 (H, W, 3).
 
@@ -627,6 +628,14 @@ def _cfa_demosaic(raw, method: str, wb_mul: np.ndarray | None = None,
         )
         cfa = ca_correct_mosaic(cfa, pattern, iterations=ca_correct,
                                 avoid_shift=True, scale=ca_scale)
+    if hotpixels > 0.0:
+        # TARGET slot 2.5: mosaic-domain hot-pixel suppression at dt's
+        # exact position (cacorrect@5 → hotpixels@6 → demosaic@8; the
+        # canon splits — RT interpolates bad pixels BEFORE its CA step;
+        # we follow dt). Opt-in (`--hotpixels S`, owner-gated);
+        # `hotpixels` = dt's strength parameter (dt default 0.25).
+        from lrt_cinema._hotpixels import fix_hot_pixels
+        cfa, _n_fixed = fix_hot_pixels(cfa, strength=hotpixels)
     if method == "rcd":
         from lrt_cinema import accel
         rgb = accel.rcd_demosaic(cfa, pattern)
@@ -686,7 +695,8 @@ def _libraw_rgb(raw, rawpy_mod, half_size: bool, demosaic: str,
 
 def _demosaic_rgb(raw, rawpy_mod, half_size: bool, demosaic: str,
                   wb_mul: np.ndarray | None = None,
-                  highlights: str = "clip", ca_correct: int = 0) -> np.ndarray:
+                  highlights: str = "clip", ca_correct: int = 0,
+                  hotpixels: float = 0.0) -> np.ndarray:
     """Linear camera RGB (H, W, 3) float32 from an OPEN rawpy `raw`. A CFA-domain
     method ('rcd'/'mlri'/'menon', full-res only) runs on the extracted CFA
     (headroom-preserving), falling back to libraw 'linear' on a non-Bayer sensor, a
@@ -700,7 +710,8 @@ def _demosaic_rgb(raw, rawpy_mod, half_size: bool, demosaic: str,
     balanced ≡ unbalanced."""
     if demosaic in _CFA_DEMOSAICS and not half_size:
         try:
-            rgb = _cfa_demosaic(raw, demosaic, wb_mul, highlights, ca_correct)
+            rgb = _cfa_demosaic(raw, demosaic, wb_mul, highlights, ca_correct,
+                                hotpixels)
         except Exception as exc:  # noqa: BLE001 — any failure → safe libraw fallback
             import sys
             sys.stderr.write(
@@ -709,12 +720,12 @@ def _demosaic_rgb(raw, rawpy_mod, half_size: bool, demosaic: str,
             )
             rgb = _libraw_rgb(raw, rawpy_mod, half_size, "linear", wb_mul)
     else:
-        if ca_correct > 0:
+        if ca_correct > 0 or hotpixels > 0.0:
             import sys
             sys.stderr.write(
-                "warning: --ca-correct needs a CFA-domain demosaic "
-                "(rcd/mlri/menon/amaze) at full resolution; skipped on the "
-                "libraw/preview path.\n",
+                "warning: --ca-correct/--hotpixels need a CFA-domain "
+                "demosaic (rcd/mlri/menon/amaze) at full resolution; "
+                "skipped on the libraw/preview path.\n",
             )
         rgb = _libraw_rgb(raw, rawpy_mod, half_size, demosaic, wb_mul)
     return rgb
@@ -774,6 +785,7 @@ def _decode_raw(
     raw_path: str | Path, half_size: bool = False, demosaic: str = "linear",
     wb_asn: np.ndarray | None = None, highlights: str = "clip",
     want_clip_mask: bool = False, ca_correct: int = 0,
+    hotpixels: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
     """Open the raw ONCE; return (BALANCED linear camera RGB, camera
     AsShotNeutral, optional mosaic clip mask).
@@ -800,7 +812,7 @@ def _decode_raw(
         asn = wb_asn if wb_asn is not None else cam_asn
         rgb = _demosaic_rgb(
             raw, rawpy, half_size, demosaic, _wb_mul_from_asn(asn), highlights,
-            ca_correct,
+            ca_correct, hotpixels,
         )
         mask: np.ndarray | None = None
         if want_clip_mask and not half_size:
@@ -1064,6 +1076,7 @@ def render_frame(
     demosaic_highlights: str = "clip",
     fc_suppress: int = 0,
     ca_correct: int = 0,
+    hotpixels: float = 0.0,
 ) -> FrameRenderResult:
     """End-to-end render of a single RAW frame through pipeline stages 1
     through `stop_after_stage`.
@@ -1116,6 +1129,12 @@ def render_frame(
     highlight conditioning and the demosaic — dt's cacorrect@5 placement.
     CFA-domain demosaics at full resolution only (warned + skipped
     elsewhere). Owner-gated opt-in via the CLI `--ca-correct`.
+
+    `hotpixels`: TARGET slot-2.5 mosaic-domain hot-pixel suppression
+    strength (0 = off, the default; dt's own default is 0.25). Runs
+    dt's `hotpixels` stage (`_hotpixels.fix_hot_pixels`) between the CA
+    correction and the demosaic — dt's hotpixels@6 position. Same
+    CFA-path/full-res restriction as `ca_correct`.
     """
     if preview_scale not in _PREVIEW_SCALES:
         raise ValueError(
@@ -1140,7 +1159,7 @@ def render_frame(
         raw_path, half_size=(preview_scale >= 2), demosaic=demosaic,
         wb_asn=override_asn, highlights=demosaic_highlights,
         want_clip_mask=(highlight_recovery and preview_scale == 1),
-        ca_correct=ca_correct,
+        ca_correct=ca_correct, hotpixels=hotpixels,
     )
     asn = override_asn if override_asn is not None else cam_asn
     if preview_scale >= 2:

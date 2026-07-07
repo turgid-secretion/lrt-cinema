@@ -10,8 +10,16 @@ CA diagnostic then sees UNCLIPPED channel-disparate clip plateaus — the
 exact regime dt's order avoids)?
 
 ARMS (gym frame, segbased + menon + fc3, full production intent):
-  ca_after   recon → CA(avoid-shift)   — the shipped experiment arm (D)
-  ca_first   CA(avoid-shift) → recon   — the owner-hypothesised order
+  ca_after         recon → CA(avoid-shift)  — the shipped experiment arm (D)
+  ca_first         CA(avoid-shift) → recon  — the owner-hypothesised order
+  ca_after_hotpix  recon → CA → dt-hotpixels — slot-2.5 remedy (F).
+                   MEASURED before the flip run: at dt defaults (0.25,
+                   strict) the stage fires 0× on this mosaic (the
+                   detector needs bright-over-dark single-site impulses;
+                   near clip boundaries everything is bright), so the F
+                   flip uses the stage's MAXIMUM reach — strength 1.0 +
+                   permissive (234 sites) — to test whether ANY of its
+                   envelope touches the owner's artifact.
 
 PRE-REGISTERED PREDICTIONS (2026-07-07, before first run):
   O1: ca_first cuts the hot-pixel census (isolated chroma impulses,
@@ -20,10 +28,19 @@ PRE-REGISTERED PREDICTIONS (2026-07-07, before first run):
       the source).
   O3: risk — ca_first must not blow up the CA fit on the unclipped
       plateaus (watch the warnings + whole-ring metrics).
+  [O1/O2 RESOLVED first run: O1 split, O2 refuted — CLAIMS 2026-07-07.]
+  HOTPIXELS ARM (added after the owner's D-vs-E verdict, before its
+  first run):
+  H1: ca_after_hotpix cuts the ring impulse census vs ca_after (the
+      stage targets exactly this class).
+  H2: false-positive guard — fix_hot_pixels fires ~0 times on the
+      CA-free article mosaics (bars/zoneplate: hard edges + dense
+      frequency, the worst plausible false-positive content) and only
+      O(10-100) times on the 24 MP real frame.
 
 Run:  python3 tools/ca_order_probe.py
 Out:  tests/fixtures/evidence/ca_order_probe_<today>.json
-      ~/lrt-cinema-fixtures/verify-2026-07-07/ca-flip/ (E arm added)
+      ~/lrt-cinema-fixtures/verify-2026-07-07/ca-flip/ (E + F arms added)
 """
 
 from __future__ import annotations
@@ -96,11 +113,20 @@ def main() -> int:
     anyclip = clip_mask.any(axis=-1)
     ring = binary_dilation(anyclip, iterations=3) & ~anyclip
 
+    n_fixed_gym = {}
+
     def decode(order: str) -> np.ndarray:
         from colour_demosaicing import demosaicing_CFA_Bayer_Menon2007
-        if order == "ca_after":
+
+        from lrt_cinema._hotpixels import fix_hot_pixels
+        if order.startswith("ca_after"):
             m = reconstruct_mosaic_segbased(scaled, chan, wb)
             m = ca_correct_mosaic(m, pattern, iterations=2, avoid_shift=True)
+            if order == "ca_after_hotpix":
+                # maximum-reach parameterization (see docstring): dt
+                # defaults fire 0x on this mosaic — measured pre-flip
+                m, n_fixed_gym[order] = fix_hot_pixels(
+                    m, strength=1.0, permissive=True)
         else:  # ca_first — CA on the raw (unclipped) scaled mosaic
             m = ca_correct_mosaic(scaled, pattern, iterations=2,
                                   avoid_shift=True, scale=float(wb.max()))
@@ -144,20 +170,55 @@ def main() -> int:
         "arms": {},
     }
     tags = {"ca_after": "D-segb-ca-on",       # identical to the flip set's D
-            "ca_first": "E-segb-ca-first"}
-    for order in ("ca_after", "ca_first"):
+            "ca_first": "E-segb-ca-first",
+            "ca_after_hotpix": "F-segb-ca-hotpix"}
+    for order in ("ca_after", "ca_first", "ca_after_hotpix"):
         s8 = render(decode(order))
         results["arms"][order] = metrics(s8)
-        print(f"{order:9s}: {results['arms'][order]}")
+        if order in n_fixed_gym:
+            results["arms"][order]["n_fixed_mosaic"] = n_fixed_gym[order]
+        print(f"{order:15s}: {results['arms'][order]}")
         Image.fromarray(s8[8:-8, 8:-8]).save(
             FLIPDIR / f"DSC_4053_intent_fc3_{tags[order]}.png")
+
+    # ---- hotpixels false-positive guard (H2): CA-free article mosaics ----
+    from lrt_cinema._hotpixels import fix_hot_pixels
+
+    art = FIX / "test-articles"
+    fp: dict = {}
+    for name in ("bars", "zoneplate"):
+        with rawpy.imread(str(art / f"{name}.dng")) as r:
+            acfa, apat = _extract_cfa(r)
+            acolors = r.raw_colors_visible
+        ah, aw = acfa.shape
+        achan = np.where(acolors[:ah, :aw] == 3, 1, acolors[:ah, :aw])
+        awb = wb  # any sane multipliers; conditioning mirrors the clip path
+        cond = np.minimum(acfa * awb[achan].astype(np.float32),
+                          np.float32(awb.min()))
+        _fixed_m, n = fix_hot_pixels(cond, strength=0.25)
+        fp[name] = n
+        print(f"hotpix false-positive census {name}: {n}")
+    # real-frame clip-path census (production conditioning, no recon)
+    clip_cond = np.minimum(scaled, np.float32(wb.min()))
+    _m, n_real = fix_hot_pixels(clip_cond, strength=0.25)
+    fp["gym_clip_path"] = n_real
+    print(f"hotpix census gym clip path: {n_real}")
+    results["hotpix_false_positive_census"] = fp
+
     with (FLIPDIR / "README.txt").open("a") as f:
         f.write(
             "\nE-segb-ca-first: the ORDER probe arm — CA correction runs\n"
             "BEFORE the segbased reconstruction (the owner-hypothesised\n"
             "order; shipped D runs reconstruction first, per dt's canon).\n"
             "JUDGE D vs E: do the random hot pixels in CA-suppressed areas\n"
-            "disappear in E, with no new artifacts?\n")
+            "disappear in E, with no new artifacts?\n"
+            "\nF-segb-ca-hotpix: D + the dt hotpixels stage (slot 2.5,\n"
+            "between CA and demosaic) at its MAXIMUM reach (strength 1.0 +\n"
+            "permissive; 234 sites fixed — dt defaults fire ZERO times on\n"
+            "this mosaic, so F at defaults would be identical to D).\n"
+            "JUDGE D vs F: do the random hot pixels disappear? If D and F\n"
+            "look the same, the artifact is NOT a mosaic-domain impulse\n"
+            "and the remedy moves into the segbased reconstruction itself.\n")
     EVIDENCE.write_text(json.dumps(results, indent=1))
     print(f"evidence -> {EVIDENCE}")
     return 0

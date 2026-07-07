@@ -230,7 +230,7 @@ ours didn't) is now measured per-op — exposure class + H/S scene-referred
 | Highlight reconstruction (5) | canon SPLITS: darktable PRE-demosaic (mosaic), dcraw & RawTherapee POST-demosaic, Adobe reconstructs in-render | **BLOCKED on this lock** (owner). Our Tier-1 post-demosaic placement is RT/dcraw-consistent; but it is ~no-op on the residual clip-edge fringes (F vs G arms: 199 px > 2/255, max 4) — whatever fixes those is NOT the current Tier-1 |
 | Raw CA correction | LR: off in production (census [EMP]). RT `CA_correct_RT` + dt `cacorrect@5.0`: PRE-demosaic [SRC] | **IMPLEMENTED 2026-07-07**: Martinec `_ca_correct.py`, dt placement, `--ca-correct N`, default ON display presets. See TARGET slot 2 |
 | Partial-clip hue handling (mechanism A) | Adobe reconstructs partial clips in-render [EMP: gym census + fringe cluster 0] | **CONFIRMED defect class [EMP]** — clip-neutralization driven by a 2-dilated MOSAIC clip mask reproduces LR's cleanliness (fringe-sat 0.408→0.179 ≈ D 0.167). Tier-1's post-demosaic 0.99 threshold structurally misses interpolation-smeared partial clips → the production fix needs the mask from the mosaic. Slot 5 of the TARGET draft; implement post-lock |
-| False-colour suppression at/after demosaic (mechanism B) | canon schemes now read [SRC 2026-06-11]: **dt** `color_smoothing` (demosaicing/basics.c:91): per pass, for R and B, 9-median of (chan−G) over 3×3 then chan = max(0, med+G), 1–5 passes; **dcraw/libraw** `median_filter` (postprocessing_aux.cpp:246): identical class — 3×3 9-median on R−G and B−G, `med_passes` iterations, post-demosaic pre-highlight-blend; **RT** `processFalseColorCorrection` (rawimagesource.cc:2982): per step, 9-median on YIQ I/Q + 3×3 box blur, Y untouched; **libraw FBDD** (dcb_demosaic.cpp:814): PRE-demosaic — green spline + impulse clamp + 2×LCh cross-pattern chroma outlier smoothing (ratio<0.85 test) | **CONFIRMED gap [EMP]; scheme canon CONVERGES** — three engines do post-demosaic 3×3 chroma-difference median (keep G/Y, median the chroma signal, N passes). Our insufficient probe medianed the wrong representation. TARGET slot 6; implement post-lock |
+| False-colour suppression at/after demosaic (mechanism B) | canon converges on post-demosaic 3×3 chroma-difference median (dt `color_smoothing` / dcraw `median_filter` / RT `processFalseColorCorrection`; libraw FBDD the pre-demosaic outlier) [SRC 2026-06-11] | **IMPLEMENTED 2026-06-11** — full scheme detail + evidence in TARGET slot 6 |
 
 ## Adjudicated divergences (the ledger)
 
@@ -305,6 +305,17 @@ Owner verdict 2026-07-07 (rank-1): "better in all cases" → **DEFAULT
 ON display presets**, WITH avoid-shift (the D2 gate caught plain CA's
 global R/B cast; avoid-shift cancels it, keeps ~85 % of the fringe fix
 — `seq_spot_ca_2026-07-07.json`).
+
+**Slot 2.5 — hot-pixel suppression (mosaic domain).** VERDICT:
+IMPLEMENTED, OPT-IN. References: dt `hotpixels@6.0` (cacorrect@5 →
+hotpixels@6 → demosaic@8) [SRC 2026-07-07]; RT does bad pixels BEFORE
+its CA step — the canon splits on order; we follow dt. **PORTED
+2026-07-07 [SRC+EMP]**: `_hotpixels.py`, `--hotpixels S`, default 0
+= OFF. Scope caveat: at
+dt defaults the bright-over-dark impulse detector fires ZERO times on
+the segb+CA gym mosaic (near clip everything is bright) — the owner's
+segb hot pixels are likely NOT this class; F flip decides
+(`ca_order_probe` + CLAIMS).
 
 **Slot 3 — white balance, applied ONCE, before demosaic.** VERDICT:
 JUSTIFIED; **MIGRATED 2026-06-11 — the wart is gone.** The divide-back

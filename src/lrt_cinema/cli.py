@@ -294,6 +294,20 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     render.add_argument(
+        "--hotpixels", dest="hotpixels", type=float, default=0.0,
+        metavar="S",
+        help=(
+            "Mosaic-domain hot-pixel suppression strength (TARGET slot 2.5: "
+            "dt's hotpixels stage, clean-room port; runs between the raw CA "
+            "correction and the demosaic — dt's hotpixels@6 position). A "
+            "pixel above a small floor whose four same-channel neighbours "
+            "all sit below value*S/2 is an isolated impulse and is replaced "
+            "by the brightest such neighbour. Default 0 = OFF (owner-gated; "
+            "existing outputs byte-identical); 0.25 = dt's default "
+            "strength. Same CFA-path/full-res restriction as --ca-correct."
+        ),
+    )
+    render.add_argument(
         "--master-look", dest="master_look", default="defer",
         choices=("bake", "defer"),
         help=(
@@ -385,6 +399,7 @@ class _RenderJob:
     capture_sharpen: str = "off"  # "off"|"xmp"|"acr" (faithful capture sharpening; off=byte-exact)
     fc_suppress: int = 0          # slot-6 false-colour suppression passes (0 = off)
     ca_correct: int = 0           # slot-2 raw CA correction iterations (0 = off)
+    hotpixels: float = 0.0        # slot-2.5 hot-pixel suppression strength (0 = off)
 
 
 def resolve_ca_correct(explicit: int | None, preset: str) -> int:
@@ -469,7 +484,8 @@ def _render_one_frame(job: _RenderJob) -> _RenderResult:
                 and job.capture_sharpen == "off"  # USM is a CPU-only Stage-12 op
                 and not job.highlight_recovery
                 and job.fc_suppress == 0    # slot-6 median is CPU-only
-                and job.ca_correct == 0):   # slot-2 CA correct is CPU-only
+                and job.ca_correct == 0     # slot-2 CA correct is CPU-only
+                and job.hotpixels == 0.0):  # slot-2.5 hotpixels is CPU-only
             try:
                 from lrt_cinema.output import write_tiff_display
                 encoded = accel.mlx_render_frame_to_srgb(
@@ -513,6 +529,7 @@ def _render_one_frame(job: _RenderJob) -> _RenderResult:
             demosaic_highlights=("headroom" if stage7 else "clip"),
             fc_suppress=job.fc_suppress,
             ca_correct=job.ca_correct,
+            hotpixels=job.hotpixels,
         )
         with_dev_ops = apply_develop_ops(
             result.prophoto, job.ops, job.intent, master_look=job.master_look,
@@ -898,6 +915,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
             capture_sharpen=capture_sharpen,
             fc_suppress=fc_suppress,
             ca_correct=ca_correct,
+            hotpixels=args.hotpixels,
         ))
 
     if args.dry_run:
@@ -911,6 +929,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
             f"highlight_recovery={highlight_recovery}, "
             f"fc_suppress={fc_suppress}, "
             f"ca_correct={ca_correct}, "
+            f"hotpixels={args.hotpixels}, "
             f"workers={args.workers}).\n",
         )
         return 0

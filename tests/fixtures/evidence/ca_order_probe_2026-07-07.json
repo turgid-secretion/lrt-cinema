@@ -13,6 +13,18 @@
    "ring_chroma_p99": 23.24315557409279,
    "hot_px_ring_gt8": 50,
    "hot_px_ring_gt15": 0
+  },
+  "ca_after_hotpix": {
+   "ring_chroma_mean": 3.69063154877339,
+   "ring_chroma_p99": 23.307779109409804,
+   "hot_px_ring_gt8": 30,
+   "hot_px_ring_gt15": 1,
+   "n_fixed_mosaic": 234
   }
+ },
+ "hotpix_false_positive_census": {
+  "bars": 0,
+  "zoneplate": 0,
+  "gym_clip_path": 0
  }
 }
