@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] — v0.8 prep
 
 ### Added
+- **H/S translation v2: fast Local-Laplacian tone core** (`_fast_llf.py`,
+  clean-room MIT-derived; darktable's local-laplacian mode read-to-learn).
+  Owner round-1 verdicts fixed and measured: local-contrast retention in
+  the Highlights-affected region 0.77–0.91 → 0.95–1.15 vs LR (the "flat
+  look"); Shadows+100 toe-boundary false-colour patches gone (band C*
+  18.61 → 17.04 vs LR 17.14; toe-floored log channel + progressive chroma
+  roll replace the round-1 binary gate). No clarity/detail-boost term by
+  design. Recalibrated: final ΔE vs the LR exports
+  0.375/0.581/0.376/1.051 at the four anchors.
 - **Highlights2012/Shadows2012 now APPLIED on every render path** — a
   scene-referred LOCAL translation (`scene_tone.apply_scene_hlsh`, pipeline
   slot-7b) calibrated against owner Lightroom Classic probe exports

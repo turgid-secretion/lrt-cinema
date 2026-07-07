@@ -53,7 +53,7 @@ ROUND2_EVIDENCE = Path(__file__).resolve().parent.parent / (
     "tests/fixtures/evidence/cal_domain_round2_2026-07-07.json"
 )
 EVIDENCE = Path(__file__).resolve().parent.parent / (
-    "tests/fixtures/evidence/cal_hlsh_fit_2026-07-07.json"
+    "tests/fixtures/evidence/cal_hlsh_fit_v2_2026-07-08.json"
 )
 
 # probe -> (field, slider, table attr) ; H anchors negative, S positive
@@ -82,7 +82,7 @@ def main() -> int:
     ap.add_argument("--tables-only", action="store_true",
                     help="stage 1 only (no renders)")
     ap.add_argument("--sweep-radius", action="store_true",
-                    help="sweep guided radius/eps at the extreme anchors")
+                    help="sweep LLF sigma_r/last_level at the extreme anchors")
     ap.add_argument("--emit-tables", action="store_true",
                     help="print the pinned-table literals for scene_tone.py")
     args = ap.parse_args()
@@ -150,7 +150,9 @@ def main() -> int:
         blob = b"".join(
             getattr(st, a).tobytes() for a in
             ("_H_D50", "_H_D100", "_S_D50", "_S_D100"))
-        blob += f"r{st._HLSH_RADIUS}e{st._HLSH_GUIDED_EPS}".encode()
+        blob += (f"sr{st._LLF_SIGMA_R}L{st._LLF_LAST_LEVEL}"
+                 f"g{st._LLF_N_GAMMA}t{st._TOE_FLOOR}"
+                 f"c{st._CHROMA_ROLL_LUM}v2").encode()
         return hashlib.md5(blob).hexdigest()[:10]
 
     def render_op(probe: str, h: float, s: float) -> Path:
@@ -224,22 +226,23 @@ def main() -> int:
         a: getattr(st, a).tolist() for _p, (_h, _s, a) in ANCHORS.items()}
     results["stage2_de_history"] = refine_log
 
-    # ---- optional stage 3: radius/eps sweep at the refined tables ----
+    # ---- optional stage 3: LLF sigma_r/last_level sweep (refined tables) ----
     if args.sweep_radius:
         sweep: dict = {}
-        best, best_de = (st._HLSH_RADIUS, st._HLSH_GUIDED_EPS), np.inf
-        for radius in (48, 96, 192):
-            for eps in (0.05, 1.0, 4.0):
-                st._HLSH_RADIUS, st._HLSH_GUIDED_EPS = radius, eps
-                ms = [measure(p, *ANCHORS[p][:2], f"sweep r{radius} e{eps}")
+        best, best_de = (st._LLF_SIGMA_R, st._LLF_LAST_LEVEL), np.inf
+        for sigma_r in (0.9, 1.32, 2.0):
+            for last_level in (5, 6, 7):
+                st._LLF_SIGMA_R, st._LLF_LAST_LEVEL = sigma_r, last_level
+                ms = [measure(p, *ANCHORS[p][:2],
+                              f"sweep sr{sigma_r} L{last_level}")
                       for p in ("CALHIM100", "CALSH100")]
                 de = float(np.mean([m["de_mean"] for m in ms]))
-                sweep[f"r{radius}_e{eps}"] = de
+                sweep[f"sr{sigma_r}_L{last_level}"] = de
                 if de < best_de:
-                    best, best_de = (radius, eps), de
-        st._HLSH_RADIUS, st._HLSH_GUIDED_EPS = best
-        results["radius_sweep"] = sweep
-        results["radius_best"] = {"radius": best[0], "eps": best[1]}
+                    best, best_de = (sigma_r, last_level), de
+        st._LLF_SIGMA_R, st._LLF_LAST_LEVEL = best
+        results["llf_sweep"] = sweep
+        results["llf_best"] = {"sigma_r": best[0], "last_level": best[1]}
 
     # ---- final validation ----
     results["validation"] = {
@@ -247,7 +250,7 @@ def main() -> int:
         for p, (h, s, _a) in ANCHORS.items()}
     results["final_render_tags"] = {
         p: f"hlsh_{p}_{op_hash()}" for p in ANCHORS}  # tools/hlsh_flips.py
-    results["final_radius_eps"] = [st._HLSH_RADIUS, st._HLSH_GUIDED_EPS]
+    results["final_llf_params"] = [st._LLF_SIGMA_R, st._LLF_LAST_LEVEL]
     results["arm_s_reference"] = {
         p: ev["probes"][p]["arm_s"]["de_mean"] for p in ANCHORS}
 
@@ -261,8 +264,8 @@ def main() -> int:
         for _p, (_h, _s, attr) in ANCHORS.items():
             vals = np.round(getattr(st, attr), 4).tolist()
             print(f"{attr} = np.array({vals})")
-        print(f"_HLSH_RADIUS = {st._HLSH_RADIUS}")
-        print(f"_HLSH_GUIDED_EPS = {st._HLSH_GUIDED_EPS}")
+        print(f"_LLF_SIGMA_R = {st._LLF_SIGMA_R}")
+        print(f"_LLF_LAST_LEVEL = {st._LLF_LAST_LEVEL}")
     return 0
 
 
