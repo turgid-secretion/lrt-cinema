@@ -606,6 +606,16 @@ def _cfa_demosaic(raw, method: str, wb_mul: np.ndarray | None = None,
             # >1 values for grading + the future pre-demosaic
             # reconstruction (REFERENCE_PIPELINE TARGET slot 5).
             cfa = np.minimum(cfa, np.float32(wb_mul.min()))
+    if hotpixels > 0.0:
+        # TARGET slot 2.5: mosaic-domain hot-pixel suppression BEFORE the
+        # CA correction — RT's order (bad pixels precede its CA step); dt
+        # places hotpixels@6 AFTER cacorrect@5, but the segbased_guard
+        # probe MEASURED that placement neutered: CA's bilinear R/B
+        # resampling smears a single-site spec across neighbours, after
+        # which the 4-neighbour impulse test cannot fire. Opt-in
+        # (`--hotpixels S`, owner-gated); dt default strength 0.25.
+        from lrt_cinema._hotpixels import fix_hot_pixels
+        cfa, _n_fixed = fix_hot_pixels(cfa, strength=hotpixels)
     if ca_correct > 0:
         # TARGET slot 2: raw lateral-CA correction on the BALANCED mosaic,
         # after the WB scale + highlight conditioning, before demosaic —
@@ -628,14 +638,6 @@ def _cfa_demosaic(raw, method: str, wb_mul: np.ndarray | None = None,
         )
         cfa = ca_correct_mosaic(cfa, pattern, iterations=ca_correct,
                                 avoid_shift=True, scale=ca_scale)
-    if hotpixels > 0.0:
-        # TARGET slot 2.5: mosaic-domain hot-pixel suppression at dt's
-        # exact position (cacorrect@5 → hotpixels@6 → demosaic@8; the
-        # canon splits — RT interpolates bad pixels BEFORE its CA step;
-        # we follow dt). Opt-in (`--hotpixels S`, owner-gated);
-        # `hotpixels` = dt's strength parameter (dt default 0.25).
-        from lrt_cinema._hotpixels import fix_hot_pixels
-        cfa, _n_fixed = fix_hot_pixels(cfa, strength=hotpixels)
     if method == "rcd":
         from lrt_cinema import accel
         rgb = accel.rcd_demosaic(cfa, pattern)

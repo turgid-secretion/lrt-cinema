@@ -1,0 +1,188 @@
+{
+ "design": "input-spec forensics + remedy arms D/G/H (docstring)",
+ "guard_limit": 2.0,
+ "hotpix": {
+  "strength": 1.0,
+  "permissive": true
+ },
+ "census_grounding": {
+  "clipped_sites": 95664,
+  "ratio_p50": 1.0,
+  "tail_gt2x": 647,
+  "ratio_max": 5.79
+ },
+ "forensics_top15": [
+  {
+   "mosaic_yx": [
+    1361,
+    299
+   ],
+   "recon_eq_input": false,
+   "input_max": 1.859,
+   "anyclip": true
+  },
+  {
+   "mosaic_yx": [
+    1637,
+    293
+   ],
+   "recon_eq_input": false,
+   "input_max": 1.859,
+   "anyclip": true
+  },
+  {
+   "mosaic_yx": [
+    2261,
+    449
+   ],
+   "recon_eq_input": true,
+   "input_max": 0.777,
+   "anyclip": false
+  },
+  {
+   "mosaic_yx": [
+    1489,
+    2252
+   ],
+   "recon_eq_input": true,
+   "input_max": 1.225,
+   "anyclip": false
+  },
+  {
+   "mosaic_yx": [
+    1797,
+    1261
+   ],
+   "recon_eq_input": false,
+   "input_max": 1.859,
+   "anyclip": true
+  },
+  {
+   "mosaic_yx": [
+    1120,
+    1784
+   ],
+   "recon_eq_input": true,
+   "input_max": 1.284,
+   "anyclip": true
+  },
+  {
+   "mosaic_yx": [
+    1794,
+    1241
+   ],
+   "recon_eq_input": false,
+   "input_max": 1.119,
+   "anyclip": true
+  },
+  {
+   "mosaic_yx": [
+    1797,
+    1239
+   ],
+   "recon_eq_input": true,
+   "input_max": 1.201,
+   "anyclip": true
+  },
+  {
+   "mosaic_yx": [
+    1795,
+    1265
+   ],
+   "recon_eq_input": false,
+   "input_max": 1.859,
+   "anyclip": true
+  },
+  {
+   "mosaic_yx": [
+    2261,
+    448
+   ],
+   "recon_eq_input": true,
+   "input_max": 0.777,
+   "anyclip": false
+  },
+  {
+   "mosaic_yx": [
+    1132,
+    1796
+   ],
+   "recon_eq_input": true,
+   "input_max": 0.957,
+   "anyclip": false
+  },
+  {
+   "mosaic_yx": [
+    1112,
+    1774
+   ],
+   "recon_eq_input": true,
+   "input_max": 1.358,
+   "anyclip": true
+  },
+  {
+   "mosaic_yx": [
+    1787,
+    1242
+   ],
+   "recon_eq_input": false,
+   "input_max": 1.79,
+   "anyclip": true
+  },
+  {
+   "mosaic_yx": [
+    1591,
+    1704
+   ],
+   "recon_eq_input": true,
+   "input_max": 0.849,
+   "anyclip": false
+  },
+  {
+   "mosaic_yx": [
+    1399,
+    43
+   ],
+   "recon_eq_input": false,
+   "input_max": 1.836,
+   "anyclip": true
+  }
+ ],
+ "hotpix_pre_recon": {
+  "fires": 278,
+  "spot_coverage_of_15": 9
+ },
+ "guard_fires": 647,
+ "truth_harness": {
+  "segb": {
+   "rel_mae": 0.08289620280265808
+  },
+  "segb_guard": {
+   "rel_mae": 0.08317624777555466
+  },
+  "hotpix_segb_guard": {
+   "rel_mae": 0.08319573849439621
+  }
+ },
+ "hotpix_false_positive_census": {
+  "bars": 0,
+  "zoneplate": 0
+ },
+ "interior_census_nonresolving": {
+  "D-segb-ca-on": {
+   "gt5": 253,
+   "gt8": 48,
+   "gt12": 12
+  },
+  "G-segb-guarded": {
+   "gt5": 274,
+   "gt8": 53,
+   "gt12": 14
+  },
+  "H-segb-hotpix-guard": {
+   "gt5": 277,
+   "gt8": 61,
+   "gt12": 19
+  }
+ }
+}
