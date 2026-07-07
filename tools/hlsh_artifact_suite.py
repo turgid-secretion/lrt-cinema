@@ -157,6 +157,42 @@ def metric_step(rgb_in, rgb_out) -> dict:
         devs = [float(np.median(d[sl]) - far) for sl in sl_bands]
         out[f"halo_over_{side}"] = max(0.0, max(devs))
         out[f"halo_under_{side}"] = min(0.0, min(devs))
+    # STRUCTURE-SENSITIVE (owner round-4 audit: means/medians over bands
+    # mask an over/under-shooting DOUBLE halo that cancels on average —
+    # "bright halos that now have dark halos in the middle"). Column
+    # profile of the delta near the edge: count sign ALTERNATIONS of
+    # (profile - far) beyond a 0.05-st noise gate, and the peak-to-trough
+    # swing, per side, within 96 px of the edge.
+    prof = d.mean(axis=0)
+    for side, sl, far_sl in (("dark", np.s_[e - 96: e], np.s_[: e - 128]),
+                             ("bright", np.s_[e: e + 96], np.s_[e + 128:])):
+        far = float(np.median(d[far_sl]))
+        p = prof[sl] - far
+        sig = np.where(np.abs(p) > 0.05, np.sign(p), 0.0)
+        sig = sig[sig != 0.0]
+        alt = int((np.diff(sig) != 0).sum()) if sig.size else 0
+        out[f"osc_{side}"] = alt
+        out[f"swing_{side}"] = float(p.max() - p.min())
+    return out
+
+
+def metric_gradient_reversal(rgb_in, rgb_out) -> dict:
+    """Fraction of significant input gradients whose SIGN flips in the
+    output (the literature's gradient-reversal artifact detector — blur,
+    double-halos and over-corrections all flip local gradients; regional
+    averages cannot see them)."""
+    li = np.log2(np.maximum(rgb_in.mean(-1), 1e-6))
+    lo = np.log2(np.maximum(rgb_out.mean(-1), 1e-6))
+    out = {}
+    tot = 0
+    rev = 0
+    for ax in (0, 1):
+        gi = np.diff(li, axis=ax)
+        go = np.diff(lo, axis=ax)
+        m = np.abs(gi) > 0.08          # significant input gradient (noise gate)
+        tot += int(m.sum())
+        rev += int(((gi * go) < 0)[m].sum())
+    out["grad_reversal_frac"] = float(rev / max(tot, 1))
     return out
 
 
@@ -179,6 +215,16 @@ def metric_blob(rgb_in, rgb_out, centers, delta_fn) -> dict:
         core = rr <= 0.6 * r
         expected = float(np.mean(delta_fn(li[core])))
         out[f"interior_err_r{r}"] = float(abs(np.median(d[core]) - expected))
+        # radial-profile oscillation (structure-sensitive, owner round-4:
+        # averaged rings mask a bright ring with a dark ring inside it) —
+        # fine annuli, sign alternations of (annulus - far) > 0.05 st
+        fine = []
+        for a in np.arange(1.05, 4.0, 0.15):
+            m = (rr >= a * r) & (rr < (a + 0.15) * r)
+            if m.sum() > 30:
+                fine.append(float(np.median(d[m]) - far))
+        sig = np.sign([v for v in fine if abs(v) > 0.05])
+        out[f"osc_r{r}"] = int((np.diff(sig) != 0).sum()) if len(sig) else 0
     return out
 
 
@@ -329,6 +375,29 @@ def arm_configs() -> dict[str, dict]:
     arms["gate2-f4-L7"] = {
         **base, "_LLF_ABS_MODE": "gate2", "_LLF_LAST_LEVEL": 7,
         "_LLF_GATE_FINE": 4, "_LLF_GATE_LO": 0.6, "_LLF_GATE_HI": 1.6}
+    # round-7 arms (owner round-4: no patch-on-patch): the Paris SS5.3
+    # tone-mapping architecture — full depth, residual untouched, per-side
+    # beta edge compression carries ALL local behaviour, calibrated tables
+    # applied POINTWISE to the collapse (zero spatial structure). b = the
+    # beta at |slider|=100; beta at 50 = halfway to 1.
+    for b in (0.85, 0.7, 0.55, 0.4):
+        anch = ((50.0, 1.0 - (1.0 - b) / 2.0), (100.0, b))
+        arms[f"paris-b{b:g}"] = {
+            **base, "_LLF_ABS_MODE": "paris", "_LLF_LAST_LEVEL": 99,
+            "_LLF_SIGMA_R": 1.32, "_BETA_LO_ANCHORS": anch,
+            "_BETA_HI_ANCHORS": anch}
+    arms["paris-b0.7-sr2"] = {
+        **base, "_LLF_ABS_MODE": "paris", "_LLF_LAST_LEVEL": 99,
+        "_LLF_SIGMA_R": 2.0,
+        "_BETA_LO_ANCHORS": ((50.0, 0.85), (100.0, 0.7)),
+        "_BETA_HI_ANCHORS": ((50.0, 0.85), (100.0, 0.7))}
+    # round-8 arms: bilateral-grid tone driver (one edge-aware map, no
+    # pyramid, no gates — the range kernel does the region separation)
+    for ss in (48, 96):
+        for sr in (0.8, 1.2, 1.8):
+            arms[f"bilat-ss{ss}-sr{sr:g}"] = {
+                **base, "_LLF_ABS_MODE": "bilat",
+                "_BILAT_SIGMA_S": float(ss), "_BILAT_SIGMA_RANGE": sr}
     return arms
 
 
@@ -462,11 +531,37 @@ def eval_real(arm_over: dict, setup, crops, lr_cache) -> dict:
                  for b, o, li_ in zip(_BAND_EDGES[:-1],
                                       _band_stds(lo_o, sl),
                                       _band_stds(lo_l, sl), strict=True)}
+        # STRUCTURE-SENSITIVE vs LR (owner round-4 audit): per-pixel L*
+        # error P95 (means mask cancelling over/under-corrections) + the
+        # gradient-reversal fraction of ours vs LR (double-halos flip
+        # local gradients relative to the anchor).
+        dL = lab_o[..., 0] - lab_l[..., 0]
+        p95 = float(np.percentile(np.abs(dL), 95))
+        tot = rev = 0
+        for ax in (0, 1):
+            gl_ = np.diff(lab_l[..., 0], axis=ax)
+            go_ = np.diff(lab_o[..., 0], axis=ax)
+            mm = np.abs(gl_) > 1.0     # significant LR gradient (L* units)
+            tot += int(mm.sum())
+            rev += int(((gl_ * go_) < 0)[mm].sum())
         out[name] = {"de_mean": m["de_mean"], "dL_mean": m["dL_mean"],
-                     "zone_glow_Lstar": glow,
+                     "zone_glow_Lstar": glow, "dL_p95": p95,
+                     "grad_reversal_vs_lr": float(rev / max(tot, 1)),
                      "crop_center": [int(j), int(i)], **bands}
+        # delta-map visualization: the ADJUSTMENT FIELD as an image
+        # (ours-vs-LR L* difference, +-8 L* window) — halo structure is
+        # directly inspectable instead of averaged into a statistic.
+        if DELTA_MAP_DIR is not None:
+            from PIL import Image
+            DELTA_MAP_DIR.mkdir(parents=True, exist_ok=True)
+            v = np.clip((dL + 8.0) / 16.0, 0.0, 1.0)
+            Image.fromarray((v * 255).astype(np.uint8)).save(
+                DELTA_MAP_DIR / f"{name}_dL_vs_lr.png")
         del bl
     return out
+
+
+DELTA_MAP_DIR: Path | None = None
 
 
 # --------------------------------------------------------------------------
@@ -478,6 +573,8 @@ def main() -> int:
     ap.add_argument("--arms", default=None,
                     help="comma-separated arm names (default: all)")
     ap.add_argument("--no-real", action="store_true")
+    ap.add_argument("--delta-maps", action="store_true",
+                    help="write ours-vs-LR L* delta-map PNGs per real crop")
     args = ap.parse_args()
 
     import lrt_cinema.scene_tone as st
@@ -502,7 +599,9 @@ def main() -> int:
         "_LLF_ABS_MODE", "_LLF_LAST_LEVEL", "_LLF_GUIDED_EPS",
         "_LLF_GUIDED_RADIUS", "_LLF_GLOBAL_BLEND", "_LLF_SIGMA_R",
         "_LLF_GUARD_TEMP", "_LLF_GUARD_FINE_LEVEL", "_LLF_MULTI_LEVELS",
-        "_LLF_GATE_FINE", "_LLF_GATE_LO", "_LLF_GATE_HI")}
+        "_LLF_GATE_FINE", "_LLF_GATE_LO", "_LLF_GATE_HI",
+        "_BETA_LO_ANCHORS", "_BETA_HI_ANCHORS",
+        "_BILAT_SIGMA_S", "_BILAT_SIGMA_RANGE")}
 
     for arm_name, over in arms.items():
         for k, v in defaults.items():
@@ -514,6 +613,7 @@ def main() -> int:
             sm: dict = {}
             o = st.apply_scene_hlsh(arts["step"], h, s)
             sm.update(metric_step(arts["step"], o))
+            sm.update(metric_gradient_reversal(arts["step"], o))
             sm.update(metric_flatness(arts["step"], o))
             sm.update(metric_multiscale(arts["step"], o))
             blob_art = "blob_bright" if s else "blob_dark"
@@ -524,6 +624,9 @@ def main() -> int:
             sm.update(metric_ramp(arts["ramp"], o))
             row[sl_name] = sm
         if not args.no_real:
+            global DELTA_MAP_DIR
+            DELTA_MAP_DIR = (FIX / "verify-2026-07-08/hlsh-delta-maps"
+                             / arm_name) if args.delta_maps else None
             row["real"] = eval_real(over, setup, crops, lr_cache)
         results["arms"][arm_name] = row
         r = row["S100"]

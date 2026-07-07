@@ -35,19 +35,25 @@ scene-exposure gain — the same point the calibration arms were fitted at.
 closed-source Local-Laplacian-class). The anchor tables + local-scale
 constants are fitted so single-slider renders land near the LR Classic
 exports (`tools/cal_hlsh_fit.py` regenerates). Measured residual vs LR at
-the four anchors (mean ΔE2000, block-4 grid, v4): H −50 **0.370**, H −100
-**0.552**, S +50 **0.381**, S +100 **1.062** — every anchor beats the best
+the four anchors (mean ΔE2000, block-4 grid, v5): H −50 **0.352**, H −100
+**0.527**, S +50 **0.343**, S +100 **0.866** — every anchor beats the best
 GLOBAL fit arm (0.549/0.865/0.472/2.269), against a ~0.2 base-look floor.
 Owner-verdict axes across versions (`tools/hlsh_v2_diagnostics.py` +
 `tools/hlsh_artifact_suite.py`): v1 guided = flat + toe patches; v2
 LLF/L6 = flat fixed but POOLS/HALOS (wall glow +0.32 S / +6.5 H L*);
 v3 = L4 residual: pools fixed but mid-band (32–128 px) contrast fell to
-0.67–0.76 ("flattens and blurs", owner round-3); v4 = the
-AMPLITUDE-GATED TWO-SCALE map (mode `gate2`): tone follows the coarse
-map where fine(8 px)/coarse(64 px) agree within 0.4 st (folds keep
-contrast) and the fine map beyond 1.2 st (boundaries stay pool-free) —
-real stage-crop mid-bands 0.90–0.94 of LR's, wall glow +0.00 S /
-−0.06 H, flatness 1.00, all simultaneously.
+0.67–0.76 ("flattens and blurs", owner round-3); v4 = gate2
+two-scale map: averaged metrics green but the owner's round-4 audit
+caught the Goodhart hack — per-pixel P95 (5.2 vs v2's 4.2 L*) and the
+seam swing (2.55 st) confirmed the double-halo his eyes saw; v5 = the
+BILATERAL-GRID TONE DRIVER (mode `bilat`): out = log_l + Δ(M), ONE
+edge-aware map (spatial σ 96 px, range σ 1.8 st) — the range kernel
+separates regions by VALUE, so structure below 1.8 st keeps its
+contrast (Δ constant across it), boundaries stay sharp with monotone
+transitions (no seams, no oscillating halos: swing 0.00), blobs read
+their own luminance (interior 0.006 st). All floors simultaneously +
+the best anchors of any architecture. dt tone-eq's architecture with a
+bilateral grid (HDRNet-style slicing) as the mask producer.
 Measured signs: Highlights NEGATIVE (recovery), Shadows POSITIVE (lift) —
 the owner-exported anchors. The opposite signs use the mirrored tables and
 are flagged extrapolated (no anchor exports yet).
@@ -61,7 +67,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from lrt_cinema._fast_llf import llf_apply_tone
+from lrt_cinema._fast_llf import bilateral_grid_map, llf_apply_tone
 from lrt_cinema.develop_ops import _smoothstep
 
 # --- v2 core: fast Local-Laplacian tone application (owner round-1 verdict
@@ -106,7 +112,7 @@ _LLF_LAST_LEVEL = 6
 
 # Absolute-response mode + knobs (`_fast_llf.llf_apply_tone` docstring;
 # the round-2 halo campaign's arm axis — tools/hlsh_artifact_suite.py).
-_LLF_ABS_MODE = "gate2"
+_LLF_ABS_MODE = "bilat"
 _LLF_GUIDED_DOWN = 8
 _LLF_GUIDED_RADIUS = 24
 _LLF_GUIDED_EPS = 8.0
@@ -117,6 +123,22 @@ _LLF_MULTI_LEVELS = (3, 4, 5)
 _LLF_GATE_FINE = 3         # gate2: fine-map level (2^N px)
 _LLF_GATE_LO = 0.4         # gate2: below this fine/coarse deviation (st),
 _LLF_GATE_HI = 1.2         #        tone follows the coarse map; above, fine
+
+# "paris" mode: per-side edge-compression anchors — (|slider|, beta).
+# beta < 1 compresses that side's inter-region edge amplitude across ALL
+# pyramid levels (Shadows: dark-below-context rises; Highlights:
+# bright-above-context descends); interp linearly through beta=1 at 0.
+# THE structural/locality knob, fit to LR's measured context dependence.
+_BETA_LO_ANCHORS = ((50.0, 0.85), (100.0, 0.70))   # Shadows side
+_BETA_HI_ANCHORS = ((50.0, 0.85), (100.0, 0.70))   # Highlights side
+
+# "bilat" mode: bilateral-grid tone driver — M = edge-aware smooth map
+# (spatial sigma px, range sigma stops), out = log_l + delta(M). The
+# range kernel is the edge-awareness: structure smaller than the range
+# sigma is averaged out of M (folds keep their contrast — delta constant
+# across them), boundaries larger stay sharp (no pools, no gate seams).
+_BILAT_SIGMA_S = 96.0
+_BILAT_SIGMA_RANGE = 1.8
 
 # Log-toe floor (scene-linear luminance). The log2 channel is computed on
 # max(lum, floor): bounds the toe against near-zero noise blowups (the
@@ -156,15 +178,14 @@ _CHROMA_ROLL_LUM = 6e-4
 _KNOT_X = np.array([-12.144, -11.7712, -11.3985, -11.0258, -10.653, -10.2802, -9.9075, -9.5347, -9.162, -8.7892, -8.4165, -8.0438, -7.671, -7.2982, -6.9255, -6.5527, -6.18, -5.8072, -5.4345, -5.0618, -4.689, -4.3162, -3.9435, -3.5708, -3.198, -2.8252, -2.4525, -2.0797, -1.707, -1.3342, -0.9615, -0.5887, -0.216])
 
 # pinned by `python3 tools/cal_hlsh_fit.py --sweep-radius --emit-tables`
-# (v4 = gate2 amplitude-gated two-scale map, 2026-07-08): armS LUT
-# deltas refined through this op vs the owner LR exports; final
-# validation dE 0.370/0.552/0.381/1.062 at the four anchors — the
-# best anchor set of any version (evidence
-# cal_hlsh_fit_v2_2026-07-08.json).
-_H_D50 = np.array([0.1076, 0.1094, 0.0795, 0.0251, -0.0087, -0.0124, -0.0257, -0.0367, -0.0428, -0.0497, -0.0618, -0.0683, -0.0728, -0.079, -0.0894, -0.0766, -0.1015, -0.1546, -0.1904, -0.4247, -0.5398, -0.549, -0.6032, -0.6968, -0.7975, -0.8559, -0.8886, -0.9939, -1.1595, -1.3224, -1.3971, -1.3535, -1.3327])
-_H_D100 = np.array([0.0952, 0.0974, 0.0705, 0.0143, -0.0277, -0.0425, -0.0608, -0.0801, -0.092, -0.1046, -0.1232, -0.1363, -0.1476, -0.1592, -0.1724, -0.1536, -0.1876, -0.2655, -0.3085, -0.732, -1.0883, -1.0798, -1.2852, -1.4367, -1.601, -1.7483, -1.8078, -2.098, -2.367, -2.6095, -2.7727, -2.8493, -2.8775])
-_S_D50 = np.array([1.1505, 1.1841, 1.3417, 1.4648, 1.5571, 1.6233, 1.5673, 1.6078, 1.5965, 1.4885, 1.3835, 1.2262, 1.0452, 0.8557, 0.7801, 0.4144, 0.1955, 0.1337, 0.1069, 0.0911, 0.0859, 0.0826, 0.073, 0.0668, 0.0606, 0.0548, 0.05, 0.0496, 0.0315, -0.0108, -0.0865, -0.1638, -0.1945])
-_S_D100 = np.array([2.4274, 2.4542, 2.7489, 3.0116, 3.1023, 3.1817, 3.1467, 3.1703, 3.1656, 3.095, 2.6105, 2.1736, 1.782, 1.9314, 1.6838, 1.3392, 0.9665, 0.4239, 0.1077, 0.212, 0.2016, 0.1654, 0.1465, 0.1348, 0.1226, 0.1105, 0.0991, 0.0883, 0.0635, 0.0158, -0.0709, -0.1603, -0.1956])
+# (v5 = bilateral-grid tone driver, 2026-07-08): armS LUT deltas
+# refined through this op vs the owner LR exports; final validation
+# dE 0.352/0.527/0.343/0.866 at the four anchors — the best anchor
+# set of any architecture (evidence cal_hlsh_fit_v2_2026-07-08.json).
+_H_D50 = np.array([0.1351, 0.1365, 0.1025, 0.0349, -0.0083, -0.0123, -0.0216, -0.0347, -0.0424, -0.0484, -0.0623, -0.0674, -0.0711, -0.076, -0.0729, -0.0639, -0.0993, -0.156, -0.1485, -0.3642, -0.5009, -0.5526, -0.6036, -0.6918, -0.7953, -0.863, -0.9032, -1.0105, -1.1763, -1.3443, -1.4417, -1.3985, -1.3769])
+_H_D100 = np.array([0.1258, 0.1279, 0.0986, 0.0268, -0.0271, -0.0428, -0.0546, -0.077, -0.0911, -0.1023, -0.1238, -0.135, -0.1452, -0.1546, -0.149, -0.1354, -0.1939, -0.3098, -0.3874, -0.6927, -1.0498, -1.1397, -1.3044, -1.4315, -1.6018, -1.7784, -1.8669, -2.1098, -2.3734, -2.6435, -2.8157, -2.9106, -2.9466])
+_S_D50 = np.array([1.0176, 1.0539, 1.2421, 1.4241, 1.556, 1.6257, 1.5719, 1.6075, 1.5997, 1.5029, 1.3835, 1.2299, 1.022, 0.7917, 0.805, 0.4345, 0.2007, 0.1374, 0.1276, 0.1044, 0.0904, 0.0821, 0.0728, 0.0672, 0.0606, 0.0537, 0.0484, 0.0455, 0.0247, -0.0222, -0.1085, -0.2065, -0.246])
+_S_D100 = np.array([2.3204, 2.3509, 2.6866, 2.9909, 3.1042, 3.1823, 3.1496, 3.1728, 3.1707, 3.1047, 2.6105, 2.1546, 1.7287, 1.8603, 1.6838, 1.3392, 0.9665, 0.2161, 0.1015, 0.2028, 0.1911, 0.1623, 0.1462, 0.1353, 0.1225, 0.1087, 0.0951, 0.0823, 0.0541, 0.0006, -0.0961, -0.2114, -0.258])
 
 
 def _anchor_delta(base_log2: np.ndarray, slider_abs: float,
@@ -219,6 +240,27 @@ def apply_scene_hlsh(camera_rgb: np.ndarray, highlights: float,
     def delta_s(b: np.ndarray) -> np.ndarray:
         return _hlsh_delta(b, 0.0, shadows)
 
+    def _beta(slider_abs: float,
+              anchors: tuple[tuple[float, float], ...]) -> float:
+        xs = [0.0] + [a for a, _ in anchors]
+        ys = [1.0] + [v for _, v in anchors]
+        return float(np.interp(min(slider_abs, 100.0), xs, ys))
+
+    beta_lo = _beta(abs(shadows), _BETA_LO_ANCHORS) if shadows > 0 else 1.0
+    beta_hi = (_beta(abs(highlights), _BETA_HI_ANCHORS)
+               if highlights < 0 else 1.0)
+
+    if _LLF_ABS_MODE == "bilat":
+        # ONE-MAP architecture (owner round-4: fundamental fix, no
+        # patch-stack): out = log_l + delta(M), M = bilateral-grid map.
+        # No pyramid at all — detail and every structure below the range
+        # sigma is untouched by construction (delta constant across
+        # them); boundaries above it stay sharp in M (no pools/seams).
+        m = bilateral_grid_map(log_l, _BILAT_SIGMA_S, _BILAT_SIGMA_RANGE)
+        log_out = log_l + _hlsh_delta(m, highlights,
+                                      shadows).astype(np.float32)
+        return _reapply(camera_rgb, lum, log_l, log_out)
+
     log_out = llf_apply_tone(
         log_l, delta_fn, _LLF_SIGMA_R, _LLF_N_GAMMA,
         _LLF_GAMMA_LO, _LLF_GAMMA_HI, _LLF_LAST_LEVEL,
@@ -229,8 +271,22 @@ def apply_scene_hlsh(camera_rgb: np.ndarray, highlights: float,
         guard_fine_level=_LLF_GUARD_FINE_LEVEL or None,
         multi_levels=tuple(_LLF_MULTI_LEVELS),
         gate_fine=_LLF_GATE_FINE, gate_lo=_LLF_GATE_LO,
-        gate_hi=_LLF_GATE_HI)
+        gate_hi=_LLF_GATE_HI, beta_lo=beta_lo, beta_hi=beta_hi)
+    if _LLF_ABS_MODE == "paris":
+        # the ABSOLUTE calibrated component: a POINTWISE finisher on the
+        # collapsed output (the Paris §5.3 display-renorm slot) — no
+        # spatial structure, so it cannot pool, halo, or blur. The beta
+        # pass above carries ALL the local behaviour (owner round-4:
+        # no patch-on-patch; one coherent operator).
+        log_out = log_out + _hlsh_delta(log_out, highlights,
+                                        shadows).astype(np.float32)
+    return _reapply(camera_rgb, lum, log_l, log_out)
 
+
+def _reapply(camera_rgb: np.ndarray, lum: np.ndarray, log_l: np.ndarray,
+             log_out: np.ndarray) -> np.ndarray:
+    """Hue-preserving luminance reapply with the toe-stable ratio and the
+    progressive near-black chroma roll (shared by all op modes)."""
     # Ratio from the FLOORED channel (bounded at the toe by construction);
     # true luminance scales by it, so the toe stays pinned near black and
     # the lifted↔clipped boundary is seamless.

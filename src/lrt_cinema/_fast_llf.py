@@ -93,6 +93,35 @@ def _gaussian_pyramid(img: np.ndarray, nlev: int) -> list[np.ndarray]:
     return pyr
 
 
+def _remap_beta(img: np.ndarray, g0: float, sigma_r: float,
+                beta_lo: float, beta_hi: float) -> np.ndarray:
+    """Paris-2011 §5.3 tone-mapping remap, per-side edge compression.
+
+    detail (|d| <= sigma_r): g0 + d                        (preserved)
+    edge d >  sigma_r:       g0 + sigma_r + beta_hi*(d - sigma_r)
+    edge d < -sigma_r:       g0 - sigma_r + beta_lo*(d + sigma_r)
+
+    beta < 1 COMPRESSES that side's inter-region amplitude: dark regions
+    rise toward their surround (beta_lo, the Shadows lift) or bright
+    regions descend (beta_hi, the Highlights recovery). The range
+    compression EMERGES from edge compression across all pyramid levels —
+    no tone map exists at any spatial scale (the paper's halo-free
+    construction); the ABSOLUTE calibrated component is a separate
+    POINTWISE finisher applied by the caller to the collapsed output
+    (the paper's display-renorm slot)."""
+    d = img - np.float32(g0)
+    out = np.float32(g0) + d                     # detail arm (identity)
+    hi = d > np.float32(sigma_r)
+    lo = d < -np.float32(sigma_r)
+    if beta_hi != 1.0:
+        out = np.where(hi, np.float32(g0 + sigma_r)
+                       + np.float32(beta_hi) * (d - np.float32(sigma_r)), out)
+    if beta_lo != 1.0:
+        out = np.where(lo, np.float32(g0 - sigma_r)
+                       + np.float32(beta_lo) * (d + np.float32(sigma_r)), out)
+    return out
+
+
 def _remap(img: np.ndarray, g0: float, delta_fn: Callable[[np.ndarray], np.ndarray],
            sigma_r: float, slope_eps: float = 0.25) -> np.ndarray:
     """Tone remap around the discretization point `g0`.
@@ -155,6 +184,65 @@ def _guided_joint(coarse: np.ndarray, guide_c: np.ndarray,
     return a_f * guide_f + b_f
 
 
+def bilateral_grid_map(channel: np.ndarray, sigma_s: float,
+                       sigma_range: float) -> np.ndarray:
+    """Edge-aware smooth tone-driver map via the bilateral grid
+    (Chen/Paris/Durand 2007): accumulate (sum, weight) into a coarse
+    (y, x, intensity) grid, Gaussian-blur the grid, slice trilinearly at
+    each pixel's (y, x, value). The range dimension is what makes it
+    edge-aware: contributions further than ~sigma_range stops in VALUE
+    never mix, so region boundaries stay sharp in the map (no pools, no
+    seams) while structure smaller than sigma_range is averaged out (the
+    map is constant across folds — their contrast survives the curve).
+    HDRNet's slicing operator is this same construction (research row)."""
+    from scipy.ndimage import gaussian_filter
+    ch = channel.astype(np.float32, copy=False)
+    h, w = ch.shape
+    ds = max(int(sigma_s / 2), 1)
+    dr = np.float32(sigma_range / 2.0)
+    lo = float(ch.min())
+    gy = (np.arange(h) // ds)
+    gx = (np.arange(w) // ds)
+    gz = ((ch - np.float32(lo)) / dr)
+    nz = int(np.ceil(float(gz.max()))) + 2
+    ny = int(gy[-1]) + 1
+    nx = int(gx[-1]) + 1
+    zi = np.clip(gz.astype(np.int32), 0, nz - 1)
+    flat_idx = ((gy[:, None] * nx + gx[None, :]) * nz + zi).ravel()
+    sums = np.bincount(flat_idx, weights=ch.ravel().astype(np.float64),
+                       minlength=ny * nx * nz).reshape(ny, nx, nz)
+    cnts = np.bincount(flat_idx, minlength=ny * nx * nz).reshape(ny, nx, nz)
+    sums = gaussian_filter(sums, sigma=(2.0, 2.0, 2.0), mode="nearest")
+    cnts = gaussian_filter(cnts.astype(np.float64), sigma=(2.0, 2.0, 2.0),
+                           mode="nearest")
+
+    # HOMOGENEOUS trilinear slice at (y/ds, x/ds, (v-lo)/dr): interpolate
+    # numerator and weight separately, divide after — empty grid cells
+    # then contribute nothing instead of dragging the value toward zero.
+    fy = np.minimum(np.arange(h, dtype=np.float32) / ds, ny - 1.001)
+    fx = np.minimum(np.arange(w, dtype=np.float32) / ds, nx - 1.001)
+    fz = np.minimum(gz, np.float32(nz - 1.001))
+    y0 = fy.astype(np.int32)
+    x0 = fx.astype(np.int32)
+    z0 = fz.astype(np.int32)
+    wy = (fy - y0)[:, None]
+    wx = (fx - x0)[None, :]
+    wz = fz - z0
+    num = np.zeros((h, w), dtype=np.float64)
+    den = np.zeros((h, w), dtype=np.float64)
+    for dy_, wy_ in ((0, 1.0 - wy), (1, wy)):
+        yi = np.minimum(y0 + dy_, ny - 1)
+        for dx_, wx_ in ((0, 1.0 - wx), (1, wx)):
+            xi = np.minimum(x0 + dx_, nx - 1)
+            for dz_, wz_ in ((0, 1.0 - wz), (1, wz)):
+                zi_ = np.minimum(z0 + dz_, nz - 1)
+                wgt = wy_ * wx_ * wz_
+                num += wgt * sums[yi[:, None], xi[None, :], zi_]
+                den += wgt * cnts[yi[:, None], xi[None, :], zi_]
+    return np.where(den > 1e-3, num / np.maximum(den, 1e-8),
+                    ch).astype(np.float32)
+
+
 def llf_apply_tone(
     channel: np.ndarray,
     delta_fn: Callable[[np.ndarray], np.ndarray],
@@ -176,6 +264,8 @@ def llf_apply_tone(
     gate_fine: int = 4,
     gate_lo: float = 0.6,
     gate_hi: float = 1.6,
+    beta_lo: float = 1.0,
+    beta_hi: float = 1.0,
 ) -> np.ndarray:
     """Apply the additive log2 tone delta `delta_fn` to `channel`
     (log2-luminance, 2-D float) with detail preservation.
@@ -233,7 +323,11 @@ def llf_apply_tone(
     # lockstep (memory: n_gamma buffers at the current level, not n_gamma
     # full pyramids). Per-coefficient interpolation via take_along_axis on
     # the gamma axis (no full index grids).
-    remapped = [_remap(ch, g, delta_fn, sigma_r) for g in gammas]
+    if absolute_mode == "paris":
+        remapped = [_remap_beta(ch, g, sigma_r, beta_lo, beta_hi)
+                    for g in gammas]
+    else:
+        remapped = [_remap(ch, g, delta_fn, sigma_r) for g in gammas]
     out_lap: list[np.ndarray] = []
     for lev in range(nlev - 1):
         g0 = gauss[lev]
@@ -255,6 +349,8 @@ def llf_apply_tone(
         out_lap.append((1.0 - w) * lo + w * hi)
 
     # ---- the ABSOLUTE calibrated response (arm axis; see docstring) ----
+    # "paris": residual untouched, NO absolute term here at all — the
+    # caller applies the calibrated tables POINTWISE to the collapse.
     res = gauss[-1]
     if absolute_mode == "gauss":
         out = (res + delta_fn(res)).astype(np.float32)

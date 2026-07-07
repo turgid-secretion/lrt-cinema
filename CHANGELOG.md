@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] — v0.8 prep
 
 ### Added
+- **H/S translation v5: bilateral-grid tone driver** (owner round-4:
+  v4 refuted as a measurement-averaging artifact — bright halos with
+  dark anti-halos cancelling in regional means). Structure-sensitive
+  metrics added (profile oscillation, seam swing, gradient reversal,
+  per-pixel P95, delta-map images) and validated against the owner's
+  eyes (they rank v4 worst where averages ranked it best). v5 = one
+  edge-aware map: out = log_l + Δ(bilateral_grid(log_l)); the range
+  kernel separates regions by value — structure below 1.8 st keeps
+  contrast, boundaries stay sharp, no seams/pools/patches. Every
+  artifact metric at floor; anchors 0.352/0.527/0.343/0.866 (best of
+  any architecture); 4.5 s/24 MP (3× faster). Paris β-compression
+  measured and rejected (symmetric edge pull; LR is one-sided).
 - **H/S translation v4: amplitude-gated two-scale tone map** (owner
   round-3: v3's adjusted regions read flattened/blurred at mid scales,
   worst on the gym stage/curtain). New per-band (4–256 px) contrast

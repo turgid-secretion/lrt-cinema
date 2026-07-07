@@ -150,9 +150,18 @@ def main() -> int:
         blob = b"".join(
             getattr(st, a).tobytes() for a in
             ("_H_D50", "_H_D100", "_S_D50", "_S_D100"))
+        # EVERY op-affecting constant must be hashed — a missing knob
+        # silently cache-hits stale renders (caught 2026-07-08: a "bilat"
+        # refit replayed the gate2 session verbatim because the mode
+        # string was unhashed; the with_suffix lesson's sibling).
         blob += (f"sr{st._LLF_SIGMA_R}L{st._LLF_LAST_LEVEL}"
                  f"g{st._LLF_N_GAMMA}t{st._TOE_FLOOR}"
-                 f"c{st._CHROMA_ROLL_LUM}v2").encode()
+                 f"c{st._CHROMA_ROLL_LUM}"
+                 f"m{st._LLF_ABS_MODE}gf{st._LLF_GATE_FINE}"
+                 f"gl{st._LLF_GATE_LO}gh{st._LLF_GATE_HI}"
+                 f"bs{st._BILAT_SIGMA_S}br{st._BILAT_SIGMA_RANGE}"
+                 f"bl{st._BETA_LO_ANCHORS}bh{st._BETA_HI_ANCHORS}"
+                 f"v2").encode()
         return hashlib.md5(blob).hexdigest()[:10]
 
     def render_op(probe: str, h: float, s: float) -> Path:
