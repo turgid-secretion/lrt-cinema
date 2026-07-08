@@ -55,6 +55,10 @@ clamped-amaze 13k / menon 112k.
 Run:  python3 tools/hl_amaze_wrapper_experiment.py [--stage truth|articles|flips]
 Out:  tests/fixtures/evidence/hl_amaze_wrapper_<today>.json
       ~/lrt-cinema-fixtures/verify-<today>/amaze-wrapper-flip/
+
+NOTE (2026-07-07, owner-verdicted): segbased arms pass site_guard=2.0
+(the isolated-site guard recipe — CLAIMS D/G/H verdict). Evidence rows
+pinned BEFORE the guard regenerate with site_guard=0.
 """
 
 from __future__ import annotations
@@ -102,9 +106,9 @@ def _recon(arm: str, cfa, chan, wb_mul):
     from lrt_cinema._segbased_reconstruct import reconstruct_mosaic_segbased
 
     if arm == "segb":
-        return reconstruct_mosaic_segbased(cfa, chan, wb_mul)
+        return reconstruct_mosaic_segbased(cfa, chan, wb_mul, site_guard=2.0)
     if arm.startswith("segb_adapt"):
-        return reconstruct_mosaic_segbased(cfa, chan, wb_mul,
+        return reconstruct_mosaic_segbased(cfa, chan, wb_mul, site_guard=2.0,
                                            recovery="adapt", strength=0.6)
     raise ValueError(arm)
 

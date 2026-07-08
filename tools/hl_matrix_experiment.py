@@ -57,6 +57,10 @@ Run:  python3 tools/hl_matrix_experiment.py [--stage articles|truth|gym|flips]
       (no --stage = all, in that order; articles carry the M1 gate)
 Out:  tests/fixtures/evidence/hl_matrix_<today>.json
       ~/lrt-cinema-fixtures/verify-<today>/matrix-flip/   (owner arms)
+
+NOTE (2026-07-07, owner-verdicted): segbased arms pass site_guard=2.0
+(the isolated-site guard recipe — CLAIMS D/G/H verdict). Evidence rows
+pinned BEFORE the guard regenerate with site_guard=0.
 """
 
 from __future__ import annotations
@@ -103,9 +107,9 @@ def _reconstruct(arm: str, cfa, chan, wb_mul):
     from lrt_cinema._segbased_reconstruct import reconstruct_mosaic_segbased
 
     if arm == "segb":
-        return reconstruct_mosaic_segbased(cfa, chan, wb_mul)
+        return reconstruct_mosaic_segbased(cfa, chan, wb_mul, site_guard=2.0)
     if arm == "segb_adapt":
-        return reconstruct_mosaic_segbased(cfa, chan, wb_mul,
+        return reconstruct_mosaic_segbased(cfa, chan, wb_mul, site_guard=2.0,
                                            recovery="adapt", strength=0.6)
     raise ValueError(arm)
 
@@ -274,9 +278,11 @@ def run_truth(results: dict) -> None:
     band = (cfa_norm >= SYN_WHITE) & (cfa_norm < 0.99)
     for nm, arr in (
         ("clamp", clamped_b),
-        ("segb", reconstruct_mosaic_segbased(clamped_b, chan, wb_mul)),
+        ("segb", reconstruct_mosaic_segbased(clamped_b, chan, wb_mul,
+                                             site_guard=2.0)),
         ("segb_adapt", reconstruct_mosaic_segbased(
-            clamped_b, chan, wb_mul, recovery="adapt", strength=0.6)),
+            clamped_b, chan, wb_mul, recovery="adapt", strength=0.6,
+            site_guard=2.0)),
     ):
         err = (arr - truth_b) / np.maximum(truth_b, 1e-6)
         results["truth_harness"][nm] = {
