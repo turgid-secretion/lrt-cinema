@@ -41,6 +41,10 @@ PRE-REGISTERED PREDICTIONS (2026-07-07, before first run):
 Run:  python3 tools/ca_order_probe.py
 Out:  tests/fixtures/evidence/ca_order_probe_<today>.json
       ~/lrt-cinema-fixtures/verify-2026-07-07/ca-flip/ (E + F arms added)
+
+NOTE (2026-07-07, owner-verdicted): segbased arms pass site_guard=2.0
+(the isolated-site guard recipe — CLAIMS D/G/H verdict). Evidence rows
+pinned BEFORE the guard regenerate with site_guard=0.
 """
 
 from __future__ import annotations
@@ -120,7 +124,7 @@ def main() -> int:
 
         from lrt_cinema._hotpixels import fix_hot_pixels
         if order.startswith("ca_after"):
-            m = reconstruct_mosaic_segbased(scaled, chan, wb)
+            m = reconstruct_mosaic_segbased(scaled, chan, wb, site_guard=2.0)
             m = ca_correct_mosaic(m, pattern, iterations=2, avoid_shift=True)
             if order == "ca_after_hotpix":
                 # maximum-reach parameterization (see docstring): dt
@@ -130,7 +134,7 @@ def main() -> int:
         else:  # ca_first — CA on the raw (unclipped) scaled mosaic
             m = ca_correct_mosaic(scaled, pattern, iterations=2,
                                   avoid_shift=True, scale=float(wb.max()))
-            m = reconstruct_mosaic_segbased(m, chan, wb)
+            m = reconstruct_mosaic_segbased(m, chan, wb, site_guard=2.0)
         return np.maximum(np.asarray(
             demosaicing_CFA_Bayer_Menon2007(m, pattern), np.float32), 0.0)
 

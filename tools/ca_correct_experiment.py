@@ -30,6 +30,10 @@ PRE-REGISTERED PREDICTIONS (2026-07-07, before first run):
 Run:  python3 tools/ca_correct_experiment.py [--flips-only] [--no-flips]
 Out:  tests/fixtures/evidence/ca_correct_<today>.json
       ~/lrt-cinema-fixtures/verify-2026-07-07/ca-flip/  (owner arms)
+
+NOTE (2026-07-07, owner-verdicted): segbased arms pass site_guard=2.0
+(the isolated-site guard recipe — CLAIMS D/G/H verdict). Evidence rows
+pinned BEFORE the guard regenerate with site_guard=0.
 """
 
 from __future__ import annotations
@@ -234,7 +238,8 @@ def _gym_decode(arm: str, ca_n: int, render_wb: np.ndarray) -> np.ndarray:
         h, w = cfa.shape
         chan = np.where(colors[:h, :w] == 3, 1, colors[:h, :w])
         scaled = cfa * render_wb[chan].astype(np.float32)
-        recon = reconstruct_mosaic_segbased(scaled, chan, render_wb)
+        recon = reconstruct_mosaic_segbased(scaled, chan, render_wb,
+                                            site_guard=2.0)
         if ca_n > 0:
             recon = ca_correct_mosaic(recon, pattern, iterations=ca_n,
                                       avoid_shift=True)
